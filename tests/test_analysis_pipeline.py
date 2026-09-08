@@ -28,7 +28,10 @@ def test_color_result_ignores_a_replaced_project(tmp_path):
     assert original.clips[0].dominant_colors is None
 
 
-def test_agent_analysis_summary_includes_operation_specific_results():
+def test_agent_analysis_summary_includes_operation_specific_results(monkeypatch):
+    # Formatting is isolated here; verified eligibility has integration coverage.
+    monkeypatch.setattr("core.analysis_availability.operation_is_complete_for_clip", lambda *args, **kwargs: True)
+    monkeypatch.setattr("core.analysis_availability.custom_query_is_complete", lambda *args, **kwargs: True)
     clip = make_test_clip(
         "clip-1",
         dominant_colors=[(10, 20, 30), (255, 0, 128)],
@@ -122,7 +125,10 @@ def test_agent_analysis_summary_includes_operation_specific_results():
     assert "Do not invent" in results["response_guidance"]
 
 
-def test_agent_analysis_result_wraps_single_operation_structured_results():
+def test_agent_analysis_result_wraps_single_operation_structured_results(monkeypatch):
+    # Formatting is isolated here; verified eligibility has integration coverage.
+    monkeypatch.setattr("core.analysis_availability.operation_is_complete_for_clip", lambda *args, **kwargs: True)
+    monkeypatch.setattr("core.analysis_availability.custom_query_is_complete", lambda *args, **kwargs: True)
     clip = make_test_clip(
         "clip-1",
         dominant_colors=[(10, 20, 30)],

@@ -643,8 +643,12 @@ including boundary embeddings and per-query negative results. Legacy fields and
 stale/unreadable records remain pending; shot distributions include verified shots.
 Provider settings are captured once per status request. Its 178-test regression
 group passes; scoped core typing and changed-file Ruff pass, with four existing
-MCP Context-default typing errors unchanged. The rest of the cross-consumer audit
-remains.
+MCP Context-default typing errors unchanged. GUI agent summaries also use verified
+completion, retain successful empty results, and include scalar values. Query
+summaries distinguish missing verification from negative answers. Ten new
+regressions fail against the old methods; 102 summary/controller/native-callback
+tests pass. Changed tests/diff checks are clean; six MainWindow unused-import
+findings predate the change. The rest of the cross-consumer audit remains.
 Description providers expose actual execution model/backend and input mode,
 including local model and cloud video-to-frame fallbacks. The shared operation
 and direct headless entry point use verified records and semantic reuse, including

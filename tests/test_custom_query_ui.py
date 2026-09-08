@@ -156,7 +156,9 @@ def test_custom_query_ready_refreshes_views_without_reapplying_result(source):
     assert dirty_calls == []
 
 
-def test_custom_query_agent_summary_groups_actual_matches(source):
+def test_custom_query_agent_summary_groups_actual_matches(source, monkeypatch):
+    # This unit verifies grouping; provenance is covered by integration tests.
+    monkeypatch.setattr("core.analysis_availability.custom_query_is_complete", lambda *args, **kwargs: True)
     from ui.main_window import MainWindow
 
     clip_match_high = make_test_clip("c-high", description="Close-up of an eye")

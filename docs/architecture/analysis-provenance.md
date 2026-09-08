@@ -814,6 +814,17 @@ typing and changed-file Ruff pass.
 
 ## Remaining U10 work
 
+GUI agent analysis summaries now use shared verified completion before counting
+or presenting results. Successful empty transcripts, classifications, OCR,
+face detections, and gaze results remain visible; failed, stale, and legacy
+projections do not count as analyzed. Scalar summaries include zero brightness
+and verified no-audio volume results. Custom-query summaries require a current
+per-query record and report missing verification separately from negative answers.
+Formatting-only tests explicitly stub eligibility; integration tests exercise
+the real records and guards. All ten new regressions fail against the previous
+summary methods, and 102 summary/controller/native-callback tests pass. Changed
+tests and diff checks are clean; MainWindow retains six pre-existing unused imports.
+
 MCP analysis status now uses shared verified completion for all listed analysis
 families and includes boundary embeddings. Valid empty classification, detection,
 OCR, gaze, and query results count as complete; legacy fields and stale inputs do

@@ -3468,12 +3468,20 @@ class MainWindow(QMainWindow):
         """Build a structured summary for the chat agent after custom query analysis."""
         if not query:
             return None
+        query = query.strip()
+        if not query:
+            return None
+        from core.analysis_availability import custom_query_is_complete
 
         matches = []
         non_matches = []
         missing_result_ids = []
 
         for clip in clips:
+            source = self.project.sources_by_id.get(clip.source_id)
+            if not custom_query_is_complete(clip, source, query, settings=getattr(self, "settings", None)):
+                missing_result_ids.append(clip.id)
+                continue
             latest_result = None
             for query_result in reversed(getattr(clip, "custom_queries", None) or []):
                 if str(query_result.get("query") or "").strip() == query:
@@ -3484,7 +3492,6 @@ class MainWindow(QMainWindow):
                 missing_result_ids.append(clip.id)
                 continue
 
-            source = self.project.sources_by_id.get(clip.source_id)
             row = {
                 "clip_id": clip.id,
                 "source_name": source.filename if source else None,
@@ -3584,11 +3591,30 @@ class MainWindow(QMainWindow):
         completed_ops: list[str],
     ) -> dict:
         """Build operation-specific analysis results for chat-agent summaries."""
+        from core.analysis_availability import operation_is_complete_for_clip
+
         summaries: dict[str, dict] = {}
+        sources = self.project.sources_by_id
+        settings = getattr(self, "settings", None)
+
+        def completed_clips(operation: str) -> list[Clip]:
+            return [clip for clip in clips if operation_is_complete_for_clip(
+                operation, clip, source=sources.get(clip.source_id), settings=settings,
+            )]
+
+        for operation, field in (("brightness", "average_brightness"), ("volume", "rms_volume")):
+            if operation not in completed_ops:
+                continue
+            per_clip = []
+            for clip in completed_clips(operation):
+                row = self._build_agent_clip_context(clip)
+                row[field] = getattr(clip, field)
+                per_clip.append(row)
+            summaries[operation] = {"analyzed_count": len(per_clip), "clips": per_clip[:20]}
 
         if "colors" in completed_ops:
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("colors"):
                 if not clip.dominant_colors:
                     continue
                 row = self._build_agent_clip_context(clip)
@@ -3609,7 +3635,7 @@ class MainWindow(QMainWindow):
         if "shots" in completed_ops:
             distribution = {}
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("shots"):
                 if not clip.shot_type:
                     continue
                 distribution[clip.shot_type] = distribution.get(clip.shot_type, 0) + 1
@@ -3624,8 +3650,8 @@ class MainWindow(QMainWindow):
 
         if "classify" in completed_ops:
             per_clip = []
-            for clip in clips:
-                if not clip.object_labels:
+            for clip in completed_clips("classify"):
+                if clip.object_labels is None:
                     continue
                 row = self._build_agent_clip_context(clip)
                 row["labels"] = list(clip.object_labels[:10])
@@ -3638,7 +3664,7 @@ class MainWindow(QMainWindow):
         if "detect_objects" in completed_ops:
             per_clip = []
             total_people = 0
-            for clip in clips:
+            for clip in completed_clips("detect_objects"):
                 if clip.detected_objects is None and clip.person_count is None:
                     continue
                 total_people += clip.person_count or 0
@@ -3654,8 +3680,8 @@ class MainWindow(QMainWindow):
 
         if "face_embeddings" in completed_ops:
             per_clip = []
-            for clip in clips:
-                if not clip.face_embeddings:
+            for clip in completed_clips("face_embeddings"):
+                if clip.face_embeddings is None:
                     continue
                 row = self._build_agent_clip_context(clip)
                 row["face_count"] = len(clip.face_embeddings)
@@ -3675,9 +3701,9 @@ class MainWindow(QMainWindow):
 
         if "extract_text" in completed_ops:
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("extract_text"):
                 text = clip.combined_text
-                if not text:
+                if clip.extracted_texts is None:
                     continue
                 row = self._build_agent_clip_context(clip)
                 row["text"] = self._truncate_for_agent(text)
@@ -3690,8 +3716,8 @@ class MainWindow(QMainWindow):
 
         if "transcribe" in completed_ops:
             per_clip = []
-            for clip in clips:
-                if not clip.transcript:
+            for clip in completed_clips("transcribe"):
+                if clip.transcript is None:
                     continue
                 row = self._build_agent_clip_context(clip)
                 row["transcript_excerpt"] = self._truncate_for_agent(clip.get_transcript_text())
@@ -3704,7 +3730,7 @@ class MainWindow(QMainWindow):
 
         if "describe" in completed_ops:
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("describe"):
                 if not clip.description:
                     continue
                 row = self._build_agent_clip_context(clip)
@@ -3717,7 +3743,7 @@ class MainWindow(QMainWindow):
 
         if "cinematography" in completed_ops:
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("cinematography"):
                 if not clip.cinematography:
                     continue
                 data = clip.cinematography.to_dict()
@@ -3754,10 +3780,9 @@ class MainWindow(QMainWindow):
         if "gaze" in completed_ops:
             distribution = {}
             per_clip = []
-            for clip in clips:
-                if not clip.gaze_category:
-                    continue
-                distribution[clip.gaze_category] = distribution.get(clip.gaze_category, 0) + 1
+            for clip in completed_clips("gaze"):
+                if clip.gaze_category is not None:
+                    distribution[clip.gaze_category] = distribution.get(clip.gaze_category, 0) + 1
                 row = self._build_agent_clip_context(clip)
                 row["gaze_category"] = clip.gaze_category
                 row["gaze_yaw"] = clip.gaze_yaw
@@ -3771,7 +3796,7 @@ class MainWindow(QMainWindow):
 
         if "embeddings" in completed_ops:
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("embeddings"):
                 if clip.embedding is None:
                     continue
                 row = self._build_agent_clip_context(clip)
@@ -3789,7 +3814,7 @@ class MainWindow(QMainWindow):
 
         if "boundary_embeddings" in completed_ops:
             per_clip = []
-            for clip in clips:
+            for clip in completed_clips("boundary_embeddings"):
                 if clip.first_frame_embedding is None or clip.last_frame_embedding is None:
                     continue
                 row = self._build_agent_clip_context(clip)
