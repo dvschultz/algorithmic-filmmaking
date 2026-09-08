@@ -30,6 +30,7 @@ class GuiAudioTranscriptionCache(GuiResultJournal):
         runtime: dict,
     ) -> None:
         project.session.assert_owner()
+        options = resolve_audio_options(options)
         if project.path is None:
             raise ValueError("Audio recovery requires a saved project")
         audio = project.get_audio_source(task.audio_source_id)

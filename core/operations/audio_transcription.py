@@ -10,7 +10,11 @@ from threading import Event
 from typing import TYPE_CHECKING, Callable
 
 from core.operations.contracts import OutcomeStatus
-from core.operations.transcription import TranscriptionOptions, _media_stamp
+from core.operations.transcription import (
+    TranscriptionOptions,
+    _media_stamp,
+    resolve_transcription_options,
+)
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -108,6 +112,7 @@ def run_audio_transcription(
     try:
         from core.transcription import transcribe_video
 
+        options = resolve_transcription_options(options)
         report(0)
         if cancelled.is_set():
             return AudioTranscriptionOutcome(task.audio_source_id, "unprocessed")
@@ -119,6 +124,7 @@ def run_audio_transcription(
             segmentation_mode=options.segmentation_mode,
             segment_max_seconds=options.segment_max_seconds,
             progress_callback=report,
+            cloud_model=options.cloud_model,
         )
         if cancelled.is_set():
             return AudioTranscriptionOutcome(task.audio_source_id, "unprocessed")

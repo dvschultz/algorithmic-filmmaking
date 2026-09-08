@@ -14,6 +14,7 @@ from core.operations.transcription import (
     TranscriptionOutcome,
     TranscriptionTask,
     run_transcription,
+    resolve_transcription_options,
 )
 from core.transcription_models import TranscriptSegment
 
@@ -30,6 +31,7 @@ class GuiTranscriptionCache(GuiResultJournal):
         previous_transcripts: dict,
         media_stamps: dict[Path, tuple[int, ...] | None],
     ) -> None:
+        options = resolve_transcription_options(options)
         super().__init__(
             path,
             project_id,

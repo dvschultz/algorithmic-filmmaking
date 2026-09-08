@@ -1,6 +1,6 @@
 """Restart-safe transcription receipts for saved project jobs."""
 
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -22,6 +22,7 @@ from core.operations.transcription import (
     TranscriptionTask,
     run_transcription,
     snapshot_tasks,
+    resolve_transcription_options,
 )
 from core.project import Project
 from core.transcription_models import TranscriptSegment
@@ -34,8 +35,6 @@ def transcription_job_spec(
     *,
     arguments: dict,
 ) -> OperationSpec:
-    from core.transcription import _resolve_backend
-
     ids = (
         list(dict.fromkeys(clip_ids))
         if clip_ids is not None
@@ -51,7 +50,7 @@ def transcription_job_spec(
     revision = project.session.file_revision
     return transcription_operation_spec(
         tasks,
-        replace(options, backend=_resolve_backend(options.backend)),
+        options,
         arguments=arguments,
         persistence="job_history",
         session_id=project.session.session_id,
@@ -69,6 +68,7 @@ def transcription_operation_spec(
     input_revision: str | None,
 ) -> OperationSpec:
     """Describe detached transcription inputs for either runtime surface."""
+    options = resolve_transcription_options(options)
     targets = []
     for task in tasks:
         target = asdict(task)
@@ -112,9 +112,7 @@ def run_transcription_job(
     ``skip_existing`` preserves every populated transcript, including managed
     outputs from other models. ``force`` takes precedence for explicit refresh.
     """
-    from core.transcription import _resolve_backend
-
-    options = replace(options, backend=_resolve_backend(options.backend))
+    options = resolve_transcription_options(options)
     fingerprint = MediaFingerprints(cancel).get
 
     with result_batch(store, path) as batch:

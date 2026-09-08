@@ -35,6 +35,21 @@ class TranscriptionOptions:
     segmentation_mode: str = "backend"
     segment_max_seconds: float = 12.0
     parallelism: int = 1
+    cloud_model: str | None = None
+
+
+def resolve_transcription_options(options: TranscriptionOptions) -> TranscriptionOptions:
+    """Freeze backend and cloud settings before queueing or identifying a batch."""
+    from core.transcription import _resolve_backend, transcription_model
+
+    backend = _resolve_backend(options.backend)
+    return replace(
+        options,
+        backend=backend,
+        cloud_model=transcription_model(backend, options.model, options.cloud_model)
+        if backend == "groq"
+        else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -108,6 +123,7 @@ def compute_task(
     try:
         from core.transcription import transcribe_clip
 
+        options = resolve_transcription_options(options)
         segments = transcribe_clip(
             source_path=task.source_path,
             start_time=task.start_time,
@@ -117,6 +133,7 @@ def compute_task(
             backend=options.backend,
             segmentation_mode=options.segmentation_mode,
             segment_max_seconds=options.segment_max_seconds,
+            cloud_model=options.cloud_model,
         )
         return TranscriptionOutcome(
             task.clip_id, "succeeded", tuple(deepcopy(segments))
@@ -149,11 +166,9 @@ def run_transcription(
     progress: Callable[[int, int], None] | None = None,
 ) -> tuple[TranscriptionOutcome, ...]:
     """Run a bounded batch; callbacks run on the caller, results keep input order."""
-    from core.transcription import _resolve_backend
-
     if not tasks:
         return ()
-    options = replace(options, backend=_resolve_backend(options.backend))
+    options = resolve_transcription_options(options)
     parallelism = (
         1 if options.backend == "mlx-whisper" else min(max(1, options.parallelism), 4)
     )

@@ -17,14 +17,12 @@ from core.operations.audio_transcription import (
     AudioTranscriptionTask,
     run_audio_transcription,
 )
-from core.operations.transcription import TranscriptionOptions
+from core.operations.transcription import TranscriptionOptions, resolve_transcription_options
 from core.project import Project
 
 
 def resolve_audio_options(options: TranscriptionOptions) -> TranscriptionOptions:
-    from dataclasses import replace
     from math import isfinite
-    from core.transcription import _resolve_backend
 
     if options.backend not in ("auto", "faster-whisper", "mlx-whisper", "groq"):
         raise ValueError("Unknown transcription backend")
@@ -42,7 +40,7 @@ def resolve_audio_options(options: TranscriptionOptions) -> TranscriptionOptions
         raise ValueError("Unknown transcription segmentation mode")
     if not isfinite(options.segment_max_seconds) or options.segment_max_seconds <= 0:
         raise ValueError("Segment maximum duration must be positive and finite")
-    return replace(options, backend=_resolve_backend(options.backend))
+    return resolve_transcription_options(options)
 
 
 def audio_transcription_runtime() -> dict:

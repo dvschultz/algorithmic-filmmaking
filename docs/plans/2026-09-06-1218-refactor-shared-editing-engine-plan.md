@@ -411,8 +411,11 @@ for extraction failures (98 focused regression tests passed).
 Transcription providers now report actual backend/model selection, including MLX
 fallback/mapping and model-free no-audio results. Groq model selection is pinned
 for each provider call and accepts an explicit queued selection. The provider
-regression run passed 135 tests, with 15 follow-up execution tests; shared records,
-queued option snapshots, verified reuse, and delivery remain unfinished.
+regression run passed 135 tests, with 15 follow-up execution tests. Queued clip and
+audio jobs, GUI workers/journals, and shared batches now freeze the cloud model in
+their options and match it during recovery. The subsequent regression run passed
+312 tests including MCP coverage. Shared transcript records, semantic reuse, and
+record-aware delivery remain unfinished.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

@@ -365,8 +365,17 @@ use that same selection even if settings change during the call.
 
 The provider regression run passed 135 tests, followed by 15 execution tests with
 expanded auto-backend and extraction-failure coverage. Scoped provider typing and
-Ruff passed. Shared transcript records, queued option snapshots, verified reuse,
-and delivery migration remain unfinished.
+Ruff passed.
+
+Shared transcription options now include the frozen Groq model. Clip and audio
+job specifications, GUI workers and recovery journals, and shared computation
+carry that selection to the provider. A batch snapshots settings once, so later
+clips cannot silently switch cloud models. Retrying a failed save with the same
+frozen model reuses the computed result; a new request selecting another model
+does not recover that result. The combined regression run, including all MCP
+tests, passed 312 tests; scoped typing passed for all seven changed modules.
+Shared transcript records, semantic reuse, and record-aware delivery migration
+remain unfinished. Legacy transcript presence still controls existing skip paths.
 
 ## Remaining U10 work
 

@@ -26,6 +26,7 @@ from core.operations.transcription import (
     TranscriptionTask,
     run_transcription,
     snapshot_tasks,
+    resolve_transcription_options,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,13 +99,15 @@ class TranscriptionWorker(CancellableWorker):
             )
             if not task.skip
         )
-        self._options = TranscriptionOptions(
-            model_name,
-            language,
-            self._backend,
-            segmentation_mode,
-            segment_max_seconds,
-            self._parallelism,
+        self._options = resolve_transcription_options(
+            TranscriptionOptions(
+                model_name,
+                language,
+                self._backend,
+                segmentation_mode,
+                segment_max_seconds,
+                self._parallelism,
+            )
         )
         self.operation = transcription_operation_spec(
             self._tasks,
