@@ -122,16 +122,12 @@ def transcribe(
         if not clips_to_transcribe:
             exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
 
-    # Filter out already-transcribed clips unless force
-    if not force:
-        clips_to_transcribe = [c for c in clips_to_transcribe if c.transcript is None]
-
     if not clips_to_transcribe:
-        output_info("All clips already have transcripts. Use --force to re-transcribe.")
+        output_info("No clips to transcribe.")
         return
 
     output_info(f"Using Whisper model: {model}")
-    output_info("Loading model (this may take a moment on first run)...")
+    output_info("Checking existing transcripts...")
 
     from threading import Event
     from core.jobs.store import JobStore
@@ -178,6 +174,8 @@ def transcribe(
         output_success(
             f"Transcribed {transcribed_count} clips ({total_segments} segments)"
         )
+        if batch["skipped"]:
+            output_info(f"Reused transcripts for {len(batch['skipped'])} clips")
         if errors:
             for err in errors[:5]:
                 output_info(f"  Error: {err}")

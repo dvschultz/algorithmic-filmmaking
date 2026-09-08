@@ -107,7 +107,7 @@ def test_progress_cancellation_stops_next_step():
     assert result["result"]["operations"] == {}
 
 
-def test_generic_analysis_preserves_existing_transcript_from_other_model(tmp_path):
+def test_generic_analysis_recomputes_transcript_from_other_model(tmp_path):
     from core.jobs.transcription import run_transcription_job
     from core.operations.transcription import TranscriptionOptions
 
@@ -124,7 +124,7 @@ def test_generic_analysis_preserves_existing_transcript_from_other_model(tmp_pat
         current, _ = load_with_mtime(path)
         spec = analysis_job_spec(current, arguments={"operations": ["transcribe"]})
         result = run_analysis_job(store, path, spec, lambda *_: None, Event())
-        assert compute.call_count == 1
+        assert compute.call_count == 2
         assert (
-            len(result["result"]["operations"]["transcribe"]["result"]["skipped"]) == 1
+            len(result["result"]["operations"]["transcribe"]["result"]["succeeded"]) == 1
         )

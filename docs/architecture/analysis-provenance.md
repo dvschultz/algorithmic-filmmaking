@@ -405,9 +405,23 @@ The GUI regression run passed 392 tests including MCP and combined-pipeline
 coverage; 11 follow-up worker/delivery tests passed, including MLX thread affinity.
 Scoped typing passed for six migrated modules, and changed-file Ruff passed.
 
-Durable headless jobs still use the legacy task path and do not yet carry verified
-transcript records. Their existing field-presence skip behavior, standalone audio,
-alignment, and completion indicators remain to migrate.
+Durable headless jobs now persist transcript records with their result receipts.
+Reuse verifies current media/range/runtime/options and the displayed transcript;
+missing old receipt rows do not prevent reuse of a valid project record. Present
+corrupt receipts still fail validation. Identical media with new timestamps
+refreshes bindings without inference. Failure publication uses the guarded
+application and preserves the prior displayed transcript without creating a
+successful receipt.
+
+Forced refreshes stage one batch and recover matching transcript/record pairs
+after save or checkpoint failure. Parallelism does not affect receipt identity.
+Manually edited managed transcripts still require force. The CLI now sends
+populated transcripts through verification, and generic analysis recomputes a
+transcript when the requested model differs. Public result fields remain stable.
+Standalone audio, alignment, and completion indicators remain to migrate.
+The durable transcription regression run passed 273 tests including CLI, combined
+analysis recovery, and all MCP tests. Scoped job typing and changed-file Ruff
+passed. This does not complete the remaining transcription consumers or U10.
 
 ## Remaining U10 work
 

@@ -421,8 +421,13 @@ passed 357 tests, with 74 guard follow-up tests and 26 final record tests. GUI
 workers/journals, queued delivery, save checkpoints, and the combined pipeline now
 carry verified transcript records. Reuse skips preflight/model loading; failures
 preserve the prior display. The GUI regression run passed 392 tests, with 11
-follow-up worker/delivery tests and clean scoped typing. Durable-job record delivery, standalone audio,
-alignment, and completion indicators remain unfinished.
+follow-up worker/delivery tests and clean scoped typing. Durable jobs now retain
+and recover transcript records, verify semantic reuse, and save guarded failure
+records. Forced refreshes recover one batch without repeated inference. CLI and
+generic analysis routes verify populated transcripts against the requested model.
+The durable regression run passed 273 tests including CLI, combined recovery, and
+MCP coverage, with clean scoped job typing. Standalone audio, alignment, and
+completion indicators remain unfinished.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
