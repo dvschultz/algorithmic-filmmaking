@@ -464,9 +464,14 @@ clean scoped typing. Both mounted word-source picker dialogs now pass their
 project for guarded record/receipt publication and retain the worker through
 native completion, including deferred close/reject after cancellation. Their
 regression run passed 252 tests, with 33 dialog and 14 final delivery follow-ups
-and clean scoped controller/delivery typing. Project-free compatibility callers,
-durable alignment recovery, and completion checks remain to audit or migrate,
-along with the broader U10 audit.
+and clean scoped controller/delivery typing. Durable alignment now carries verified
+records, authenticates saved transcript/record pairs, preserves words on failure,
+and requires force for edited managed output. First model loading and interrupted
+save/checkpoint recovery avoid repeated inference; cancellation retains computed
+receipts without publishing cancelled targets. Its regression run passed 280
+tests, with clean scoped typing and changed-file Ruff. Project-free compatibility
+callers and completion checks remain to audit or migrate, along with the broader
+U10 audit.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

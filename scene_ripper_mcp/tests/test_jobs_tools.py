@@ -1128,7 +1128,12 @@ async def test_alignment_job_saves_word_timestamps(lifespan_ctx, tmp_path, monke
     wav.write_bytes(b'fake')
     monkeypatch.setattr('core.feature_registry.check_feature_ready', lambda *_: (True, []))
     monkeypatch.setattr('core.analysis.alignment.extract_audio_to_wav', lambda *a, **k: wav)
-    monkeypatch.setattr('core.analysis.alignment.align_words', lambda *a, **k: [WordTimestamp(0, 1, 'hello')])
+    from core.analysis.alignment import ALIGNMENT_MODEL
+    monkeypatch.setattr('core.operations.alignment_records.alignment_model_revision', lambda: 'r1')
+    def align(*a, **k):
+        k['on_execution']({'backend': 'ctc', 'model': ALIGNMENT_MODEL, 'revision': 'r1'})
+        return [WordTimestamp(0, 1, 'hello')]
+    monkeypatch.setattr('core.analysis.alignment.align_words', align)
     out = json.loads(await start_align_words(str(path), ctx=ctx))
     assert out['success'] is True
     _wait_for_status(store, out['task_id'], STATUS_COMPLETED)
@@ -1295,7 +1300,8 @@ async def test_image_import_job_preserves_partial_errors_and_submission_identity
     media = make_image(tmp_path / "image.png")
     project = Project.new()
     path = tmp_path / "images.sceneripper"
-    project.save(path); project.close_writer()
+    project.save(path)
+    project.close_writer()
     provider = Mock(wraps=generate_image_thumbnail)
     monkeypatch.setattr("core.thumbnail.generate_image_thumbnail", provider)
     inputs = ["image.png", "../outside.png", "/etc/outside.png"]

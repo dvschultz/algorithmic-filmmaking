@@ -531,8 +531,24 @@ rejecting a dialog cancels alignment and defers destruction until completion.
 Dialogs no longer mark the project dirty merely because a worker completed.
 The regression run passed 252 tests, with 33 dialog and 14 final delivery
 follow-ups. Controller/delivery scoped typing and changed-file Ruff passed.
-Project-free compatibility callers still use raw publication; alignment completion
-badges, durable alignment recovery, and the broader U10 audit remain unfinished.
+Project-free compatibility callers still use raw publication.
+
+Durable alignment now uses version 2 job/result identities and the shared guarded
+record application. Saved transcripts and records must both match for checkpoint
+recovery. Valid records reuse independently of missing historical receipts;
+changed media, FPS, model revision, or legacy provenance recompute. Edited managed
+words require force. Failed refreshes preserve the displayed words and save a
+failure record. Forced retries reconcile an interrupted checkpoint before starting
+another refresh, and batch size prevents early partial forced checkpoints.
+
+The initial model load can populate a previously absent revision. A narrowly
+matched initial receipt is recovered only after its checksum and actual recorded
+runtime are verified against the current runtime. Cancellation after computation
+is recorded but before publication retains the receipt without changing the
+project; already published prefixes remain saveable. The regression run passed
+280 tests, including CLI, GUI, word dialogs, and MCP. Scoped job typing and
+changed-file Ruff passed. Alignment completion badges, project-free compatibility
+callers, and the broader U10 audit remain unfinished.
 
 ## Remaining U10 work
 

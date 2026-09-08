@@ -155,7 +155,8 @@ with tempfile.TemporaryDirectory() as directory:
     if SAVED:
         assert tab.project.save(Path(directory) / 'project.json')
         tab.project = Project.load(tab.project.path, retain_writer=True)
-    worker = ForcedAlignmentWorker(tab.project.clips, tab.project.sources_by_id, project=tab.project)
+    with patch('core.operations.alignment_records.alignment_model_revision', return_value='r1'), patch('core.settings.load_settings', return_value=SimpleNamespace(cache_dir=Path(directory))):
+        worker = ForcedAlignmentWorker(tab.project.clips, tab.project.sources_by_id, project=tab.project)
     tab._forced_alignment_worker = worker
     delivery = AlignmentDelivery(tab, worker, tab.project)
     wav = Path(directory) / 'audio.wav'

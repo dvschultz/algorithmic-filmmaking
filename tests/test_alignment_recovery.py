@@ -33,7 +33,19 @@ def setup(tmp_path, monkeypatch):
 
     monkeypatch.setattr("core.analysis.alignment.extract_audio_to_wav", extract)
     compute = Mock(return_value=[WordTimestamp(0, 1, "hello", 0.9)])
-    monkeypatch.setattr("core.analysis.alignment.align_words", compute)
+    from core.analysis.alignment import ALIGNMENT_MODEL
+
+    monkeypatch.setattr(
+        "core.operations.alignment_records.alignment_model_revision", lambda: "r1"
+    )
+
+    def provider(*args, **kwargs):
+        kwargs["on_execution"](
+            {"backend": "ctc", "model": ALIGNMENT_MODEL, "revision": "r1"}
+        )
+        return compute(*args, **kwargs)
+
+    monkeypatch.setattr("core.analysis.alignment.align_words", provider)
     return path, store, compute
 
 
@@ -74,7 +86,8 @@ def test_failed_checkpoint_reconciles_and_preserves_edited_words(setup):
     assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
     saved.clips[0].transcript[0].words[0].text = "manual"
     assert saved.save()
-    assert len(run(setup)["skipped"]) == 2
+    with pytest.raises(StaleJobResult, match="use force"):
+        run(setup)
     assert Project.load(path).clips[0].transcript[0].words[0].text == "manual"
 
 
@@ -156,7 +169,7 @@ def test_reconciles_all_identical_refresh_receipts_after_checkpoint_failures(set
             with pytest.raises(RuntimeError, match="checkpoint failed"):
                 run(setup, force=True)
     run(setup)
-    assert compute.call_count == 6
+    assert compute.call_count == 4
     saved = Project.load(path)
-    assert len(saved.metadata.job_results) == 6
+    assert len(saved.metadata.job_results) == 4
     assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)

@@ -12,17 +12,24 @@ from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
 from core.operations.alignment import (
+    AlignmentApplication,
     AlignmentOutcome,
     AlignmentTask,
     aligned_segments,
-    needs_alignment,
     run_alignment,
     snapshot_alignment_tasks,
 )
-from core.operations.transcription import TranscriptionApplication, TranscriptionOutcome
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.operations.alignment_records import (
+    alignment_runtime,
+    alignment_identity,
+    execution_is_current,
+    prior_execution,
+)
+from models.analysis_record import AnalysisRecord
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
-from core.transcription_models import TranscriptSegment
+from core.transcription_models import WordTimestamp
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -51,6 +58,7 @@ def alignment_job_spec(
         [project.clips_by_id[cid] for cid in _ids(project, clip_ids)],
         project.sources_by_id,
         skip_existing=False,
+        verified=True,
     )
     revision = project.session.file_revision
     return alignment_operation_spec(
@@ -75,7 +83,11 @@ def alignment_operation_spec(
     """Describe detached alignment inputs for either runtime surface."""
     from core.operations.alignment_records import alignment_runtime
 
-    runtime = alignment_runtime() if any(task.analysis_json is not None for task in tasks) else None
+    runtime = (
+        alignment_runtime()
+        if any(task.analysis_json is not None for task in tasks)
+        else None
+    )
     targets = [
         {
             **_task_data(task),
@@ -112,7 +124,9 @@ def run_alignment_job(
     force: bool = False,
     operation: OperationSpec | None = None,
 ) -> dict:
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     availability: tuple[bool, list[str]] | None = None
     with result_batch(store, path) as batch:
         project = batch.project
@@ -130,11 +144,15 @@ def run_alignment_job(
                     "Alignment inputs changed while the job was queued"
                 )
         ids = _ids(project, clip_ids)
+        if force:
+            batch.max_items = max(1, len(ids))
         known: dict[str, list[tuple[dict, dict, dict]]] = {}
         for result_id, receipt_digest in project.metadata.job_results.items():
             row = store.get_result(result_id)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue
+            if sha256(row["spec_json"].encode()).hexdigest() != result_id:
+                raise StaleJobResult("Committed alignment identity is corrupt")
             identity = json.loads(row["spec_json"])
             if identity["kind"] != "align_words":
                 continue
@@ -151,6 +169,7 @@ def run_alignment_job(
                 [clip], current.sources_by_id, skip_existing=False
             )[0]
             data = _task_data(task)
+            data.pop("analysis_json", None)
             segments = json.loads(task.transcript_json)
             for segment in segments:
                 segment.pop("words", None)
@@ -162,12 +181,55 @@ def run_alignment_job(
                 "source_id": clip.source_id,
                 "task": data,
                 "media": fingerprint(task.target.source_path),
+                "runtime": {
+                    key: value
+                    for key, value in alignment_runtime().items()
+                    if key != "revision"
+                },
             }
 
         def transcript(current: Project, cid: str):
             value = current.clips_by_id[cid].transcript
             return (
                 [segment.to_dict() for segment in value] if value is not None else None
+            )
+
+        def current_output(current: Project, cid: str) -> dict:
+            record = current.clips_by_id[cid].analysis_records.get("align_words")
+            return {
+                "segments": transcript(current, cid),
+                "record": record.to_dict() if record is not None else None,
+            }
+
+        def payload_output(payload: dict) -> dict:
+            return {
+                "segments": payload["segments"],
+                "record": json.loads(payload["record_json"])
+                if payload.get("record_json")
+                else None,
+            }
+
+        def payload_is_current(payload: dict) -> bool:
+            if not payload.get("record_json"):
+                return False
+            record = AnalysisRecord.from_dict(json.loads(payload["record_json"]))
+            if record.identity is None:
+                return False
+            runtime = record.identity.to_dict()["model"]
+            return execution_is_current(runtime) and runtime == alignment_runtime(
+                execution=runtime["execution"]
+            )
+
+        def stage_reuse(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "align_words", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("align_words")
+                == record,
             )
 
         output: dict = {
@@ -187,42 +249,116 @@ def run_alignment_job(
             if not clip.transcript:
                 output["skipped"].append({"clip_id": cid, "reason": "no_transcript"})
                 continue
-            existing = not needs_alignment(clip)
-            if existing and not force and cid not in known:
-                output["skipped"].append({"clip_id": cid, "reason": "already_aligned"})
-                continue
+            if (
+                not force
+                and cid in known
+                and not any(
+                    payload["segments"] == transcript(project, cid)
+                    for _, _, payload in known[cid]
+                )
+            ):
+                raise StaleJobResult(
+                    "Previously committed alignment changed; use force to replace edited words"
+                )
             try:
                 basis = inputs(project, cid)
                 task = snapshot_alignment_tasks(
-                    [clip], project.sources_by_id, skip_existing=False
+                    [clip], project.sources_by_id, skip_existing=False, verified=True
                 )[0]
-                identity_inputs: dict = {"basis": basis}
+                snapshot = (
+                    AnalysisSnapshot.from_json(task.analysis_json)
+                    if task.analysis_json is not None
+                    else None
+                )
+                runtime = (
+                    alignment_runtime(execution=prior_execution(snapshot))
+                    if snapshot is not None
+                    else alignment_runtime()
+                )
+                reused = None
+                if (
+                    not force
+                    and snapshot is not None
+                    and snapshot.inputs.unchanged()
+                    and execution_is_current(runtime)
+                ):
+                    semantic = alignment_identity(
+                        snapshot, task.transcript_json, fingerprints, runtime
+                    )
+                    reused = snapshot.reusable_record(semantic)
+                    if (
+                        inputs(project, cid) != basis
+                        or not snapshot.inputs.unchanged()
+                        or alignment_runtime(execution=runtime["execution"]) != runtime
+                    ):
+                        raise StaleJobResult(
+                            "Alignment inputs changed during verification"
+                        )
+                if cancel.is_set():
+                    raise FingerprintCancelled()
+                identity_inputs: dict = {
+                    "basis": basis,
+                    "previous_output": current_output(project, cid),
+                    "model_revision": runtime["revision"],
+                }
                 if force:
                     identity_inputs["refresh_generation"] = len(known.get(cid, []))
-                    identity_inputs["previous_transcript"] = transcript(project, cid)
                 spec = ResultSpec.build(
                     path,
                     kind="align_words",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments={},
                     inputs=identity_inputs,
                 )
                 specs = [spec]
-                if existing and not force:
-                    matches = [
-                        row
-                        for row, identity, payload in known[cid]
-                        if identity["project_path"] == str(path)
-                        and identity["inputs"]["basis"] == basis
-                        and payload["segments"] == transcript(project, cid)
-                    ]
-                    if not matches:
-                        output["skipped"].append(
-                            {"clip_id": cid, "reason": "already_aligned"}
-                        )
-                        continue
+                matches = [
+                    row
+                    for row, identity, payload in known.get(cid, [])
+                    if identity["project_path"] == str(path.resolve())
+                    and identity["inputs"]["basis"] == basis
+                    and payload_output(payload) == current_output(project, cid)
+                    and payload_is_current(payload)
+                    and (
+                        (not force and reused is not None)
+                        or (force and not row["committed"])
+                    )
+                ]
+                if matches:
                     specs = [ResultSpec(path, row["spec_json"]) for row in matches]
+                elif reused is not None:
+                    if reused != clip.analysis_records.get("align_words"):
+                        stage_reuse(cid, reused, basis)
+                    output["skipped"].append(
+                        {"clip_id": cid, "reason": "valid_analysis"}
+                    )
+                    continue
+                elif (
+                    runtime["revision"] is not None
+                    and store.get_result(spec.result_id) is None
+                ):
+                    # The first inference can populate the model cache. Its
+                    # pre-inference receipt has a None revision; authenticate
+                    # its actual result before recovering that initial receipt.
+                    initial = ResultSpec.build(
+                        path,
+                        kind="align_words",
+                        version=2,
+                        target_id=cid,
+                        arguments={},
+                        inputs={**identity_inputs, "model_revision": None},
+                    )
+                    row = store.get_result(initial.result_id)
+                    if row is not None:
+                        if (
+                            row["spec_json"] != initial.identity_json
+                            or sha256(row["payload_json"].encode()).hexdigest()
+                            != row["payload_digest"]
+                        ):
+                            raise StaleJobResult("Initial alignment receipt is corrupt")
+                        if payload_is_current(json.loads(row["payload_json"])):
+                            specs = [initial]
+                application = AlignmentApplication(project, (task,))
 
                 def compute(task=task):
                     nonlocal availability
@@ -241,44 +377,58 @@ def run_alignment_job(
                                 message="Word alignment dependencies unavailable. Install them from Settings > Dependencies.",
                             )
                         )
-                    outcome = run_alignment((task,), cancel_event=cancel)[0]
+                    outcome = run_alignment(
+                        (task,), cancel_event=cancel, fingerprints=fingerprints
+                    )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(outcome)
                     return {
                         "segments": [
                             segment.to_dict()
                             for segment in aligned_segments(task, outcome.words)
-                        ]
+                        ],
+                        "words": [word.to_dict() for word in outcome.words],
+                        "record_json": outcome.record_json,
                     }
 
-                def apply(current, payload, cid=cid):
-                    target = snapshot_alignment_tasks(
-                        [current.clips_by_id[cid]],
-                        current.sources_by_id,
-                        skip_existing=False,
-                    )[0].target
-                    result = TranscriptionOutcome(
+                def apply(current, payload, cid=cid, application=application):
+                    if not payload_is_current(payload):
+                        raise StaleJobResult(
+                            "Alignment result runtime is no longer current"
+                        )
+                    result = AlignmentOutcome(
                         cid,
                         "succeeded",
                         tuple(
-                            TranscriptSegment.from_dict(value)
-                            for value in payload["segments"]
+                            WordTimestamp.from_dict(value) for value in payload["words"]
                         ),
+                        record_json=payload["record_json"],
                     )
-                    if not TranscriptionApplication(current, (target,)).apply(
-                        current, result
-                    ):
+                    if not application.apply(current, result):
                         raise StaleJobResult(
                             "Alignment target changed during application"
                         )
 
                 def validate(
-                    current: Project, cid: str = cid, basis: dict = basis
+                    current: Project,
+                    cid: str = cid,
+                    basis: dict = basis,
+                    request_ids: tuple[str, ...] = tuple(
+                        item.result_id for item in specs
+                    ),
                 ) -> bool:
+                    # Cancellation stops admission before publication; already
+                    # staged receipts remain eligible for the final prefix save.
+                    if cancel.is_set() and not any(
+                        rid in current.metadata.job_results for rid in request_ids
+                    ):
+                        raise FingerprintCancelled()
                     return inputs(current, cid) == basis
 
                 def is_applied(current: Project, payload: dict, cid: str = cid) -> bool:
-                    return bool(transcript(current, cid) == payload["segments"])
+                    return current_output(current, cid) == payload_output(
+                        payload
+                    ) and payload_is_current(payload)
 
                 # Reconcile every matching saved refresh, including identical
                 # outputs whose checkpoints failed on more than one run.
@@ -311,6 +461,43 @@ def run_alignment_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult("Alignment inputs changed during computation")
+                if (
+                    outcome.can_apply
+                    and outcome.record_json is not None
+                    and not cancel.is_set()
+                ):
+                    record = AnalysisRecord.from_dict(json.loads(outcome.record_json))
+
+                    def publish_failure(
+                        current, application=application, outcome=outcome
+                    ):
+                        if not application.apply(current, outcome):
+                            raise StaleJobResult(
+                                "Alignment target changed during failure publication"
+                            )
+
+                    def failure_input(
+                        current: Project, cid: str = cid, basis: dict = basis
+                    ) -> bool:
+                        return inputs(current, cid) == basis
+
+                    def failure_applied(
+                        current: Project,
+                        cid: str = cid,
+                        record: AnalysisRecord = record,
+                    ) -> bool:
+                        return (
+                            current.clips_by_id[cid].analysis_records.get("align_words")
+                            == record
+                        )
+
+                    batch.stage_analysis(
+                        apply=publish_failure,
+                        validate_input=failure_input,
+                        is_applied=failure_applied,
+                    )
                 output[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )
