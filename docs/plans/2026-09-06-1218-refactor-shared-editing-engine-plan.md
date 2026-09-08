@@ -433,8 +433,12 @@ tests, with 34 focused follow-up tests. Standalone audio, alignment, and the
 remaining cross-consumer audit remain unfinished.
 Standalone audio's shared operation now supports verified whole-file records and
 guarded success/reuse/failure publication. Transcript and record publication is
-atomic for project observers. Its regression run passed 294 tests; GUI and durable
-audio consumers still use legacy tasks and remain to migrate.
+atomic for project observers. Its shared regression run passed 294 tests. GUI
+workers now request verified tasks, carry records through queued delivery and
+recovery, preserve transcripts on failed refresh, and require matching saved
+records before acknowledging receipts. Verified reuse avoids inference, including
+empty transcripts. The GUI regression run passed 298 tests with clean scoped
+typing. Durable audio jobs, audio completion surfaces, and alignment remain.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

@@ -1,6 +1,7 @@
 """Queue standalone audio results to their original project owner."""
 
 from typing import Any
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
@@ -17,11 +18,16 @@ class AudioTranscriptionDelivery(RetiringQObject):
         super().__init__(window)
         self.window = window
         self.worker = worker
-        self.application = AudioTranscriptionApplication(window.project, worker.task)
+        self.application = AudioTranscriptionApplication(
+            window.project, worker.task, getattr(worker, "options", None)
+        )
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.applied = False
         self.failure: str | None = None
-        worker.transcript_ready.connect(self.transcript)
+        if hasattr(worker, "outcome_ready"):
+            worker.outcome_ready.connect(self.receive)
+        else:
+            worker.transcript_ready.connect(self.transcript)
         worker.error.connect(self.error)
         # Keep the QThread alive through native completion, not a domain signal.
         worker.finished.connect(self.finished)
@@ -36,15 +42,27 @@ class AudioTranscriptionDelivery(RetiringQObject):
 
     @Slot(str, list)
     def transcript(self, audio_source_id: str, segments: list) -> None:
+        self.receive(AudioTranscriptionOutcome(audio_source_id, "succeeded", tuple(segments)))
+
+    @Slot(object)
+    def receive(self, outcome: AudioTranscriptionOutcome) -> None:
+        if not isinstance(outcome, AudioTranscriptionOutcome) or not outcome.can_apply:
+            return
         if not self.current() or self.application.consumed:
             return
+        audio_source_id = outcome.audio_source_id
         try:
-            outcome = AudioTranscriptionOutcome(
-                audio_source_id, "succeeded", tuple(segments)
-            )
             cache = getattr(self.worker, "cache", None)
-            receipt = cache.results[audio_source_id] if cache is not None else None
-            if receipt is not None and not receipt.matches(outcome):
+            project = self.window.project
+            if cache is not None and (
+                project.path is None or project.path.resolve() != cache.path
+            ):
+                raise ValueError("Project save location changed during transcription")
+            receipt = cache.results.get(audio_source_id) if cache is not None else None
+            if cache is not None and (
+                (receipt is not None and not receipt.matches(outcome))
+                or (receipt is None and cache.transient_outcomes.get(audio_source_id) != asdict(outcome))
+            ):
                 raise ValueError(
                     "Queued audio transcript differs from its recorded result"
                 )
@@ -57,10 +75,10 @@ class AudioTranscriptionDelivery(RetiringQObject):
         except Exception as exc:
             self.error(f"Could not apply audio transcription: {exc}")
             return
-        if applied:
+        if applied and outcome.has_result:
             self.applied = True
-            self.window._on_audio_transcript_ready(audio_source_id, segments)
-        else:
+            self.window._on_audio_transcript_ready(audio_source_id, list(outcome.segments))
+        elif not applied:
             self.error("Audio changed during transcription. Run transcription again.")
 
     @Slot(str)

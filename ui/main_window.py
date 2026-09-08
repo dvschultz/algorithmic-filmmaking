@@ -3129,10 +3129,6 @@ class MainWindow(QMainWindow):
         if audio is None:
             self.status_bar.showMessage(f"Audio source not found: {audio_source_id}")
             return False
-        if audio.transcript is not None:
-            self.status_bar.showMessage(f"Already transcribed: {audio.filename}")
-            return False
-
         if any(
             worker.session_id == self.project.session.session_id
             and worker.task.audio_source_id == audio_source_id

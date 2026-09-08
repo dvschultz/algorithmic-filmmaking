@@ -15,6 +15,7 @@ from core.jobs import JobRuntime
 from core.jobs.spec import OperationSpec, encode_object
 from core.jobs import gui_audio_transcription as audio_jobs
 from core.operations.transcription import TranscriptionOptions
+from core.operations.transcription_records import transcription_parameters
 from models.audio_source import AudioSource
 from ui.workers.base import CancellableWorker
 from ui.workers.job_adapter import (
@@ -32,6 +33,7 @@ class AudioTranscribeWorker(CancellableWorker):
 
     progress = Signal(int, int)
     transcript_ready = Signal(str, list)
+    outcome_ready = Signal(object)
     finished_signal = Signal()
     job_started = Signal(str, str)
 
@@ -51,7 +53,7 @@ class AudioTranscribeWorker(CancellableWorker):
         if project is not None:
             project.session.assert_owner()
         self.session_id = project.session.session_id if project is not None else None
-        self.task = AudioTranscriptionTask.from_audio(audio_source)
+        self.task = AudioTranscriptionTask.from_audio(audio_source, verified=True)
         self.options = audio_jobs.resolve_audio_options(
             TranscriptionOptions(
                 model=model_name,
@@ -61,17 +63,18 @@ class AudioTranscribeWorker(CancellableWorker):
                 segment_max_seconds=segment_max_seconds,
             )
         )
-        runtime_identity = audio_jobs.audio_transcription_runtime()
+        runtime_identity = audio_jobs.audio_transcription_runtime(self.task, self.options)
         self.runtime_json = encode_object(runtime_identity)
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="audio_transcribe",
-                version=1,
-                arguments=asdict(self.options),
+                version=2,
+                arguments=transcription_parameters(self.options),
                 inputs={
                     "audio_source_id": self.task.audio_source_id,
                     "path": str(self.task.path),
                     "media_stamp": self.task.media_stamp,
+                    "analysis_json": self.task.analysis_json,
                     "runtime": self.runtime_json,
                 },
                 persistence="session_only",
@@ -113,7 +116,7 @@ class AudioTranscribeWorker(CancellableWorker):
                 events.put((current, total))
 
             if (
-                encode_object(audio_jobs.audio_transcription_runtime())
+                encode_object(audio_jobs.audio_transcription_runtime(self.task, self.options))
                 != self.runtime_json
             ):
                 raise ValueError("Audio transcription runtime changed while queued")
@@ -171,7 +174,9 @@ class AudioTranscribeWorker(CancellableWorker):
                     row.error or "Audio transcription produced no result"
                 )
             self.result = AudioTranscriptionOutcome.from_dict(payload)
-            if self.result.status == "succeeded":
+            if self.result.can_apply:
+                self.outcome_ready.emit(self.result)
+            if self.result.has_result:
                 self.transcript_ready.emit(
                     self.result.audio_source_id, list(self.result.segments)
                 )

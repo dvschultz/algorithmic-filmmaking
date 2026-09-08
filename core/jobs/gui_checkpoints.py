@@ -148,6 +148,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             outcome = AudioTranscriptionOutcome.from_dict(json.loads(row["payload_json"]))
             if outcome.audio_source_id != audio["id"] or outcome.status != "succeeded":
                 raise StaleJobResult("Saved audio transcription does not match its target")
+            if outcome.record_json is not None and audio.get("analysis_records", {}).get("transcribe") != json.loads(outcome.record_json):
+                continue
             if audio.get("transcript") == [segment.to_dict() for segment in outcome.segments]:
                 pending.append((result_id, receipt_digest))
             continue

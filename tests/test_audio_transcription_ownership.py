@@ -50,6 +50,7 @@ from core.project import Project
 from ui.main_window import MainWindow
 from models.audio_source import AudioSource
 from core.transcription import TranscriptSegment
+from core.operations.audio_transcription import run_audio_transcription
 app = QCoreApplication([])
 owners = []
 with TemporaryDirectory() as directory:
@@ -82,8 +83,10 @@ with TemporaryDirectory() as directory:
         if mode == 'save_as': window.project.path = Path(directory) / 'different.json'
         # Emit genuine queued signals from QThread, including a duplicate result.
         def run():
-            worker.transcript_ready.emit(audio.id, [])
-            worker.transcript_ready.emit(audio.id, [])
+            with patch('core.transcription._has_audio_stream', return_value=True), patch('core.transcription.transcribe_video', return_value=[]):
+                worker.result = run_audio_transcription(worker.task, worker.options)
+            worker.outcome_ready.emit(worker.result)
+            worker.outcome_ready.emit(worker.result)
             worker.finished_signal.emit()
         worker.run = run
         if mode == 'media': path.write_bytes(b'changed-media')

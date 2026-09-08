@@ -444,14 +444,23 @@ verification, and failed refreshes preserve the displayed transcript.
 `Project.set_audio_transcript()` accepts a matching record and publishes it with
 the transcript before notifying observers. It rejects mismatched records before
 mutation. Raw callers continue to create unknown-provenance values. The audio
-task factory retains its legacy default until GUI and durable jobs migrate;
-those consumers do not yet request or carry verified audio tasks.
+task factory retains its legacy default for unmigrated consumers. GUI workers
+now request verified tasks; durable audio jobs still need migration.
 
 The regression run passed 294 tests including audio GUI, ownership, agent, project,
 and MCP coverage. Changed-file Ruff passed. Scoped operation typing is clean;
 the existing `Project.record_analysis()` mapping typing error was confirmed
-against the unchanged HEAD version. Audio GUI/job recovery and alignment remain
-unfinished, along with the broader U10 audit.
+against the unchanged HEAD version.
+
+GUI audio journals now use semantic transcription settings and whole-file runtime
+identity, retain successful records for recovery, and authenticate transient reuse
+and failure outcomes before owner-thread publication. Save acknowledgement checks
+both transcript and record. The launcher verifies existing transcripts instead of
+rejecting them based on field presence. Audio card/completion surfaces still need
+migration. The GUI regression run passed 298 tests, including real queued success,
+reuse, failure, cancellation, and altered-payload delivery; scoped typing passed
+for all three changed worker/journal modules. Durable audio recovery and alignment
+remain unfinished, along with the broader U10 audit.
 
 ## Remaining U10 work
 
