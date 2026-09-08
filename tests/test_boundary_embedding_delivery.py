@@ -46,6 +46,13 @@ with TemporaryDirectory() as directory:
                 assert project.clips[0].last_frame_embedding == [.2]*768
                 assert len(project.metadata.job_results) == 1
                 window._on_embedding_ready.assert_called_once()
+                assert project.save()
+                from core.jobs.store import JobStore
+                store = JobStore(root / 'jobs.db')
+                try:
+                    assert all(store.get_result(rid)['committed'] for rid in project.metadata.job_results)
+                finally:
+                    store.close()
             else:
                 assert project.clips[0].first_frame_embedding is None
                 assert not project.metadata.job_results

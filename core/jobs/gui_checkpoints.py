@@ -9,6 +9,29 @@ from core.jobs.store import JobStore
 from core.transcription_models import TranscriptSegment, WordTimestamp
 
 
+def _saved_array_matches(clip: dict, operation: str, expected: dict, record_json: str | None = None) -> bool:
+    """Compare the saved payload regardless of inline or managed storage."""
+    from models.analysis_record import AnalysisRecord
+    from core.artifacts import ArtifactStore, ArtifactUnavailable
+
+    data = clip.get("analysis_records", {}).get(operation)
+    if data is None:
+        return record_json is None and all(clip.get(key) == value for key, value in expected.items())
+    try:
+        record = AnalysisRecord.from_dict(data)
+        if record.state != "succeeded":
+            return False
+        value = json.loads(ArtifactStore().read_bytes(record.artifact)) if record.artifact is not None else record.value
+        if record_json is not None:
+            original = AnalysisRecord.from_dict(json.loads(record_json))
+            if (record.identity != original.identity or original.state != "succeeded"
+                or record.provenance != original.provenance or record.input_json != original.input_json):
+                return False
+        return bool(value == expected)
+    except (ArtifactUnavailable, OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
     """Call only after writing this exact snapshot, while holding its writer.
 
@@ -184,29 +207,16 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.operations.embeddings import EmbeddingOutcome
 
             embedding_outcome = EmbeddingOutcome.from_dict(payload)
-            matches = clip.get("embedding") == list(embedding_outcome.vector) and clip.get("embedding_model") == embedding_outcome.model
-            if embedding_outcome.record_json is not None and "embeddings" in clip.get("analysis_records", {}):
-                from models.analysis_record import AnalysisRecord
-                from core.artifacts import ArtifactStore
-
-                saved_record = AnalysisRecord.from_dict(clip["analysis_records"]["embeddings"])
-                expected_record = AnalysisRecord.from_dict(json.loads(embedding_outcome.record_json))
-                value = json.loads(ArtifactStore().read_bytes(saved_record.artifact)) if saved_record.artifact is not None else saved_record.value
-                matches = (
-                    saved_record.identity == expected_record.identity and saved_record.state == expected_record.state == "succeeded"
-                    and saved_record.provenance == expected_record.provenance and saved_record.input_json == expected_record.input_json
-                    and value == {"embedding": list(embedding_outcome.vector), "embedding_model": embedding_outcome.model}
-                )
-            if matches:
+            if _saved_array_matches(clip, "embeddings", {"embedding": list(embedding_outcome.vector), "embedding_model": embedding_outcome.model}, embedding_outcome.record_json):
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_boundary_embeddings":
             from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome
 
             outcome = BoundaryEmbeddingOutcome.from_dict(payload)
-            if (clip.get("first_frame_embedding") == list(outcome.first)
-                and clip.get("last_frame_embedding") == list(outcome.last)
-                and clip.get("embedding_model") == outcome.model):
+            if _saved_array_matches(clip, "boundary_embeddings", {
+                "first_frame_embedding": list(outcome.first), "last_frame_embedding": list(outcome.last), "embedding_model": outcome.model,
+            }):
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_gaze":

@@ -52,16 +52,18 @@ def restore_artifact_projections(targets: list[Any], store: "ArtifactStore") -> 
             if not isinstance(record, AnalysisRecord) or record.artifact is None or fields is None:
                 continue
             for field in fields:
-                if hasattr(target, field):
+                if field != "embedding_model" and hasattr(target, field):
                     setattr(target, field, None)
-            if record.state == "failed":
-                continue
             try:
                 if record.artifact.media_type != "application/json":
                     raise ArtifactUnavailable("Unsupported analysis payload type")
                 payload = json.loads(store.read_bytes(record.artifact))
                 if not isinstance(payload, dict) or set(payload) != set(fields):
                     raise ArtifactUnavailable("Analysis payload fields do not match its operation")
+                if "embedding_model" in fields and payload["embedding_model"] != getattr(target, "embedding_model", None):
+                    other_vectors = {"embedding", "first_frame_embedding", "last_frame_embedding"} - set(fields)
+                    if any(getattr(target, field, None) is not None for field in other_vectors):
+                        raise ArtifactUnavailable("Artifact model conflicts with another embedding result")
                 restored = type(target).from_dict({**target.to_dict(), **payload})
                 for field in fields:
                     if not hasattr(restored, field) or (payload[field] is not None and getattr(restored, field) is None):
@@ -71,7 +73,8 @@ def restore_artifact_projections(targets: list[Any], store: "ArtifactStore") -> 
                 if record.state == "missing":
                     target.analysis_records[operation] = replace(record, state="succeeded", error=None)
             except (ArtifactUnavailable, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-                target.analysis_records[operation] = replace(record, state="missing", error=str(exc))
+                if record.state != "failed":
+                    target.analysis_records[operation] = replace(record, state="missing", error=str(exc))
 
 
 def _stamp(path: Path) -> tuple[int, ...] | None:

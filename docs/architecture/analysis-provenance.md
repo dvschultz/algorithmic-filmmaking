@@ -90,9 +90,15 @@ The configured cache directory contains `artifacts/`, with a SQLite reference
 index and registered payload files. References contain a digest, size, and media
 type. Writes stream into staging files, verify content, and pin the registered
 payload before publishing its reference in an atomic project save. Thumbnail
-embedding vectors are stored as JSON artifacts rather than repeated in project
+and boundary embedding vectors are stored as JSON artifacts rather than repeated in project
 JSON. Loading hydrates their read projections. Missing or corrupt payloads mark
 only the affected operation missing, preserving editorial notes and sequences.
+The shared embedding model label survives damage to either vector family.
+Unsaved legacy vectors are staged with unknown provenance. Old display vectors
+retained after a failed refresh are also managed, while the record remains failed
+through save, load, payload loss, and restoration. GUI save acknowledgments compare
+the stored payload and its record rather than requiring inline arrays. Boundary
+array storage is implemented; boundary analysis reuse still needs migration.
 
 Known saved-project manifests retain payloads after projects close. Live
 projects retain current results and source-removal undo history. Detached save

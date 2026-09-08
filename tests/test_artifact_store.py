@@ -17,6 +17,92 @@ def test_staged_artifact_is_pinned_before_manifest_publication(tmp_path):
     assert store.collect() == []
 
 
+@pytest.mark.parametrize("damaged", ["embeddings", "boundary_embeddings"])
+def test_boundary_arrays_are_managed_and_damage_is_isolated(tmp_path, monkeypatch, damaged):
+    import json
+    from core.project import Project
+    from models.analysis_record import ArtifactRef
+    from tests.test_description_operations import project_with_thumbnails
+
+    root = tmp_path / "artifacts"
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: root)
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.notes = "Keep these notes"
+    clip.embedding = [0.1] * 768
+    clip.first_frame_embedding = [0.2] * 768
+    clip.last_frame_embedding = [0.3] * 768
+    clip.embedding_model = "dinov2-vit-b-14"
+    values = {
+        "embeddings": {"embedding": clip.embedding, "embedding_model": clip.embedding_model},
+        "boundary_embeddings": {"first_frame_embedding": clip.first_frame_embedding,
+                                "last_frame_embedding": clip.last_frame_embedding, "embedding_model": clip.embedding_model},
+    }
+    for operation, value in values.items():
+        project.record_analysis("clip", clip.id, operation, AnalysisRecord.success(identity(operation=operation), value))
+    path = tmp_path / "project.json"
+    assert project.save(path)
+    saved = json.loads(path.read_text())["clips"][0]
+    assert not {"embedding", "first_frame_embedding", "last_frame_embedding"} & saved.keys()
+    store = ArtifactStore(root)
+    refs = {operation: ArtifactRef.from_dict(saved["analysis_records"][operation]["artifact"]) for operation in values}
+    assert store.collect() == []
+    store.path_for(refs[damaged]).unlink()
+    restored = Project.load(path)
+    result = restored.clips[0]
+    assert result.analysis_records[damaged].state == "missing"
+    assert result.embedding_model == "dinov2-vit-b-14"
+    assert result.notes == "Keep these notes"
+    if damaged == "embeddings":
+        assert result.embedding is None
+        assert result.first_frame_embedding == [0.2] * 768
+        assert result.last_frame_embedding == [0.3] * 768
+    else:
+        assert result.embedding == [0.1] * 768
+        assert result.first_frame_embedding is None and result.last_frame_embedding is None
+    assert restored.save()
+    assert Project.load(path).clips[0].embedding_model == "dinov2-vit-b-14"
+
+
+def test_failed_boundary_attempt_keeps_managed_display_vectors_without_becoming_successful(tmp_path, monkeypatch):
+    import json
+    from core.project import Project
+    from models.analysis_record import ArtifactRef
+    from tests.test_description_operations import project_with_thumbnails
+
+    root = tmp_path / "artifacts"
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: root)
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.first_frame_embedding = [0.2] * 768
+    clip.last_frame_embedding = [0.3] * 768
+    clip.embedding_model = "dinov2-vit-b-14"
+    project.record_analysis("clip", clip.id, "boundary_embeddings",
+                            AnalysisRecord.failure(identity(operation="boundary_embeddings"), "Refresh failed"))
+    path = tmp_path / "project.json"
+    assert project.save(path)
+    saved = json.loads(path.read_text())["clips"][0]
+    assert "first_frame_embedding" not in saved and "last_frame_embedding" not in saved
+    record = saved["analysis_records"]["boundary_embeddings"]
+    assert record["state"] == "failed"
+    ref = ArtifactRef.from_dict(record["artifact"])
+    loaded = Project.load(path)
+    assert loaded.clips[0].first_frame_embedding == [0.2] * 768
+    assert loaded.clips[0].analysis_records["boundary_embeddings"].state == "failed"
+    store = ArtifactStore(root)
+    payload = store.read_bytes(ref)
+    store.path_for(ref).unlink()
+    damaged = Project.load(path)
+    assert damaged.clips[0].first_frame_embedding is None
+    assert damaged.clips[0].analysis_records["boundary_embeddings"].state == "failed"
+    assert damaged.save()
+    with store.pin() as producer:
+        store.put_bytes(payload, pin=producer, media_type="application/json")
+    recovered = Project.load(path)
+    assert recovered.clips[0].first_frame_embedding == [0.2] * 768
+    assert recovered.clips[0].analysis_records["boundary_embeddings"].state == "failed"
+
+
 def test_closed_projects_and_job_export_history_pins_retain_artifacts(tmp_path):
     root = tmp_path / "artifacts"
     store = ArtifactStore(root)
@@ -134,7 +220,8 @@ def test_revoked_producer_cannot_publish_after_finishing_copy(tmp_path):
     assert not list(store.objects.iterdir())
 
 
-def test_project_save_and_source_undo_retain_real_references(tmp_path, monkeypatch):
+@pytest.mark.parametrize("operation", ["embeddings", "boundary_embeddings"])
+def test_project_save_and_source_undo_retain_real_references(tmp_path, monkeypatch, operation):
     from core.project import Project
     from models.clip import Clip, Source
 
@@ -148,8 +235,8 @@ def test_project_save_and_source_undo_retain_real_references(tmp_path, monkeypat
     project = Project(sources=[source], clips=[clip])
     with store.pin() as writer:
         ref = store.put_bytes(b"embedding", pin=writer)
-        record = AnalysisRecord.success(identity(operation="embeddings"), artifact=ref)
-        project.record_analysis("clip", clip.id, "embeddings", record)
+        record = AnalysisRecord.success(identity(operation=operation), artifact=ref)
+        project.record_analysis("clip", clip.id, operation, record)
     assert store.collect() == []  # Unsaved live project owns the result.
     path = tmp_path / "project.json"
     assert project.save(path)
@@ -157,7 +244,7 @@ def test_project_save_and_source_undo_retain_real_references(tmp_path, monkeypat
     assert project.save()
     assert store.collect() == []  # Saved manifest is empty; undo still owns it.
     project.session.undo()
-    assert project.clips[0].analysis_records["embeddings"].artifact == ref
+    assert project.clips[0].analysis_records[operation].artifact == ref
     project.session.redo()
     project.session.close()
     assert store.collect() == [ref.digest]

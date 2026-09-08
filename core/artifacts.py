@@ -113,15 +113,27 @@ class ArtifactLease:
 
 def _array_records(document: dict) -> Iterator[tuple[dict, str, AnalysisRecord]]:
     for target in document.get("clips", []):
-        for operation in ("embeddings",):
+        for operation in ("embeddings", "boundary_embeddings"):
             data = target.get("analysis_records", {}).get(operation)
             if data is None:
-                continue
+                fields = ANALYSIS_FIELDS[operation]
+                projection = {field: target.get(field) for field in fields}
+                if not any(value is not None for field, value in projection.items() if field != "embedding_model"):
+                    continue
+                # Unsaved legacy consumers may publish arrays without records.
+                # Manage their storage without claiming verified provenance.
+                data = AnalysisRecord.legacy(projection).to_dict()
+                target.setdefault("analysis_records", {})[operation] = data
             try:
                 record = AnalysisRecord.from_dict(data)
             except (ValueError, TypeError, KeyError, AttributeError):
                 continue
-            if record.state in ("succeeded", "missing"):
+            if record.state in ("succeeded", "missing") or (
+                record.state == "failed" and (record.artifact is not None or any(
+                    target.get(field) is not None for field in ANALYSIS_FIELDS[operation]
+                    if field != "embedding_model"
+                ))
+            ):
                 yield target, operation, record
 
 
@@ -140,10 +152,14 @@ def _externalize_arrays(document: dict, store: "ArtifactStore", pin: str) -> Non
                 changed = json.loads(store.read_bytes(record.artifact)) != projection
             except (ArtifactUnavailable, OSError, ValueError):
                 changed = True
-        if has_projection and changed:
+        if has_projection and changed and record.state != "failed":
             # Legacy consumers can still edit projected fields. Preserve those
             # values without attributing their edits to the previous model run.
             record = AnalysisRecord.legacy(projection)
+        elif has_projection and changed and record.state == "failed":
+            # Old display vectors survive a failed refresh, but the failed
+            # attempt must never become reusable through their storage.
+            record = replace(record, value_json=None, artifact=None)
         if record.artifact is None:
             if not has_projection:
                 continue

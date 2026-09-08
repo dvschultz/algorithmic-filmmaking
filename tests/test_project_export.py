@@ -106,7 +106,8 @@ def _make_project(
     )
 
 
-def test_bundle_includes_managed_analysis_and_restores_on_another_machine(tmp_path, monkeypatch):
+@pytest.mark.parametrize("operation", ["embeddings", "boundary_embeddings"])
+def test_bundle_includes_managed_analysis_and_restores_on_another_machine(tmp_path, monkeypatch, operation):
     from core.artifacts import ArtifactStore
     from models.analysis_record import AnalysisRecord
     from tests.test_analysis_records import identity
@@ -117,38 +118,42 @@ def test_bundle_includes_managed_analysis_and_restores_on_another_machine(tmp_pa
     source = _make_source(tmp_path)
     clip = Clip(id="clip", source_id=source.id, notes="Keep this note")
     project = _make_project(sources=[source], clips=[clip])
-    payload = json.dumps({"embedding": [1.0] * 768, "embedding_model": "dinov2-vit-b-14"}).encode()
+    fields = ("embedding",) if operation == "embeddings" else ("first_frame_embedding", "last_frame_embedding")
+    payload = json.dumps({**{field: [1.0] * 768 for field in fields}, "embedding_model": "dinov2-vit-b-14"}).encode()
     with store.pin() as producer:
         ref = store.put_bytes(payload, pin=producer, media_type="application/json")
-        project.record_analysis("clip", clip.id, "embeddings", AnalysisRecord.success(identity(operation="embeddings"), artifact=ref))
+        project.record_analysis("clip", clip.id, operation, AnalysisRecord.success(identity(operation=operation), artifact=ref))
     dest = tmp_path / "bundle"
     export_project_bundle(project, dest, include_clips=False)
     assert (dest / "artifacts" / f"{ref.digest}.blob").read_bytes() == payload
     second_root = tmp_path / "second-cache"
     monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: second_root)
     restored = Project.load(dest / "Test Project.sceneripper")
-    assert restored.clips[0].embedding == [1.0] * 768
+    assert all(getattr(restored.clips[0], field) == [1.0] * 768 for field in fields)
     assert restored.clips[0].notes == "Keep this note"
-    assert restored.clips[0].analysis_records["embeddings"].artifact == ref
+    assert restored.clips[0].analysis_records[operation].artifact == ref
     restored.session.close()
     assert ArtifactStore(second_root).collect() == []
 
 
-def test_bundle_stages_unsaved_inline_embeddings_before_manifest(tmp_path, monkeypatch):
-    from core.spine.analyze import embeddings
+@pytest.mark.parametrize("operation", ["embeddings", "boundary_embeddings"])
+def test_bundle_stages_unsaved_inline_embeddings_before_manifest(tmp_path, monkeypatch, operation):
+    from core.spine import analyze
     from tests.test_description_operations import project_with_thumbnails
 
     monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: tmp_path / "cache")
     project = project_with_thumbnails(tmp_path, 1)
     monkeypatch.setattr("core.analysis.embeddings.extract_clip_embeddings_batch", lambda paths: [[0.1] * 768 for _ in paths])
+    monkeypatch.setattr("core.analysis.embeddings.extract_boundary_embeddings", lambda **_: ([0.1] * 768, [0.2] * 768))
+    monkeypatch.setattr("core.feature_registry.check_feature", lambda _: (True, []))
     monkeypatch.setattr("core.analysis.embeddings.unload_model", lambda: None)
-    embeddings(project)
+    getattr(analyze, operation)(project)
     dest = tmp_path / "bundle"
     result = export_project_bundle(project, dest, include_clips=False)
     assert result.artifacts_copied == 1
     saved = json.loads(next(dest.glob("*.sceneripper")).read_text())
-    assert "embedding" not in saved["clips"][0]
-    ref = saved["clips"][0]["analysis_records"]["embeddings"]["artifact"]
+    assert not {"embedding", "first_frame_embedding", "last_frame_embedding"} & saved["clips"][0].keys()
+    ref = saved["clips"][0]["analysis_records"][operation]["artifact"]
     assert (dest / "artifacts" / (ref["sha256"] + ".blob")).is_file()
 
 
