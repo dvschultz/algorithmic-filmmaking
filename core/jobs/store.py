@@ -38,11 +38,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
 from core.jobs.spec import OperationSpec
+from core.jobs.errors import StaleJobResult
 
 # Keep short job-store transactions serialized within this process. Concurrent
 # SQLite connection open/close deadlocked in the macOS runtime's native VFS.
 # Inference and project-file writes happen outside these connection scopes.
 _connection_lock = threading.RLock()
+
+# Bound SQLite receipts without changing their logical recovery representation.
+_RESULT_INLINE_BYTES = 16 * 1024
 
 # Status sentinel values.
 STATUS_QUEUED = "queued"
@@ -273,6 +277,12 @@ class JobStore:
                     conn.execute("ALTER TABLE jobs ADD COLUMN owner_id TEXT")
                 if "operation_json" not in columns:
                     conn.execute("ALTER TABLE jobs ADD COLUMN operation_json TEXT")
+                result_columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(job_results)")
+                }
+                for column in ("spec_artifact_json", "payload_artifact_json", "artifact_pin"):
+                    if column not in result_columns:
+                        conn.execute(f"ALTER TABLE job_results ADD COLUMN {column} TEXT")
 
     # --- Mutations ---
 
@@ -440,7 +450,27 @@ class JobStore:
             row = conn.execute(
                 "SELECT * FROM job_results WHERE result_id = ?", (result_id,)
             ).fetchone()
-        return dict(row) if row is not None else None
+        return self._hydrate_result(dict(row)) if row is not None else None
+
+    def _hydrate_result(self, row: dict) -> dict:
+        """Resolve payloads outside the job connection to avoid lock inversion."""
+        from core.artifacts import ArtifactStore
+        from models.analysis_record import ArtifactRef
+
+        for field in ("spec", "payload"):
+            reference = row.pop(f"{field}_artifact_json", None)
+            if reference is None:
+                continue
+            if row[f"{field}_json"] != "" or not row.get("artifact_pin"):
+                raise StaleJobResult("Conflicting job result storage metadata")
+            try:
+                ref = ArtifactRef.from_dict(json.loads(reference))
+                artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+                row[f"{field}_json"] = artifacts.read_bytes(ref).decode("utf-8")
+            except (KeyError, TypeError, ValueError, OSError) as exc:
+                raise StaleJobResult("Job result payload is unavailable or corrupt") from exc
+        row.pop("artifact_pin", None)
+        return row
 
     def get_pending_results(self, result_ids: Sequence[str]) -> list[dict]:
         """Read pending receipts in bounded queries using one connection."""
@@ -458,7 +488,7 @@ class JobStore:
                         batch,
                     ).fetchall()
                 )
-        return rows
+        return [self._hydrate_result(row) for row in rows]
 
     def get_download_receipt(self, request_id: str) -> dict | None:
         with self._connect() as conn:
@@ -486,12 +516,42 @@ class JobStore:
         self, result_id: str, spec_json: str, payload_json: str, digest: str
     ) -> dict:
         """Persist immutable computed output before publishing it to a project."""
+        from core.artifacts import ArtifactStore
+
+        values = {"spec": spec_json, "payload": payload_json}
+        references: dict[str, str | None] = {"spec": None, "payload": None}
+        artifacts = None
+        pin = None
+        if self.persistence == "job_history" and any(
+            len(value.encode("utf-8")) > _RESULT_INLINE_BYTES for value in values.values()
+        ):
+            # The default jobs.db lives in the configured cache directory. Keep
+            # custom databases self-contained too; session-only stores stay inline.
+            artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+            pin = artifacts.create_pin()
+            try:
+                for field, value in values.items():
+                    data = value.encode("utf-8")
+                    if len(data) > _RESULT_INLINE_BYTES:
+                        ref = artifacts.put_bytes(data, pin=pin, media_type="application/json")
+                        references[field] = json.dumps(ref.to_dict(), sort_keys=True)
+                        values[field] = ""
+            except BaseException:
+                artifacts.release_pin(pin)
+                raise
+        # Do not release the pin on uncertain SQLite publication: the row may
+        # already be durable. Proven duplicate inserts can release their new pin.
         with self._connect() as conn:
             conn.execute("PRAGMA synchronous=FULL")
-            conn.execute(
-                "INSERT OR IGNORE INTO job_results (result_id,spec_json,payload_json,payload_digest,created_at) VALUES (?,?,?,?,?)",
-                (result_id, spec_json, payload_json, digest, time.time()),
-            )
+            inserted = conn.execute(
+                "INSERT OR IGNORE INTO job_results "
+                "(result_id,spec_json,payload_json,payload_digest,created_at,"
+                "spec_artifact_json,payload_artifact_json,artifact_pin) VALUES (?,?,?,?,?,?,?,?)",
+                (result_id, values["spec"], values["payload"], digest, time.time(),
+                 references["spec"], references["payload"], pin),
+            ).rowcount
+        if not inserted and artifacts is not None and pin is not None:
+            artifacts.release_pin(pin)
         row = self.get_result(result_id)
         assert row is not None
         if (row["spec_json"], row["payload_json"], row["payload_digest"]) != (

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 
 from core.project import Project
 from core.jobs.store import JobStore
+from core.jobs.errors import StaleJobResult as StaleJobResult
 from core.spine.project_io import load_with_mtime, project_writer, save_with_mtime_check
 
 
@@ -52,10 +53,6 @@ class ResultSpec:
     @property
     def result_id(self) -> str:
         return sha256(self.identity_json.encode()).hexdigest()
-
-
-class StaleJobResult(RuntimeError):
-    pass
 
 
 def commit_result(

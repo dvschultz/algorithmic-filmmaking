@@ -45,8 +45,16 @@ def setup(tmp_path):
     return path, store, spec, counts, kwargs
 
 
-def test_crash_after_project_save_reconciles_without_double_apply(setup, monkeypatch):
+@pytest.mark.parametrize("large_payload", [False, True])
+def test_crash_after_project_save_reconciles_without_double_apply(setup, monkeypatch, large_payload):
     path, store, spec, counts, kwargs = setup
+    if large_payload:
+        compute = kwargs["compute"]
+
+        def compute_large():
+            return {**compute(), "vectors": [0.123456789] * 4000}
+
+        kwargs["compute"] = compute_large
     original = store.checkpoint_results
     monkeypatch.setattr(
         store,
@@ -58,6 +66,10 @@ def test_crash_after_project_save_reconciles_without_double_apply(setup, monkeyp
     assert Project.load(path).metadata.name == "1"
     assert spec.result_id in Project.load(path).metadata.job_results
     assert not store.get_result(spec.result_id)["committed"]
+    if large_payload:
+        from core.artifacts import ArtifactStore
+
+        assert ArtifactStore(store.db_path.parent / "artifacts").collect() == []
     monkeypatch.setattr(store, "checkpoint_results", original)
     result = commit_result(store, spec, **kwargs)
     assert not result["applied"]

@@ -124,6 +124,18 @@ A worker revalidates the relocated media before reuse, without inference when
 the content is unchanged. Missing thumbnails fail their own embedding target
 without stopping analysis of valid neighboring clips.
 
+New durable computed-result receipts externalize spec and payload bodies larger
+than 16 KiB into the artifact store beside `jobs.db`. SQLite keeps references and
+a durable pin; callers still receive the exact original strings and digests.
+Files are staged before the receipt is inserted. Proven duplicate inserts release
+their temporary pins, while uncertain publication conservatively retains them.
+Reads verify payload checksums, and pending-receipt recovery resolves files after
+closing the job database connection. Existing inline receipts and session-only
+stores retain their original representation. Receipt pins survive checkpointing
+and restart: terminal-job deletion does not establish that a computed receipt is
+unreferenced by saved projects. Receipt pruning and reconciliation of abandoned
+publication pins remain to be implemented.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
@@ -131,7 +143,9 @@ without stopping analysis of valid neighboring clips.
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
-- Move preview/prerender media and durable job array payloads into managed
-  storage, with pins spanning execution, playback, export, and recovery.
+- Move preview/prerender media and the remaining job-row arguments, operation
+  specifications, and final summaries into managed storage, with pins spanning
+  execution, playback, export, and recovery. Add safe computed-receipt pruning;
+  existing inline receipts are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional
   consumers. Abandoned save pins without a later replacement remain retained.
