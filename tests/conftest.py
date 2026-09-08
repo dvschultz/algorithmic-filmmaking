@@ -31,6 +31,34 @@ def qt_application_lifetime() -> object | None:
     return widgets.QApplication.instance() or widgets.QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def qt_widget_lifetime():
+    """Release each test's root widgets while preserving wider-scope owners."""
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    app = widgets.QApplication.instance() if widgets is not None else None
+    before = set(app.topLevelWidgets()) if app is not None else set()
+    yield
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    app = widgets.QApplication.instance() if widgets is not None else None
+    if app is None:
+        return
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import isValid
+
+    # Popup windows may belong to a module/session widget. Its parent remains
+    # responsible for those children, even when a test created them lazily.
+    created = [
+        widget for widget in app.topLevelWidgets()
+        if widget not in before and widget.parent() is None
+    ]
+    for widget in created:
+        if isValid(widget) and widget.close():
+            if isValid(widget):
+                widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 @pytest.fixture
 def test_project() -> Project:
     """Create a project with test data.

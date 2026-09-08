@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.frame_extraction import (
     FrameExtractionApplication,
@@ -11,7 +13,7 @@ from core.operations.frame_extraction import (
 )
 
 
-class FrameExtractionDelivery(QObject):
+class FrameExtractionDelivery(RetiringQObject):
     def __init__(self, window: Any, worker: Any) -> None:
         super().__init__(window)
         self.window = window
@@ -104,4 +106,4 @@ class FrameExtractionDelivery(QObject):
         if getattr(self.window, "_frame_extraction_worker", None) is self.worker:
             self.window._frame_extraction_worker = None
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()

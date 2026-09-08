@@ -3,10 +3,12 @@
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 
-class ExportDelivery(QObject):
+class ExportDelivery(RetiringQObject):
     def __init__(
         self,
         window: Any,
@@ -61,4 +63,4 @@ class ExportDelivery(QObject):
         if getattr(self.window, self.attribute, None) is self.worker:
             setattr(self.window, self.attribute, None)
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()

@@ -89,11 +89,10 @@ from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
 from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
 from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
 from ui.workers.export_delivery import ExportDelivery
-from ui.workers.analysis_pipeline_delivery import (
-    bind_pipeline_completion,
-)
+from core.operations.clip_analysis import ClipAnalysisOptions
+from ui.workers.standalone_analysis import start_standalone_analysis
 from ui.workers.gui_tool_reply import (
-    AgentAnalysisCompletion, GuiToolReply, gui_reply_scope,
+    GuiToolReply, gui_reply_scope,
 )
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_browser import VIRTUALIZATION_THRESHOLD, clear_thumbnail_pixmap_cache
@@ -569,20 +568,6 @@ class MainWindow(QMainWindow):
         # Incremented each time a new worker starts; signals with old generation are ignored
         self._detection_generation: int = 0
         self._thumbnail_generation: int = 0
-
-        # Agent tool waiting state - tracks when agent is waiting for worker completion
-        self._pending_agent_color_analysis = False
-        self._pending_agent_shot_analysis = False
-        self._pending_agent_transcription = False
-        self._pending_agent_classification = False
-        self._pending_agent_object_detection = False
-        self._pending_agent_description = False
-        self._agent_color_clips: list = []
-        self._agent_shot_clips: list = []
-        self._agent_transcription_clips: list = []
-        self._agent_classification_clips: list = []
-        self._agent_object_detection_clips: list = []
-        self._agent_description_clips: list = []
 
         # Plan execution state
         self._pending_plan_tool_call_id: Optional[str] = None
@@ -3356,14 +3341,14 @@ class MainWindow(QMainWindow):
             or any(project.clips_by_id.get(c.id) is not c for c in clips)
             or tuple(clip_input(project, c) for c in clips) != inputs
         ):
-            controller.deleteLater()
+            controller.retire()
             return False
         controller.start()
         return True
 
     @Slot(object, int, str)
     def _on_clip_analysis_progress(self, controller, value: int, operation: str) -> None:
-        if controller.is_current() and not controller.plan.cancelled:
+        if controller.owns_view() and controller.is_current() and not controller.plan.cancelled:
             self.progress_bar.setValue(value)
             self.status_bar.showMessage(f"{OPERATIONS_BY_KEY[operation].label}: {value}%")
 
@@ -3428,43 +3413,10 @@ class MainWindow(QMainWindow):
 
     @Slot(object, str)
     def _on_clip_analysis_status(self, controller, message: str) -> None:
-        if controller.is_current() and not controller.plan.cancelled:
+        if controller.owns_view() and controller.is_current() and not controller.plan.cancelled:
             self.status_bar.showMessage(message)
 
 
-    def _start_transcription_worker(
-        self, clips: list, source: Source, completed_slot,
-        *, agent_reply: GuiToolReply | None = None, pipeline: bool = False,
-    ) -> None:
-        """Create, wire, and start the shared transcription worker."""
-        self._stop_worker_safely(self.transcription_worker, "Transcription")
-        self.transcription_worker = TranscriptionWorker(
-            clips,
-            source,
-            self.settings.transcription_model,
-            self.settings.transcription_language,
-            parallelism=self.settings.transcription_parallelism,
-            backend=self.settings.transcription_backend,
-            model_cache_dir=self.settings.model_cache_dir,
-            min_free_disk_gb=self.settings.transcription_min_free_disk_gb,
-            segmentation_mode=self.settings.transcription_segmentation_mode,
-            segment_max_seconds=self.settings.transcription_segment_max_seconds,
-        )
-        from ui.workers.transcription_delivery import TranscriptionDelivery
-        TranscriptionDelivery(self, self.transcription_worker, reply=agent_reply, pipeline=pipeline)
-        if pipeline:
-            bind_pipeline_completion(
-                self, self.transcription_worker, "transcription_worker",
-                self.transcription_worker.transcription_completed, completed_slot,
-            )
-        else:
-            completion = AgentAnalysisCompletion(
-                self, self.transcription_worker, "transcription_worker",
-                completed_slot if agent_reply is not None else lambda **_: completed_slot(),
-                reply=agent_reply,
-            )
-            self.transcription_worker.transcription_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.transcription_worker.start()
 
 
     @Slot(int, int)
@@ -4204,174 +4156,8 @@ class MainWindow(QMainWindow):
     # Agent-triggered analysis completion handlers
     # These are separate from manual handlers to allow independent tracking
 
-    @Slot()
-    def _on_agent_color_analysis_finished(self, *, reply: GuiToolReply | None = None) -> None:
-        """Handle color analysis completion when triggered by agent."""
-        logger.info("=== AGENT COLOR ANALYSIS FINISHED ===")
 
-        # Guard against duplicate calls
-        if self._color_analysis_finished_handled:
-            logger.warning("_on_agent_color_analysis_finished already handled, ignoring duplicate")
-            return
-        self._color_analysis_finished_handled = True
 
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-
-        clips = self._agent_color_clips
-        clip_count = len(clips)
-        if self._color_run_error:
-            self.status_bar.showMessage(
-                f"Color extraction finished with errors - {clip_count} clips"
-            )
-        else:
-            self.status_bar.showMessage(f"Color extraction complete - {clip_count} clips")
-
-        # Send result back to agent
-        if self._pending_agent_color_analysis:
-            self._pending_agent_color_analysis = False
-            agent_result = self._build_agent_analysis_result(
-                clips,
-                ["colors"],
-                f"Extracted colors from {clip_count} clips",
-            )
-            result = {
-                "success": True,
-                "result": agent_result,
-            }
-            self._agent_color_clips = []
-            if reply is not None:
-                reply.send(self, result)
-            logger.info(f"Sent color analysis result to agent: {clip_count} clips")
-
-    @Slot()
-    def _on_agent_shot_analysis_finished(self, *, reply: GuiToolReply | None = None) -> None:
-        """Handle shot type classification completion when triggered by agent."""
-        logger.info("=== AGENT SHOT ANALYSIS FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._shot_type_finished_handled:
-            logger.warning("_on_agent_shot_analysis_finished already handled, ignoring duplicate")
-            return
-        self._shot_type_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-
-        clips = self._agent_shot_clips
-        clip_count = len(clips)
-        if self._shot_type_run_error:
-            self.status_bar.showMessage(
-                f"Shot type classification finished with errors - {clip_count} clips"
-            )
-        else:
-            self.status_bar.showMessage(
-                f"Shot type classification complete - {clip_count} clips"
-            )
-
-        # Build shot type summary
-        shot_types = {}
-        for clip in clips:
-            st = clip.shot_type or "unknown"
-            shot_types[st] = shot_types.get(st, 0) + 1
-
-        # Send result back to agent
-        if self._pending_agent_shot_analysis:
-            self._pending_agent_shot_analysis = False
-            agent_result = self._build_agent_analysis_result(
-                clips,
-                ["shots"],
-                f"Classified shot types for {clip_count} clips",
-                {"shot_type_summary": shot_types},
-            )
-            result = {
-                "success": True,
-                "result": agent_result,
-            }
-            self._agent_shot_clips = []
-            if reply is not None:
-                reply.send(self, result)
-            logger.info(f"Sent shot analysis result to agent: {clip_count} clips")
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
-
-    @Slot()
-    def _on_agent_transcription_finished(self, *, reply: GuiToolReply | None = None) -> None:
-        """Handle transcription completion when triggered by agent."""
-        logger.info("=== AGENT TRANSCRIPTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._transcription_finished_handled:
-            logger.warning("_on_agent_transcription_finished already handled, ignoring duplicate")
-            return
-        self._transcription_finished_handled = True
-
-        if reply is not None and not reply.is_current(self):
-            self._agent_transcription_source_queue = []
-            self._agent_transcription_clips = []
-            self._pending_agent_transcription = False
-            self.progress_bar.setVisible(False)
-            self.analyze_tab.set_analyzing(False)
-            return
-
-        # Check if there are more sources to process
-        if self._agent_transcription_source_queue:
-            next_source, next_clips = self._agent_transcription_source_queue.pop(0)
-            remaining = len(self._agent_transcription_source_queue)
-            total_sources = self._agent_transcription_total_sources
-            current_source_num = total_sources - remaining
-
-            logger.info(f"Continuing transcription with next source: {next_source.filename} ({current_source_num}/{total_sources})")
-
-            # Reset guard for next source
-            self._transcription_finished_handled = False
-
-            # Update status
-            self.status_bar.showMessage(
-                f"Transcribing {len(next_clips)} clips (source {current_source_num}/{total_sources})..."
-            )
-
-            self._start_transcription_worker(
-                next_clips,
-                next_source,
-                self._on_agent_transcription_finished,
-                agent_reply=reply,
-            )
-            return
-
-        # All sources processed - finalize
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-
-        clips = self._agent_transcription_clips
-        clip_count = len(clips)
-        self.status_bar.showMessage(f"Transcription complete - {clip_count} clips")
-
-        # Build transcript summary
-        transcribed_count = sum(1 for c in clips if c.transcript)
-
-        # Send result back to agent
-        if self._pending_agent_transcription:
-            self._pending_agent_transcription = False
-            agent_result = self._build_agent_analysis_result(
-                clips,
-                ["transcribe"],
-                f"Transcribed {transcribed_count} of {clip_count} clips",
-                {"transcribed_count": transcribed_count},
-            )
-            result = {
-                "success": True,
-                "result": agent_result,
-            }
-            self._agent_transcription_clips = []
-            self._agent_transcription_source_queue = []
-            if reply is not None:
-                reply.send(self, result)
-            logger.info(f"Sent transcription result to agent: {transcribed_count}/{clip_count} clips")
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -6871,389 +6657,26 @@ class MainWindow(QMainWindow):
             return False
 
     def start_agent_color_analysis(self, clip_ids: list[str]) -> bool:
-        """Start color analysis for clips triggered by agent.
-
-        Args:
-            clip_ids: List of clip IDs to analyze
-
-        Returns:
-            True if started, False if already running
-        """
-        # Resolve clips
-        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
-        clips = [c for c in clips if c is not None]
-
-        if not clips:
-            return False
-
-        # Check if worker already running
-        if self.color_worker and self.color_worker.isRunning():
-            return False
-
-        request = getattr(self, "_dispatch_gui_reply", None)
-        if request is not None and not request.is_current(self):
-            return False
-
-        # Reset guard
-        self._color_analysis_finished_handled = False
-
-        # Mark that we're waiting for color analysis via agent
-        self._pending_agent_color_analysis = True
-        self._agent_color_clips = clips
-        self._reset_analysis_run_error("colors")
-
-        # Add clips to Analyze tab and switch
-        self.analyze_tab.add_clips([c.id for c in clips])
-        self._switch_to_tab("analyze")
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "colors")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
-
-        # Start worker
-        from PySide6.QtCore import Qt
-        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
-        self.color_worker.progress.connect(self._on_color_progress)
-        self.color_worker.result_ready.connect(self._on_color_result)
-        self.color_worker.job_started.connect(self._on_color_job_started)
-        self.color_worker.error.connect(self._on_color_error)
-        completion = AgentAnalysisCompletion(
-            self, self.color_worker, "color_worker", self._on_agent_color_analysis_finished
-        )
-        self.color_worker.analysis_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.color_worker.start()
-
-        return True
+        return start_standalone_analysis(self, clip_ids, "colors")
 
     def start_agent_shot_analysis(self, clip_ids: list[str]) -> bool:
-        """Start shot type classification for clips triggered by agent.
-
-        Args:
-            clip_ids: List of clip IDs to analyze
-
-        Returns:
-            True if started, False if already running
-        """
-        # Resolve clips
-        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
-        clips = [c for c in clips if c is not None]
-
-        if not clips:
-            return False
-
-        if not self._ensure_analysis_operation_available("shots"):
-            return False
-
-        # Check if worker already running
-        if self.shot_type_worker and self.shot_type_worker.isRunning():
-            return False
-
-        request = getattr(self, "_dispatch_gui_reply", None)
-        if request is not None and not request.is_current(self):
-            return False
-
-        # Reset guard
-        self._shot_type_finished_handled = False
-        self._shot_type_run_error = None
-
-        # Mark that we're waiting for shot analysis via agent
-        self._pending_agent_shot_analysis = True
-        self._agent_shot_clips = clips
-
-        # Add clips to Analyze tab and switch
-        self.analyze_tab.add_clips([c.id for c in clips])
-        self._switch_to_tab("analyze")
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "shots")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
-
-        # Start worker
-        from PySide6.QtCore import Qt
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism, project=self.project)
-        self.shot_type_worker.progress.connect(self._on_shot_type_progress)
-        from ui.workers.shot_type_delivery import ShotTypeDelivery
-        ShotTypeDelivery(self, self.shot_type_worker)
-        self.shot_type_worker.error.connect(self._on_shot_type_error)
-        completion = AgentAnalysisCompletion(
-            self, self.shot_type_worker, "shot_type_worker", self._on_agent_shot_analysis_finished
-        )
-        self.shot_type_worker.analysis_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.shot_type_worker.start()
-
-        return True
+        return start_standalone_analysis(self, clip_ids, "shots")
 
     def start_agent_transcription(self, clip_ids: list[str]) -> bool:
-        """Start transcription for clips triggered by agent.
-
-        Args:
-            clip_ids: List of clip IDs to transcribe
-
-        Returns:
-            True if started, False if already running or unavailable
-        """
-        if not self._ensure_analysis_operation_available("transcribe"):
-            return False
-
-        request = getattr(self, "_dispatch_gui_reply", None)
-        if request is not None and not request.is_current(self):
-            return False
-
-        # Resolve clips
-        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
-        clips = [c for c in clips if c is not None]
-
-        if not clips:
-            return False
-
-        # Check if worker already running
-        if self.transcription_worker and self.transcription_worker.isRunning():
-            return False
-
-        # Group clips by source
-        clips_by_source: dict = {}
-        for clip in clips:
-            if clip.source_id not in clips_by_source:
-                clips_by_source[clip.source_id] = []
-            clips_by_source[clip.source_id].append(clip)
-
-        # Build queue of (source, clips) for multi-source transcription
-        source_queue = []
-        for source_id, source_clips in clips_by_source.items():
-            source = self.sources_by_id.get(source_id)
-            if source:
-                source_queue.append((source, source_clips))
-
-        if not source_queue:
-            return False
-
-        # Store queue and all clips for sequential processing
-        self._agent_transcription_source_queue = source_queue[1:]  # Remaining after first
-        self._agent_transcription_total_sources = len(source_queue)
-        self._agent_transcription_clips = clips  # All clips for final result
-        self._pending_agent_transcription = True
-
-        # Reset guard
-        self._transcription_finished_handled = False
-
-        # Start with first source
-        first_source, first_clips = source_queue[0]
-
-        # Add clips to Analyze tab and switch
-        self.analyze_tab.add_clips([c.id for c in clips])
-        self._switch_to_tab("analyze")
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "transcribe")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        sources_info = f" (source 1/{len(source_queue)})" if len(source_queue) > 1 else ""
-        self.status_bar.showMessage(f"Transcribing {len(first_clips)} clips{sources_info}...")
-
-        self._start_transcription_worker(
-            first_clips,
-            first_source,
-            self._on_agent_transcription_finished,
-            agent_reply=request,
-        )
-
-        return True
+        return start_standalone_analysis(self, clip_ids, "transcribe")
 
     def start_agent_classification(self, clip_ids: list[str], top_k: int = 5) -> bool:
-        """Start frame classification for clips triggered by agent.
-
-        Args:
-            clip_ids: List of clip IDs to classify
-            top_k: Number of top labels to return per clip
-
-        Returns:
-            True if started, False if already running
-        """
-        # Resolve clips
-        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
-        clips = [c for c in clips if c is not None]
-
-        if not clips:
-            return False
-
-        if not self._ensure_analysis_operation_available("classify"):
-            return False
-
-        # Check if worker already running
-        if self.classification_worker and self.classification_worker.isRunning():
-            return False
-
-        request = getattr(self, "_dispatch_gui_reply", None)
-        if request is not None and not request.is_current(self):
-            return False
-
-        # Reset guard
-        self._classification_finished_handled = False
-        self._reset_analysis_run_error("classify")
-
-        # Mark that we're waiting for classification via agent
-        self._pending_agent_classification = True
-        self._agent_classification_clips = clips
-
-        # Add clips to Analyze tab and switch
-        self.analyze_tab.add_clips([c.id for c in clips])
-        self._switch_to_tab("analyze")
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "classify")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Classifying content in {len(clips)} clips...")
-
-        # Start worker
-        from PySide6.QtCore import Qt
-        self.classification_worker = ClassificationWorker(clips, top_k=top_k, parallelism=self.settings.local_model_parallelism, project=self.project)
-        self.classification_worker.progress.connect(self._on_classification_progress)
-        from ui.workers.classification_delivery import ClassificationDelivery
-        ClassificationDelivery(self, self.classification_worker)
-        self.classification_worker.error.connect(self._on_classification_error)
-        completion = AgentAnalysisCompletion(
-            self, self.classification_worker, "classification_worker", self._on_agent_classification_finished
-        )
-        self.classification_worker.classification_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.classification_worker.start()
-
-        return True
+        return start_standalone_analysis(self, clip_ids, "classify", ClipAnalysisOptions(top_k=top_k))
 
     def start_agent_object_detection(self, clip_ids: list[str], confidence: float = 0.5, detect_all: bool = True) -> bool:
-        """Start object detection for clips triggered by agent.
-
-        Args:
-            clip_ids: List of clip IDs to analyze
-            confidence: Detection confidence threshold
-            detect_all: True for all objects, False for people only
-
-        Returns:
-            True if started, False if already running
-        """
-        # Resolve clips
-        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
-        clips = [c for c in clips if c is not None]
-
-        if not clips:
-            return False
-
-        if not self._ensure_analysis_operation_available("detect_objects"):
-            return False
-
-        # Check if worker already running
-        if self.detection_worker_yolo and self.detection_worker_yolo.isRunning():
-            return False
-
-        request = getattr(self, "_dispatch_gui_reply", None)
-        if request is not None and not request.is_current(self):
-            return False
-
-        # Reset guard
-        self._object_detection_finished_handled = False
-        self._reset_analysis_run_error("detect_objects")
-
-        # Mark that we're waiting for object detection via agent
-        self._pending_agent_object_detection = True
-        self._agent_object_detection_clips = clips
-        self._agent_object_detection_all = detect_all
-
-        # Add clips to Analyze tab and switch
-        self.analyze_tab.add_clips([c.id for c in clips])
-        self._switch_to_tab("analyze")
-
-        # Update UI state
-        task_name = "objects" if detect_all else "people"
-        self.analyze_tab.set_analyzing(True, task_name)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        msg = f"Detecting {'objects' if detect_all else 'people'} in {len(clips)} clips..."
-        self.status_bar.showMessage(msg)
-
-        # Start worker
-        from PySide6.QtCore import Qt
-        self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all, parallelism=self.settings.local_model_parallelism, project=self.project)
-        self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
-        from ui.workers.object_detection_delivery import ObjectDetectionDelivery
-        ObjectDetectionDelivery(self, self.detection_worker_yolo)
-        self.detection_worker_yolo.error.connect(self._on_object_detection_error)
-        completion = AgentAnalysisCompletion(
-            self, self.detection_worker_yolo, "detection_worker_yolo", self._on_agent_object_detection_finished
+        return start_standalone_analysis(
+            self, clip_ids, "detect_objects", ClipAnalysisOptions(confidence=confidence, detect_all=detect_all),
         )
-        self.detection_worker_yolo.detection_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.detection_worker_yolo.start()
-
-        return True
 
     def start_agent_description(self, clip_ids: list[str], tier: Optional[str] = None, prompt: Optional[str] = None) -> bool:
-        """Start description generation for clips triggered by agent.
-
-        Args:
-            clip_ids: List of clip IDs to analyze
-            tier: Model tier ('cpu', 'gpu', 'cloud')
-            prompt: Custom prompt for the model
-
-        Returns:
-            True if started, False if already running
-        """
-        # Resolve clips
-        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
-        clips = [c for c in clips if c is not None]
-
-        if not clips:
-            return False
-
-        if not self._ensure_analysis_operation_available("describe", description_tier=tier):
-            return False
-
-        # Check if worker already running
-        if self.description_worker and self.description_worker.isRunning():
-            return False
-
-        request = getattr(self, "_dispatch_gui_reply", None)
-        if request is not None and not request.is_current(self):
-            return False
-
-        # Reset guard
-        self._description_finished_handled = False
-        self._reset_description_run_errors()
-
-        # Mark that we're waiting for description via agent
-        self._pending_agent_description = True
-        self._agent_description_clips = clips
-
-        # Add clips to Analyze tab and switch
-        self.analyze_tab.add_clips([c.id for c in clips])
-        self._switch_to_tab("analyze")
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "description")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(
-            f"Generating descriptions for {len(clips)} clips... "
-            "(First run may take several minutes to download models)"
+        return start_standalone_analysis(
+            self, clip_ids, "describe", ClipAnalysisOptions(tier=tier, prompt=prompt),
         )
-
-        # Start worker
-        from PySide6.QtCore import Qt
-        sources = self.project.sources_by_id
-        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources, parallelism=self.settings.description_parallelism, project=self.project)
-        self.description_worker.progress.connect(self._on_description_progress)
-        from ui.workers.description_delivery import DescriptionDelivery
-        DescriptionDelivery(self, self.description_worker)
-        self.description_worker.error.connect(self._on_description_error)
-        completion = AgentAnalysisCompletion(
-            self, self.description_worker, "description_worker", self._on_agent_description_finished
-        )
-        self.description_worker.description_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.description_worker.start()
-
-        return True
 
     @Slot(int, int)
     def _on_description_progress(self, current: int, total: int):
@@ -7272,83 +6695,6 @@ class MainWindow(QMainWindow):
         """Refresh after guarded description publication."""
         logger.debug(f"Description for {clip_id}: {description[:50]}...")
 
-    @Slot()
-    def _on_agent_description_finished(self, *, reply: GuiToolReply | None = None) -> None:
-        """Handle description completion when triggered by agent."""
-        logger.info("=== AGENT DESCRIPTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._description_finished_handled:
-            logger.warning("_on_agent_description_finished already handled, ignoring duplicate")
-            return
-        self._description_finished_handled = True
-
-        # Reset UI state
-        self.analyze_tab.set_analyzing(False)
-        self.progress_bar.setVisible(False)
-
-        # Get error info from worker
-        error_count = 0
-        last_error = None
-        if hasattr(self, 'description_worker') and self.description_worker:
-            error_count = self.description_worker.error_count
-            last_error = self.description_worker.last_error
-
-        if error_count > 0:
-            self._gui_state.set_last_error(
-                f"Description error: {self._description_run_error or last_error or 'Unknown'}"
-            )
-            self.status_bar.showMessage(
-                f"Description complete with {error_count} errors. Last: {last_error[:80] if last_error else 'Unknown'}",
-                5000
-            )
-        else:
-            self.status_bar.showMessage("Description generation complete", 3000)
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Send result back to agent
-        if hasattr(self, '_pending_agent_description') and self._pending_agent_description:
-            self._pending_agent_description = False
-            clips = getattr(self, '_agent_description_clips', [])
-
-            # Build result summary
-            described_count = sum(1 for c in clips if c.description)
-
-            result = self._build_agent_analysis_result(
-                clips,
-                ["describe"],
-                f"Generated descriptions for {described_count} of {len(clips)} clips",
-                {
-                    "described_clips": described_count,
-                    "total_clips": len(clips),
-                    "error_count": error_count,
-                    "sample_descriptions": [],
-                },
-            )
-            result["success"] = error_count == 0 or described_count > 0
-
-            # Include error info if present
-            if error_count > 0 and last_error:
-                result["last_error"] = last_error
-
-            # Include sample descriptions
-            for clip in clips[:3]:
-                if clip.description:
-                    result["sample_descriptions"].append({
-                        "clip_id": clip.id,
-                        "description": clip.description,
-                    })
-
-            if reply is not None:
-                result = {
-                    "success": result["success"],
-                    "result": result
-                }
-                reply.send(self, result)
-                logger.info(f"Sent description result to agent: {described_count}/{len(clips)} clips, {error_count} errors")
 
     @Slot(int, int)
     def _on_classification_progress(self, current: int, total: int):
@@ -7362,62 +6708,6 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
             self.progress_bar.setValue(int(current / total * 100))
 
-    @Slot()
-    def _on_agent_classification_finished(self, *, reply: GuiToolReply | None = None) -> None:
-        """Handle classification completion when triggered by agent."""
-        logger.info("=== AGENT CLASSIFICATION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._classification_finished_handled:
-            logger.warning("_on_agent_classification_finished already handled, ignoring duplicate")
-            return
-        self._classification_finished_handled = True
-
-        # Reset UI state
-        self.analyze_tab.set_analyzing(False)
-        self.progress_bar.setVisible(False)
-        if self._classification_run_error:
-            self.status_bar.showMessage("Classification finished with errors", 5000)
-        else:
-            self.status_bar.showMessage("Classification complete", 3000)
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Send result back to agent
-        if hasattr(self, '_pending_agent_classification') and self._pending_agent_classification:
-            self._pending_agent_classification = False
-            clips = getattr(self, '_agent_classification_clips', [])
-
-            # Build result summary
-            classified_count = sum(1 for c in clips if c.object_labels)
-            result = self._build_agent_analysis_result(
-                clips,
-                ["classify"],
-                f"Classified {classified_count} of {len(clips)} clips",
-                {
-                    "classified_clips": classified_count,
-                    "total_clips": len(clips),
-                    "sample_labels": [],
-                },
-            )
-
-            # Include sample labels from first few clips
-            for clip in clips[:3]:
-                if clip.object_labels:
-                    result["sample_labels"].append({
-                        "clip_id": clip.id,
-                        "labels": clip.object_labels[:5],
-                    })
-
-            if reply is not None:
-                result = {
-                    "success": True,
-                    "result": result
-                }
-                reply.send(self, result)
-                logger.info(f"Sent classification result to agent: {classified_count}/{len(clips)} clips")
 
     @Slot(int, int)
     def _on_face_detection_progress(self, current: int, total: int):
@@ -7508,68 +6798,6 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
             self.progress_bar.setValue(int(current / total * 100))
 
-    @Slot()
-    def _on_agent_object_detection_finished(self, *, reply: GuiToolReply | None = None) -> None:
-        """Handle object detection completion when triggered by agent."""
-        logger.info("=== AGENT OBJECT DETECTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._object_detection_finished_handled:
-            logger.warning("_on_agent_object_detection_finished already handled, ignoring duplicate")
-            return
-        self._object_detection_finished_handled = True
-
-        # Reset UI state
-        self.analyze_tab.set_analyzing(False)
-        self.progress_bar.setVisible(False)
-        if self._object_detection_run_error:
-            self.status_bar.showMessage("Object detection finished with errors", 5000)
-        else:
-            self.status_bar.showMessage("Object detection complete", 3000)
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Send result back to agent
-        if hasattr(self, '_pending_agent_object_detection') and self._pending_agent_object_detection:
-            self._pending_agent_object_detection = False
-            clips = getattr(self, '_agent_object_detection_clips', [])
-            detect_all = getattr(self, '_agent_object_detection_all', True)
-
-            # Build result summary
-            detected_count = sum(1 for c in clips if c.detected_objects is not None or c.person_count is not None)
-            total_people = sum(c.person_count or 0 for c in clips)
-
-            result = {
-                "analyzed_clips": detected_count,
-                "total_clips": len(clips),
-                "total_people_detected": total_people,
-            }
-
-            if detect_all:
-                # Aggregate object counts across all clips
-                all_labels: dict[str, int] = {}
-                for clip in clips:
-                    if clip.detected_objects:
-                        for det in clip.detected_objects:
-                            label = det["label"]
-                            all_labels[label] = all_labels.get(label, 0) + 1
-                result["object_counts"] = all_labels
-            result = self._build_agent_analysis_result(
-                clips,
-                ["detect_objects"],
-                f"Detected objects in {detected_count} of {len(clips)} clips",
-                result,
-            )
-
-            if reply is not None:
-                result = {
-                    "success": True,
-                    "result": result
-                }
-                reply.send(self, result)
-                logger.info(f"Sent object detection result to agent: {detected_count}/{len(clips)} clips")
 
     # ==================== Intention-First Workflow ====================
 
@@ -9205,24 +8433,6 @@ class MainWindow(QMainWindow):
         self.chat_panel.clear_messages()
         self._chat_history.clear()
         self._last_user_message = ""
-
-        # Clear all agent pending flags
-        self._pending_agent_color_analysis = False
-        self._pending_agent_shot_analysis = False
-        self._pending_agent_transcription = False
-        self._pending_agent_classification = False
-        self._pending_agent_object_detection = False
-        self._pending_agent_description = False
-
-        # Clear agent clip tracking lists
-        self._agent_color_clips = []
-        self._agent_shot_clips = []
-        self._agent_transcription_clips = []
-        self._agent_classification_clips = []
-        self._agent_object_detection_clips = []
-        self._agent_description_clips = []
-        if hasattr(self, '_agent_transcription_source_queue'):
-            self._agent_transcription_source_queue = []
 
         # Clear intention workflow pending state
         if hasattr(self, '_intention_pending_algorithm'):

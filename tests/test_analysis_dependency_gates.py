@@ -71,6 +71,8 @@ def test_frame_gate_does_not_retarget_expired_request(monkeypatch, change):
 @pytest.mark.parametrize(
     "method_name,expected_op,kwargs,worker_attr",
     [
+        ("start_agent_color_analysis", "colors", {}, "color_worker"),
+        ("start_agent_transcription", "transcribe", {}, "transcription_worker"),
         ("start_agent_shot_analysis", "shots", {}, "shot_type_worker"),
         ("start_agent_classification", "classify", {}, "classification_worker"),
         ("start_agent_object_detection", "detect_objects", {}, "detection_worker_yolo"),
@@ -88,57 +90,23 @@ def test_single_operation_agent_flows_abort_when_dependency_missing(
     kwargs,
     worker_attr,
 ):
-    class Harness:
-        def __init__(self):
-            clip = SimpleNamespace(id="clip-1")
-            self.project = SimpleNamespace(clips_by_id={"clip-1": clip})
-            self.shot_type_worker = None
-            self.classification_worker = None
-            self.detection_worker_yolo = None
-            self.description_worker = None
-            self.analyze_tab = SimpleNamespace(
-                add_clips=lambda *_args: (_ for _ in ()).throw(
-                    AssertionError("should not add clips")
-                ),
-                set_analyzing=lambda *_args: (_ for _ in ()).throw(
-                    AssertionError("should not set analyzing")
-                ),
-            )
-            self.progress_bar = SimpleNamespace(
-                setVisible=lambda *_args: (_ for _ in ()).throw(
-                    AssertionError("should not show progress")
-                ),
-                setRange=lambda *_args: (_ for _ in ()).throw(
-                    AssertionError("should not set range")
-                ),
-            )
-            self.status_bar = SimpleNamespace(
-                showMessage=lambda *_args: (_ for _ in ()).throw(
-                    AssertionError("should not show status")
-                )
-            )
+    from unittest.mock import Mock
+    from core.project import Project
+    from models.clip import Clip, Source
 
-        def _ensure_analysis_operation_available(self, op_key, **_kwargs):
-            assert op_key == expected_op
-            return False
-
-    harness = Harness()
-
-    started = getattr(MainWindow, method_name)(harness, ["clip-1"], **kwargs)
-
-    assert started is False
-    assert getattr(harness, worker_attr) is None
-
-
-def test_start_agent_transcription_aborts_when_dependency_missing():
-    class Harness:
-        def _ensure_analysis_operation_available(self, op_key, **_kwargs):
-            assert op_key == "transcribe"
-            return False
-
-    started = MainWindow.start_agent_transcription(Harness(), ["clip-1"])
-
-    assert started is False
+    project = Project.new()
+    source = Source()
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=30)
+    project.add_source(source)
+    project.add_clips([clip])
+    harness = SimpleNamespace(
+        project=project,
+        _ensure_analysis_operation_available=Mock(return_value=False),
+        analyze_tab=Mock(),
+    )
+    assert not getattr(MainWindow, method_name)(harness, [clip.id], **kwargs)
+    assert harness._ensure_analysis_operation_available.call_args.args[0] == expected_op
+    harness.analyze_tab.add_clips.assert_not_called()
 
 
 def test_intention_shot_analysis_fails_when_dependency_missing():

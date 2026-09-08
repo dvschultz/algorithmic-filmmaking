@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.audio_transcription import (
     AudioTranscriptionApplication,
@@ -10,7 +12,7 @@ from core.operations.audio_transcription import (
 )
 
 
-class AudioTranscriptionDelivery(QObject):
+class AudioTranscriptionDelivery(RetiringQObject):
     def __init__(self, window: Any, worker: Any) -> None:
         super().__init__(window)
         self.window = window
@@ -87,4 +89,4 @@ class AudioTranscriptionDelivery(QObject):
                 )
             self.reply.send(self.window, result)
         self.window._active_audio_transcribes.discard(self.worker)
-        self.deleteLater()
+        self.retire()

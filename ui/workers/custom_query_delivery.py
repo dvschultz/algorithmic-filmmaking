@@ -2,13 +2,15 @@
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.custom_query import CustomQueryApplication, CustomQueryOutcome
 from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 
 
-class CustomQueryDelivery(QObject):
+class CustomQueryDelivery(RetiringQObject):
     def __init__(self, window: Any, worker: Any) -> None:
         super().__init__(window)
         self.window = window
@@ -17,7 +19,7 @@ class CustomQueryDelivery(QObject):
         self.run = getattr(window, "_analysis_run", None)
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.delivered: set[str] = set()
-        worker.finished.connect(self.deleteLater)
+        worker.finished.connect(self.retire)
         worker.query_result_ready.connect(self.result)
 
     @Slot(str, str, bool, float, str)

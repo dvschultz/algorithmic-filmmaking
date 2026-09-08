@@ -3,7 +3,9 @@
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Slot
+from PySide6.QtCore import QThread, Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
 
@@ -22,7 +24,7 @@ def stop_chat_workers(window: Any, *, wait: bool = False) -> None:
             worker.wait()
 
 
-class ChatDelivery(QObject):
+class ChatDelivery(RetiringQObject):
     """Owner-thread relay whose lifetime includes its worker's shutdown."""
 
     def __init__(
@@ -50,7 +52,7 @@ class ChatDelivery(QObject):
         if self.window._chat_worker is self.worker:
             self.window._chat_worker = None
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()
 
     @Slot(str)
     def text_chunk(self, value: str) -> None:

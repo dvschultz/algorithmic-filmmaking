@@ -2,14 +2,16 @@
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.transcription import TranscriptionApplication, TranscriptionOutcome
 from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 from ui.workers.gui_tool_reply import GuiToolReply
 
 
-class TranscriptionDelivery(QObject):
+class TranscriptionDelivery(RetiringQObject):
     def __init__(
         self,
         window: Any,
@@ -26,7 +28,7 @@ class TranscriptionDelivery(QObject):
         self._delivered_targets: set[str] = set()
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
-        worker.finished.connect(self.deleteLater)
+        worker.finished.connect(self.retire)
         worker.progress.connect(self.progress)
         worker.status.connect(self.status)
         worker.transcript_ready.connect(self.transcript)

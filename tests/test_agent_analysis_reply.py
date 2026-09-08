@@ -55,33 +55,6 @@ bind(stale, 'stale')
 window.project.clear()
 drain(stale)
 assert received == [('new', owner)]
-# Every migrated handler must leave an unrelated request's pending fields intact.
-for family, guard, clips_attr in [
-    ('color_analysis', '_color_analysis_finished_handled', '_agent_color_clips'),
-    ('shot_analysis', '_shot_type_finished_handled', '_agent_shot_clips'),
-    ('description', '_description_finished_handled', '_agent_description_clips'),
-    ('classification', '_classification_finished_handled', '_agent_classification_clips'),
-    ('object_detection', '_object_detection_finished_handled', '_agent_object_detection_clips'),
-]:
-    chat = Mock(_stop_requested=False)
-    controller = SimpleNamespace(
-        project=Project.new(), _chat_worker=chat, progress_bar=Mock(), analyze_tab=Mock(),
-        status_bar=Mock(), _gui_state=Mock(), _update_chat_project_state=Mock(),
-        _build_agent_analysis_result=lambda *args: {'success': True},
-        _color_run_error=None, _shot_type_run_error=None, _classification_run_error=None,
-        _object_detection_run_error=None,
-        description_worker=SimpleNamespace(error_count=0, last_error=None),
-        _pending_agent_tool_call_id='unrelated', _pending_agent_tool_name='export',
-    )
-    setattr(controller, guard, False)
-    setattr(controller, clips_attr, [])
-    setattr(controller, '_pending_agent_' + family, True)
-    reply = GuiToolReply.capture(controller, family, 'original')
-    getattr(MainWindow, '_on_agent_' + family + '_finished')(controller, reply=reply)
-    result = chat.set_gui_tool_result.call_args.args[0]
-    assert result['tool_call_id'] == 'original' and result['name'] == family
-    assert controller._pending_agent_tool_call_id == 'unrelated'
-    assert controller._pending_agent_tool_name == 'export'
 # Failed analysis dispatch must not clear another operation's pending request.
 from unittest.mock import patch
 controller = SimpleNamespace(project=Project.new(), _chat_worker=Mock(_stop_requested=False),

@@ -4,14 +4,16 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.thumbnails import ThumbnailOutcome
 
 logger = logging.getLogger(__name__)
 
 
-class ThumbnailDelivery(QObject):
+class ThumbnailDelivery(RetiringQObject):
     def __init__(
         self,
         window: Any,
@@ -116,4 +118,4 @@ class ThumbnailDelivery(QObject):
         if getattr(self.window, "_thumbnail_delivery", None) is self:
             self.window._thumbnail_delivery = None
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()

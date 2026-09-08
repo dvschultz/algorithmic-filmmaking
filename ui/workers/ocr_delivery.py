@@ -3,13 +3,15 @@
 from dataclasses import asdict
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.ocr import OcrApplication, OcrOutcome
 from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 
 
-class OcrDelivery(QObject):
+class OcrDelivery(RetiringQObject):
     def __init__(
         self,
         window: Any,
@@ -32,7 +34,7 @@ class OcrDelivery(QObject):
         self.frame_workflow = on_complete is not None
         self.delivered: set[tuple[str, str]] = set()
         worker.outcome_ready.connect(self.result)
-        worker.finished.connect(self.deleteLater)
+        worker.finished.connect(self.retire)
         if on_complete is not None:
             worker.extraction_completed.connect(self.completed)
 

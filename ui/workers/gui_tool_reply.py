@@ -5,7 +5,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Slot
+from PySide6.QtCore import QThread, Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 
 @dataclass(frozen=True)
@@ -54,7 +56,7 @@ def gui_reply_scope(window: Any, reply: GuiToolReply) -> Iterator[None]:
         window._dispatch_gui_reply = previous
 
 
-class AgentAnalysisCompletion(QObject):
+class AgentAnalysisCompletion(RetiringQObject):
     """Owner-thread callback tied to an analysis worker and its request."""
 
     def __init__(
@@ -83,7 +85,7 @@ class AgentAnalysisCompletion(QObject):
         if getattr(self.window, self.attribute, None) is self.worker:
             setattr(self.window, self.attribute, None)
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()
 
     @Slot()
     def completed(self) -> None:

@@ -274,7 +274,7 @@ def test_import_new_routes_through_worker_and_selects_new_source(
     with patch(
         "ui.dialogs.staccato_dialog.QFileDialog.getOpenFileName",
         return_value=(str(new_audio_path), ""),
-    ):
+    ), patch("ui.workers.audio_import_worker.AudioImportWorker.start") as start:
         # Skip the actual worker — just simulate the audio_ready callback path
         # by calling _on_imported_audio_ready directly.
         # First, find and click the Import-new combo index.
@@ -286,6 +286,8 @@ def test_import_new_routes_through_worker_and_selects_new_source(
                 dialog._audio_combo.setCurrentIndex(i)
                 break
 
+        start.assert_called_once_with()
+        assert dialog._import_worker is not None
         # Simulate a successful worker emission
         dialog._on_imported_audio_ready(expected_audio)
 

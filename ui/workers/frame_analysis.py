@@ -4,7 +4,9 @@ from dataclasses import replace
 from copy import deepcopy
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal, Slot, QTimer
+from PySide6.QtCore import Signal, Slot, QTimer
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.analysis_target import AnalysisTarget
 from core.jobs.media import media_stamp
@@ -108,7 +110,7 @@ def _has_result(frame: Any, operation: str) -> bool:
     return getattr(frame, fields[operation]) is not None
 
 
-class FrameAnalysisController(QObject):
+class FrameAnalysisController(RetiringQObject):
     progress = Signal(object, int, str)
     completed = Signal(object, object)
 
@@ -384,4 +386,4 @@ class FrameAnalysisController(QObject):
         self.completed.emit(self, result)
         if getattr(self.window, "_frame_analysis_controller", None) is self:
             self.window._frame_analysis_controller = None
-        self.deleteLater()
+        self.retire()

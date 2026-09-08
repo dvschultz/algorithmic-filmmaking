@@ -7,8 +7,9 @@ import sys
 import pytest
 
 
+@pytest.mark.parametrize("surface", ["combined", "standalone"])
 @pytest.mark.parametrize("mode", ["success", "cancel", "expired", "path"])
-def test_pipeline_request_and_thread_lifetimes(tmp_path, mode):
+def test_pipeline_request_and_thread_lifetimes(tmp_path, mode, surface):
     code = r"""
 import sys,time,threading
 from pathlib import Path
@@ -24,7 +25,7 @@ from ui.workers.clip_analysis import ClipAnalysisController
 from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.gui_tool_reply import GuiToolReply
 from ui.workers.gui_tool_mailbox import GuiToolMailbox
-app=QCoreApplication([]); directory=Path(sys.argv[1]); mode=sys.argv[2]
+app=QCoreApplication([]); directory=Path(sys.argv[1]); mode=sys.argv[2]; standalone=sys.argv[3]=="standalone"
 window=QObject(); window.project=project=Project.new(); window.settings=Settings()
 window.settings.transcription_backend='faster-whisper'
 for i in range(2):
@@ -48,11 +49,12 @@ def run(self):
     self.transcription_completed.emit()
     if len(started)==1:
         entered.set(); assert release.wait(10)
-controller=ClipAnalysisController(window,project.clips,['transcribe'])
+controller=ClipAnalysisController(window,project.clips,['transcribe'],standalone=standalone)
 if hasattr(controller, 'status'):
     controller.status.connect(lambda owner,message: MainWindow._on_clip_analysis_status(window,owner,message))
 controller.completed.connect(lambda owner,result: reports.append(result))
-controller.completed.connect(lambda owner,result: MainWindow._on_clip_analysis_finished(window,owner,result))
+if not standalone:
+    controller.completed.connect(lambda owner,result: MainWindow._on_clip_analysis_finished(window,owner,result))
 with patch.object(TranscriptionWorker,'run',run):
     controller.start(); first=controller.workers['transcribe']; assert entered.wait(5)
     try:
@@ -77,7 +79,7 @@ with patch.object(TranscriptionWorker,'run',run):
         assert result['tool_call_id']==reply.token and result['name']==reply.name
         assert result['result']['success'] is True
         assert result['result']['clip_ids']==[c.id for c in project.clips]
-        assert result['result']['shot_type_summary']=={}
+        if not standalone: assert result['result']['shot_type_summary']=={}
         assert result['result']['transcribed_count']==0
         assert result['result']['clip_count']==2
     else:
@@ -87,7 +89,7 @@ with patch.object(TranscriptionWorker,'run',run):
     assert window._pending_agent_tool_call_id=='unrelated'
 """
     result = subprocess.run(
-        [sys.executable, "-c", code, str(tmp_path), mode],
+        [sys.executable, "-c", code, str(tmp_path), mode, surface],
         capture_output=True,
         text=True,
         timeout=30,

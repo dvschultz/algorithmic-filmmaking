@@ -2,13 +2,15 @@
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.embeddings import EmbeddingApplication, EmbeddingOutcome
 from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 
 
-class EmbeddingDelivery(QObject):
+class EmbeddingDelivery(RetiringQObject):
     application_type: type = EmbeddingApplication
     worker_attribute = "_embeddings_worker"
     error_method = "_on_embeddings_error"
@@ -22,7 +24,7 @@ class EmbeddingDelivery(QObject):
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.delivered: set[str] = set()
-        worker.finished.connect(self.deleteLater)
+        worker.finished.connect(self.retire)
         worker.outcome_ready.connect(self.result)
 
     @Slot(object)

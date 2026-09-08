@@ -176,11 +176,11 @@ def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatc
     )
     monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: None)
 
-    sys.modules["transformers"] = transformers_module
-    sys.modules["transformers.models.auto.processing_auto"] = transformers_auto_module
-
     original_transformers = sys.modules.get("transformers")
     original_processing_auto = sys.modules.get("transformers.models.auto.processing_auto")
+
+    sys.modules["transformers"] = transformers_module
+    sys.modules["transformers.models.auto.processing_auto"] = transformers_auto_module
 
     try:
         assert install_packages(["transformers>=4.50,<5"]) is True

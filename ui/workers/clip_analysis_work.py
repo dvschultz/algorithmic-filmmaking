@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from core.operations.clip_analysis import ClipAnalysisOptions
+
 
 def create_clip_analysis_worker(
     project: Any,
@@ -11,9 +13,11 @@ def create_clip_analysis_worker(
     *,
     force_rerun: bool = False,
     query: str | None = None,
+    options: ClipAnalysisOptions | None = None,
 ) -> tuple[Any, Any]:
     """Build one batch; transcription batches must belong to one source."""
     common = dict(clips=clips, project=project, skip_existing=not force_rerun)
+    options = options or ClipAnalysisOptions()
     sources = project.sources_by_id
     worker: Any
     if operation == "colors":
@@ -44,7 +48,7 @@ def create_clip_analysis_worker(
         from core.operations.classification import ClassificationApplication
 
         worker = ClassificationWorker(
-            **common, parallelism=settings.local_model_parallelism
+            **common, top_k=options.top_k, parallelism=settings.local_model_parallelism
         )
         return worker, ClassificationApplication(project, worker.tasks)
     if operation == "detect_objects":
@@ -52,7 +56,10 @@ def create_clip_analysis_worker(
         from core.operations.object_detection import ObjectDetectionApplication
 
         worker = ObjectDetectionWorker(
-            **common, parallelism=settings.local_model_parallelism
+            **common,
+            confidence=options.confidence,
+            detect_all=options.detect_all,
+            parallelism=settings.local_model_parallelism,
         )
         return worker, ObjectDetectionApplication(project, worker.tasks, worker.options)
     if operation == "extract_text":
@@ -124,17 +131,19 @@ def create_clip_analysis_worker(
         from core.operations.description import (
             DescriptionApplication,
             DescriptionOptions,
+            DEFAULT_PROMPT,
             resolve_tier,
         )
 
-        tier = resolve_tier(settings.description_model_tier)
+        tier = resolve_tier(options.tier or settings.description_model_tier)
         worker = DescriptionWorker(
             **common,
             sources=sources,
-            tier=settings.description_model_tier,
+            tier=options.tier or settings.description_model_tier,
             parallelism=settings.description_parallelism,
             options=DescriptionOptions(
                 tier=tier,
+                prompt=options.prompt or DEFAULT_PROMPT,
                 parallelism=settings.description_parallelism,
                 model=settings.description_model_local
                 if tier == "local"

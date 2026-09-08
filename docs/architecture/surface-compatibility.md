@@ -1180,6 +1180,10 @@ media identities, and provider settings. Cancellation retains workers until they
 exit, rejects late publication, and prevents subsequent phases. Reset and close
 cancel owned work without force-stopping it. Controller-owned timers prevent
 queued phase callbacks from outliving their window.
+Controllers and result deliveries use `RetiringQObject` to detach from their
+Qt parent before deferred deletion. Releasing their last window or tab reference
+cannot recursively delete the same object. Active work keeps normal ownership;
+unstarted requests that lose their context use the same retirement path.
 
 Each operation reports per-clip success, skip, failure, or unprocessed status.
 Successful partial results remain in the project; forced reruns preserve prior
@@ -1187,6 +1191,14 @@ metadata until a validated replacement arrives. Shared publication notifies clip
 browsers, and analysis does not implicitly save the project. Existing agent
 completion summary fields remain available alongside the per-operation outcomes.
 
+Standalone color, shot, transcription, classification, object detection and
+description requests now use the same controller. Explicit label counts,
+detection thresholds/modes and description tier/prompts are captured per request.
+Different standalone operations may overlap; each retains its original reply,
+while only the current controller updates the shared progress UI. Combined
+requests replace active standalone work. Transcription has one source queue,
+and standalone completion no longer implicitly saves the project.
+
 Frame-analysis and intention-workflow controllers have also been migrated. U7
-still requires an audit and migration of remaining standalone entry points and
-legacy completion adapters; these changes do not complete the overall plan.
+still requires auditing the remaining matrix routes and legacy adapters;
+these changes do not complete the overall plan.

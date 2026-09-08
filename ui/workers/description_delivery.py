@@ -2,13 +2,15 @@
 
 from typing import Any
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.description import DescriptionApplication, DescriptionOutcome
 from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 
 
-class DescriptionDelivery(QObject):
+class DescriptionDelivery(RetiringQObject):
     def __init__(
         self,
         window: Any,
@@ -26,7 +28,7 @@ class DescriptionDelivery(QObject):
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
-        worker.finished.connect(self.deleteLater)
+        worker.finished.connect(self.retire)
         worker.description_ready.connect(self.description)
 
     def _current(self) -> bool:

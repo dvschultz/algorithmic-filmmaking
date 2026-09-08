@@ -2,10 +2,12 @@
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 
-class DownloadDelivery(QObject):
+class DownloadDelivery(RetiringQObject):
     """Owner-thread relay that retains replaced workers until they finish.
 
     A custom finished hook must eventually call `_finished()` to release the
@@ -86,4 +88,4 @@ class DownloadDelivery(QObject):
         if getattr(self.window, self.attribute, None) is self.worker:
             setattr(self.window, self.attribute, None)
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()

@@ -2,13 +2,15 @@
 
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.shots import ShotTypeApplication, ShotTypeOutcome
 from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 
 
-class ShotTypeDelivery(QObject):
+class ShotTypeDelivery(RetiringQObject):
     def __init__(
         self,
         window: Any,
@@ -41,7 +43,7 @@ class ShotTypeDelivery(QObject):
         if on_complete is not None:
             worker.finished.connect(self.completed)
         worker.finished.connect(self.cleanup)
-        worker.finished.connect(self.deleteLater)
+        worker.finished.connect(self.retire)
 
     def _is_current(self) -> bool:
         window = self.window

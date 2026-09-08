@@ -1,7 +1,9 @@
 """Publish audio imports only to the project that requested them."""
 
 from typing import Any
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 from core.operations.audio_import import (
     AudioImportApplication,
     AudioImportOutcome,
@@ -10,7 +12,7 @@ from core.operations.audio_import import (
 from core.jobs.audio_import import AudioImportRecord
 
 
-class AudioImportDelivery(QObject):
+class AudioImportDelivery(RetiringQObject):
     def __init__(self, window: Any, worker: Any) -> None:
         super().__init__(window)
         self.window = window
@@ -91,4 +93,4 @@ class AudioImportDelivery(QObject):
             self.reply.send(self.window, result)
         self.window._active_audio_imports.discard(self.worker)
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()

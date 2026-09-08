@@ -4,11 +4,13 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QTimer, Signal, Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.analysis_availability import operation_is_complete_for_clip
 from core.operations.analysis_inputs import clip_input
-from core.operations.clip_analysis import ClipAnalysisPlan
+from core.operations.clip_analysis import ClipAnalysisOptions, ClipAnalysisPlan
 from core.operations.contracts import OutcomeStatus
 from ui.workers.clip_analysis_work import create_clip_analysis_worker
 
@@ -30,7 +32,7 @@ WORKER_ATTRIBUTES = {
 }
 
 
-class ClipAnalysisController(QObject):
+class ClipAnalysisController(RetiringQObject):
     progress = Signal(object, int, str)
     status = Signal(object, str)
     completed = Signal(object, object)
@@ -43,6 +45,8 @@ class ClipAnalysisController(QObject):
         *,
         force_rerun: bool = False,
         query: str | None = None,
+        options: ClipAnalysisOptions | None = None,
+        standalone: bool = False,
     ) -> None:
         super().__init__(window)
         self.window = window
@@ -60,6 +64,10 @@ class ClipAnalysisController(QObject):
         }
         self.force_rerun = force_rerun
         self.query = query
+        self.options = options or ClipAnalysisOptions()
+        self.standalone = standalone
+        if standalone:
+            self.completed.connect(self._standalone_completed)
         self.workers: dict[str, Any] = {}
         self.applications: dict[str, Any] = {}
         self.outcomes: dict[str, dict[str, OutcomeStatus]] = {}
@@ -76,7 +84,12 @@ class ClipAnalysisController(QObject):
 
     def is_current(self) -> bool:
         return (
-            self.owns_view()
+            self.owns_project()
+            and (
+                self in getattr(self.window, "_active_clip_analyses", ())
+                if self.standalone
+                else self.owns_view()
+            )
             and self.project.path == self.path
             and (self.reply is None or self.reply.is_current(self.window))
         )
@@ -85,9 +98,20 @@ class ClipAnalysisController(QObject):
         """The retired reply may still own UI cleanup for this project."""
         return (
             getattr(self.window, "_clip_analysis_controller", None) is self
-            and self.window.project is self.project
+            and self.owns_project()
+        )
+
+    def owns_project(self) -> bool:
+        return (
+            self.window.project is self.project
             and self.project.session.session_id == self.session_id
         )
+
+    @Slot(object, object)
+    def _standalone_completed(self, controller: Any, result: dict) -> None:
+        from ui.workers.standalone_analysis import finish_standalone_analysis
+
+        finish_standalone_analysis(self.window, controller, result)
 
     def _same_clip(self, cid: str) -> bool:
         clip = self.project.clips_by_id.get(cid)
@@ -97,14 +121,23 @@ class ClipAnalysisController(QObject):
             and clip_input(self.project, clip) == self.inputs[cid]
         )
 
+    def _has_result(self, operation: str, clip: Any) -> bool:
+        if operation == "detect_objects" and not self.options.detect_all:
+            return clip.person_count is not None
+        return operation_is_complete_for_clip(operation, clip)
+
     def start(self) -> None:
         if self._started:
             return
         self._started = True
         previous = getattr(self.window, "_clip_analysis_controller", None)
         self.window._clip_analysis_controller = self
-        if previous is not None and previous is not self:
-            previous.cancel()
+        if not self.standalone:
+            previous_runs = set(getattr(self.window, "_active_clip_analyses", ()))
+            if previous is not None:
+                previous_runs.add(previous)
+            for previous_run in previous_runs - {self}:
+                previous_run.cancel()
         if not hasattr(self.window, "_active_clip_analyses"):
             self.window._active_clip_analyses = set()
         self.window._active_clip_analyses.add(self)
@@ -143,9 +176,7 @@ class ClipAnalysisController(QObject):
             for cid, clip in self.clips.items():
                 if not self._same_clip(cid):
                     self.outcomes[operation][cid] = "failed"
-                elif not self.force_rerun and operation_is_complete_for_clip(
-                    operation, clip
-                ):
+                elif not self.force_rerun and self._has_result(operation, clip):
                     self.outcomes[operation][cid] = "skipped"
                 else:
                     clips.append(clip)
@@ -173,6 +204,7 @@ class ClipAnalysisController(QObject):
                 clips,
                 force_rerun=self.force_rerun,
                 query=self.query,
+                options=self.options,
             )
             attribute = WORKER_ATTRIBUTES[operation]
             previous = getattr(self.window, attribute, None)
@@ -390,8 +422,17 @@ class ClipAnalysisController(QObject):
             "errors": list(self.errors),
             "analyzed_sources": sorted(analyzed_sources),
         }
-        self.window._active_clip_analyses.discard(self)
         self.completed.emit(self, result)
+        self.window._active_clip_analyses.discard(self)
         if getattr(self.window, "_clip_analysis_controller", None) is self:
-            self.window._clip_analysis_controller = None
-        self.deleteLater()
+            self.window._clip_analysis_controller = next(
+                (
+                    run
+                    for run in self.window._active_clip_analyses
+                    if not run.finished
+                    and not run.plan.cancelled
+                    and run.owns_project()
+                ),
+                None,
+            )
+        self.retire()

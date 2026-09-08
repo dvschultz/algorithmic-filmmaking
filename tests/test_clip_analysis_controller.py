@@ -7,6 +7,78 @@ import sys
 import pytest
 
 
+@pytest.mark.parametrize("mode", ["completed", "aborted_early", "aborted_late", "aborted_combined"])
+def test_retired_controller_can_release_its_last_window_reference(mode):
+    code = r'''
+import gc, sys
+from pathlib import Path
+from types import SimpleNamespace
+from PySide6.QtCore import QCoreApplication, QEvent, QObject
+from core.project import Project
+from core.settings import Settings
+from models.clip import Clip, Source
+from ui.workers.clip_analysis import ClipAnalysisController
+
+app = QCoreApplication([])
+mode = sys.argv[1]
+destroyed = []
+def retire():
+    window = QObject()
+    window.destroyed.connect(lambda: destroyed.append('window'))
+    window.project = Project.new()
+    window.settings = Settings()
+    source = Source(file_path=Path('source.mp4'), fps=30)
+    clip = Clip(source_id=source.id, start_frame=0, end_frame=30)
+    window.project.add_source(source)
+    window.project.add_clips([clip])
+    if mode == 'completed':
+        clip.dominant_colors = [(1, 2, 3)]
+        controller = ClipAnalysisController(window, [clip], ['colors'])
+        controller.start()
+        assert controller.finished
+    else:
+        from ui.workers.standalone_analysis import start_standalone_analysis
+
+        noop = lambda *args: None
+        replace = lambda *args: setattr(window, '_clip_analysis_controller', object())
+        window._ensure_analysis_operation_available = lambda *args, **kwargs: True
+        window._on_clip_analysis_progress = noop
+        window._on_clip_analysis_status = noop
+        window._switch_to_tab = noop
+        window._gui_state = SimpleNamespace(set_processing=noop)
+        window.analyze_tab = SimpleNamespace(
+            add_clips=replace if mode == 'aborted_early' else noop,
+            set_analyzing=noop,
+        )
+        window.progress_bar = SimpleNamespace(
+            setVisible=noop, setRange=replace if mode in ('aborted_late', 'aborted_combined') else noop,
+        )
+        if mode == 'aborted_combined':
+            from ui.main_window import MainWindow
+            window._custom_query_text = None
+            window._filter_available_analysis_operations = lambda operations: operations
+            window._on_clip_analysis_finished = noop
+            assert not MainWindow._run_analysis_pipeline(window, [clip], ['colors'])
+        else:
+            assert not start_standalone_analysis(window, [clip.id], 'colors')
+        window.analyze_tab.add_clips = noop
+        window.progress_bar.setRange = noop
+retire()
+QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+gc.collect()
+app.processEvents()
+assert destroyed == ['window'], destroyed
+'''
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", code, mode],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_closed_controller_has_no_unowned_qt_callbacks():
     # This order reproduced a native crash when a controller's singleShot
     # callback outlived its window and the next widget processed Qt events.

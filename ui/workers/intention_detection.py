@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.intention_workflow import WorkflowState
 from core.operations.detection import DetectionApplication, DetectionGuard
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
     from models.clip import Source, Clip
 
 
-class IntentionDetectionController(QObject):
+class IntentionDetectionController(RetiringQObject):
     """Own every detection worker for one intention plan's detection phase."""
 
     def __init__(self, window: Any) -> None:
@@ -219,4 +221,4 @@ class IntentionDetectionController(QObject):
         self.window._active_intention_detections.discard(self)
         if getattr(self.window, "_intention_detection", None) is self:
             self.window._intention_detection = None
-        self.deleteLater()
+        self.retire()

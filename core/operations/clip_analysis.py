@@ -1,9 +1,21 @@
 """Phase ordering and per-clip outcomes for a combined analysis request."""
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 from core.analysis_operations import OPERATIONS_BY_KEY, PHASE_ORDER
 from core.operations.contracts import OutcomeStatus
+
+
+@dataclass(frozen=True)
+class ClipAnalysisOptions:
+    """Explicit per-request overrides shared by standalone and batch analysis."""
+
+    top_k: int = 5
+    confidence: float = 0.5
+    detect_all: bool = True
+    tier: str | None = None
+    prompt: str | None = None
 
 
 class ClipAnalysisPlan:

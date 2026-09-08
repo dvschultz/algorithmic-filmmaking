@@ -1,11 +1,13 @@
 """Owner-thread alignment publication scoped to one tab run and project."""
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.alignment import AlignmentApplication, AlignmentOutcome
 
 
-class AlignmentDelivery(QObject):
+class AlignmentDelivery(RetiringQObject):
     def __init__(self, tab, worker, project) -> None:
         super().__init__(tab)
         self.tab = tab
@@ -85,4 +87,4 @@ class AlignmentDelivery(QObject):
         if self.tab._forced_alignment_worker is self.worker:
             self.tab._on_alignment_thread_finished()
         self.worker.deleteLater()
-        self.deleteLater()
+        self.retire()

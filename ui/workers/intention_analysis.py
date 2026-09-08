@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import Slot
+
+from ui.workers.qt_lifetime import RetiringQObject
 
 from core.intention_workflow import WorkflowState
 from core.operations.analysis_inputs import clip_input
@@ -15,7 +17,7 @@ if TYPE_CHECKING:
     from models.clip import Clip
 
 
-class IntentionAnalysisController(QObject):
+class IntentionAnalysisController(RetiringQObject):
     """Publish and advance only after this plan's native worker has exited."""
 
     def __init__(
@@ -291,4 +293,4 @@ class IntentionAnalysisController(QObject):
         self.window._active_intention_analyses.discard(self)
         if getattr(self.window, "_intention_analysis", None) is self:
             self.window._intention_analysis = None
-        self.deleteLater()
+        self.retire()

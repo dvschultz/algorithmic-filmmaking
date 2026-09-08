@@ -936,6 +936,9 @@ class ClipBrowser(QWidget):
         self._virtual_rows_columns = 0
         self._virtual_widget_cache: OrderedDict[str, ClipThumbnail] = OrderedDict()
         self._rebuild_pending: bool = False
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.timeout.connect(self._do_rebuild_grid)
 
         # Shared filter state — all filter values live here. Proxy properties
         # on this class (e.g., `_current_filter`, `_gaze_filter`) read/write
@@ -2176,7 +2179,7 @@ class ClipBrowser(QWidget):
             self._invalidate_virtual_rows()
         if not getattr(self, '_rebuild_pending', False):
             self._rebuild_pending = True
-            QTimer.singleShot(delay_ms, self._do_rebuild_grid)
+            self._rebuild_timer.start(delay_ms)
 
     def _do_rebuild_grid(self):
         """Actually rebuild the grid layout with source grouping, current order, and filter."""
