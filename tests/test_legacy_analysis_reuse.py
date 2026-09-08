@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -59,6 +59,7 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
     project.clips[0].extracted_texts = []
+    project.clips[0].description = "A person walking"
     project.clips[0].shot_type = "wide shot"
     project.clips[0].gaze_yaw = project.clips[0].gaze_pitch = 0.0
     project.clips[0].gaze_category = "at_camera"
@@ -362,3 +363,66 @@ def test_ocr_worker_captures_unsaved_model_settings(tmp_path):
     worker.run()
     assert worker.application.apply(project, results[0][0])
     assert clip.analysis_records["extract_text"].identity.to_dict()["parameters"]["vlm_model"] == "original-model"
+
+
+@pytest.mark.parametrize("frame_count", [None, 3])
+def test_description_reuse_captures_settings_and_preserves_metadata(tmp_path, frame_count):
+    from core.settings import Settings
+    from core.operations.description import description_task, resolve_options, run_description
+    from ui.workers.legacy_reuse_worker import LegacyReuseWorker
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.description = "A person walking"
+    clip.description_model = "legacy-model"
+    clip.description_frames = frame_count
+    settings = Settings(description_model_tier="cloud", description_model_cloud="original-model", description_input_mode="frame")
+    worker = LegacyReuseWorker(project, "describe", [clip.id], settings=settings)
+    settings.description_model_cloud = "changed-model"
+    results = []
+    worker.result_ready.connect(results.append)
+    worker.run()
+    assert worker.application.apply(project, results[0][0])
+    record = clip.analysis_records["describe"]
+    assert record.provenance == "unknown" and record.legacy_reuse
+    assert record.identity.to_dict()["parameters"]["model"] == "original-model"
+    assert clip.description_model == "legacy-model"
+    assert clip.description_frames == frame_count
+    assert not operation_is_complete_for_clip("describe", clip, source=project.sources[0], settings=settings)
+    settings.description_model_cloud = "original-model"
+    assert operation_is_complete_for_clip("describe", clip, source=project.sources[0], settings=settings)
+    with patch("core.analysis.description.describe_frame", side_effect=AssertionError("no inference")), patch("core.analysis.description._load_local_model", side_effect=AssertionError("no weights")):
+        reused = run_description((description_task(clip, project.sources[0]),), resolve_options(settings=settings))
+    assert reused[0].status == "skipped"
+    clip.end_frame -= 1
+    assert not operation_is_complete_for_clip("describe", clip, source=project.sources[0], settings=settings)
+
+
+@pytest.mark.parametrize("description,frames", [(None, None), ("", None), (" ", None), ("Error: failed", 1), ("A person", 0), ("A person", True)])
+def test_invalid_legacy_description_requires_recomputation(tmp_path, description, frames):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.description import DescriptionOptions
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.description = description
+    clip.description_frames = frames
+    result = accept_legacy_analysis(project, "describe", description_options=DescriptionOptions("cloud", model="test", input_mode="frame"))
+    assert not result["accepted"] and len(result["failed"]) == 1
+    assert "describe" not in clip.analysis_records
+
+
+def test_description_reuse_rejects_changed_legacy_metadata(tmp_path):
+    from core.operations.description import DescriptionOptions
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from models.analysis_record import AnalysisRecord
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.description = "A person walking"
+    clip.description_model = "changed-model"
+    clip.analysis_records["describe"] = AnalysisRecord.legacy({"description": clip.description, "description_model": "old-model"})
+    previous = clip.analysis_records["describe"]
+    result = accept_legacy_analysis(project, "describe", description_options=DescriptionOptions("cloud", model="test", input_mode="frame"))
+    assert not result["accepted"]
+    assert clip.analysis_records["describe"] is previous

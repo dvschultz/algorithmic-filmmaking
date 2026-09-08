@@ -16,9 +16,10 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe")
 
 if TYPE_CHECKING:
+    from core.operations.description import DescriptionOptions, DescriptionOutcome, DescriptionTask
     from core.operations.scalars import ScalarOutcome, ScalarTask
     from core.operations.classification import ClassificationOutcome, ClassificationTask
     from core.operations.object_detection import ObjectDetectionOutcome, ObjectDetectionTask
@@ -38,6 +39,8 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         previous = json.loads(ArtifactStore().read_bytes(record.artifact))
     else:
         previous = record.value
+    if identity.operation == "describe" and isinstance(previous, dict):
+        previous = {"description_model": None, "description_frames": None, **previous}
     if identity.operation == "colors" and isinstance(previous, dict):
         previous = {"dominant_colors": [
             [color["r"], color["g"], color["b"]] if isinstance(color, dict) else list(color)
@@ -53,6 +56,48 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         input_json=json.dumps(inputs.to_dict(), sort_keys=True, separators=(",", ":")),
     )
     return json.dumps(accepted.to_dict(), sort_keys=True)
+
+
+def accept_legacy_descriptions(tasks: "tuple[DescriptionTask, ...]", options: "DescriptionOptions", *, cancel_event: Event | None = None) -> "tuple[DescriptionOutcome, ...]":
+    """Bind saved descriptions to requested inputs without inventing old metadata."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.description import DescriptionOutcome, description_identity, description_runtime
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if task.analysis_json is None or task.thumbnail_path is None or not task.thumbnail_path.is_file():
+                raise ValueError("Description reuse requires a readable thumbnail")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            description = value["description"]
+            model = value["description_model"]
+            frames = value["description_frames"]
+            if not isinstance(description, str) or not description.strip() or description.startswith("Error"):
+                raise ValueError("A nonempty legacy description is required")
+            if model is not None and (not isinstance(model, str) or not model.strip()):
+                raise ValueError("Legacy description model is invalid")
+            if frames is not None and (type(frames) is not int or frames <= 0):
+                raise ValueError("Legacy description frame count is invalid")
+            if task.target_type == "clip" and (
+                task.source_path is None or task.fps is None or isinstance(task.fps, bool)
+                or not isfinite(task.fps) or task.fps <= 0
+                or type(task.start_frame) is not int or type(task.end_frame) is not int
+                or task.start_frame < 0 or task.end_frame <= task.start_frame
+            ):
+                raise ValueError("Description reuse requires a valid source range")
+            identity = description_identity(snapshot, options, fingerprints, description_runtime(task, options))
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(DescriptionOutcome(task.clip_id, "skipped", description, model, code="legacy_accepted", record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(DescriptionOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(DescriptionOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
 
 
 def accept_legacy_colors(request: ColorRequest, *, cancel_event: Event | None = None) -> ColorResult:

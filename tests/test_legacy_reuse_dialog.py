@@ -8,7 +8,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text"])
+@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe"])
 def test_dialog_publication_and_cancellation(tmp_path, operation):
     code = r'''
 import sys
@@ -37,6 +37,7 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     clip.object_labels = clip.detected_objects = []
     clip.person_count = 0
     clip.extracted_texts = []
+    clip.description = "A person walking"
     clip.shot_type = "wide shot"
     clip.gaze_yaw = clip.gaze_pitch = 0.0
     clip.gaze_category = "at_camera"

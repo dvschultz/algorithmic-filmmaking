@@ -480,6 +480,14 @@ Matching accepted records reuse without acquiring the inference lock. The
 183-test legacy/OCR/MCP/native GUI/import group passes. This checkpoint does not
 close remaining legacy families or the final review and full-suite verification.
 
+Description legacy acceptance now reaches all four surfaces with captured
+settings and the default prompt, preserving saved model/frame metadata and
+unknown provenance. Missing optional legacy metadata stays unknown; conflicting
+metadata, empty/error text, and invalid frame counts require recomputation.
+The 177-test legacy/description/MCP/native GUI/import group plus a metadata
+mismatch regression pass. Remaining legacy families and final verification are
+still open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

@@ -1032,8 +1032,17 @@ tracked, inactive historical owners as described above.
   outcomes, including unknown counts. Previously it forced a count of one and
   rejected matching records with any other count. Two regression cases fail
   before the fix; 127 description operation, record, publication, completion,
-  delivery, and recovery tests pass afterward. Description legacy acceptance
-  still needs its interface wiring and validation.
+  delivery, and recovery tests pass afterward.
+- Description legacy acceptance now reaches all four interfaces with captured
+  provider/input-mode settings and the default prompt. It preserves saved text,
+  model, and frame count, including missing metadata. Older partial legacy
+  records normalize only absent optional metadata to null; conflicting recorded
+  values remain rejected. Empty/error descriptions and invalid counts/ranges
+  require recomputation. Accepted records retain unknown provenance and skip
+  inference; changed settings or trims invalidate reuse. The 177-test legacy/
+  native GUI/MCP/description/import group and one additional metadata-mismatch
+  regression pass, with scoped typing and lint clean. Other legacy families and
+  the final review/full-suite run remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

@@ -444,7 +444,7 @@ def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
 
 
 @tools.register(
-    description="Explicitly reuse legacy colors, brightness, volume, classification, object detection, gaze, shot types, OCR text, or compatible DINO thumbnail/boundary embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
+    description="Explicitly reuse legacy colors, brightness, volume, classification, object detection, gaze, shot types, OCR text, descriptions, or compatible DINO thumbnail/boundary embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
     requires_project=True, modifies_gui_state=True, modifies_project_state=True,
 )
 def accept_legacy_analysis(main_window, operation: str, clip_ids: list[str]) -> dict:
