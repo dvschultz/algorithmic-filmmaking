@@ -232,16 +232,16 @@ class TestAutoComputeEmbeddingsInstallGate:
     """Tests for install gate in auto-compute functions."""
 
     @patch("core.feature_registry.check_feature")
-    def test_auto_compute_raises_when_deps_missing(self, mock_check):
+    def test_auto_compute_raises_when_deps_missing(self, mock_check, tmp_path):
         mock_check.return_value = (False, ["package:torch", "package:transformers"])
 
         from core.remix import _auto_compute_embeddings
 
-        # Need a clip with embedding=None to trigger the check
-        mock_clip = MagicMock()
-        mock_clip.embedding = None
-        mock_clip.thumbnail_path = "/tmp/fake.jpg"
-        mock_source = MagicMock()
+        from tests.test_description_operations import project_with_thumbnails
+
+        project = project_with_thumbnails(tmp_path, 1)
+        mock_clip = project.clips[0]
+        mock_source = project.sources[0]
 
         with pytest.raises(RuntimeError, match="torch and transformers"):
             _auto_compute_embeddings([(mock_clip, mock_source)])

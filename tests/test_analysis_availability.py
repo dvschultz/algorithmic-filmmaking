@@ -8,7 +8,7 @@ from core.analysis_availability import (
 )
 
 
-def test_compute_disabled_operations_all_clips_complete():
+def test_legacy_colors_remain_available_for_verified_recomputation():
     clip_a = make_test_clip(
         "c1",
         dominant_colors=[(1, 2, 3)],
@@ -25,7 +25,7 @@ def test_compute_disabled_operations_all_clips_complete():
     disabled = compute_disabled_operations(
         [clip_a, clip_b], ["colors", "shots", "transcribe"]
     )
-    assert disabled == {"colors", "shots", "transcribe"}
+    assert disabled == {"shots", "transcribe"}
 
 
 def test_compute_disabled_operations_mixed_clips_keeps_option_enabled():
@@ -36,7 +36,7 @@ def test_compute_disabled_operations_mixed_clips_keeps_option_enabled():
     assert disabled == set()
 
     counts = compute_operation_need_counts([clip_done, clip_missing], ["colors"])
-    assert counts["colors"] == 1
+    assert counts["colors"] == 2
 
 
 def test_extract_text_empty_list_is_a_completed_observation():
@@ -47,13 +47,13 @@ def test_extract_text_empty_list_is_a_completed_observation():
     assert disabled == {"extract_text"}
 
 
-def test_embeddings_completeness_matches_embedding_field():
+def test_embedding_projection_alone_does_not_establish_completion():
     clip_with = make_test_clip("with")
     clip_with.embedding = [0.1] * 768
     clip_without = make_test_clip("without")
     clip_without.embedding = None
 
-    assert compute_disabled_operations([clip_with], ["embeddings"]) == {"embeddings"}
+    assert compute_disabled_operations([clip_with], ["embeddings"]) == set()
     assert compute_disabled_operations([clip_without], ["embeddings"]) == set()
     assert compute_disabled_operations(
         [clip_with, clip_without], ["embeddings"]

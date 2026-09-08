@@ -1,6 +1,7 @@
 """Publish embedding outcomes only into their current owner-thread context."""
 
 from typing import Any
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
@@ -58,11 +59,15 @@ class EmbeddingDelivery(RetiringQObject):
                     raise ValueError(
                         "Project save location changed during embedding analysis"
                     )
-                receipt = cache.results[outcome.clip_id]
-                if not receipt.matches(outcome):
-                    raise ValueError(
-                        "Queued embedding differs from its recorded result"
-                    )
+                if outcome.status == "skipped" and outcome.record_json is not None:
+                    if getattr(cache, "reused_outcomes", {}).get(outcome.clip_id) != asdict(outcome):
+                        raise ValueError("Queued embedding differs from its verified reusable result")
+                else:
+                    receipt = cache.results[outcome.clip_id]
+                    if not receipt.matches(outcome):
+                        raise ValueError(
+                            "Queued embedding differs from its recorded result"
+                        )
             accepted = self.application.apply(window.project, outcome)
             if accepted and receipt is not None:
                 window.project.record_job_result(receipt.result_id, receipt.digest)

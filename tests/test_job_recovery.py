@@ -180,9 +180,15 @@ def test_color_retry_validates_saved_output(tmp_path, monkeypatch, change):
         else:
             with store._connect() as conn:
                 conn.execute("DELETE FROM job_results")
-        with pytest.raises(StaleJobResult):
-            run()
-        assert extract.call_count == 1
+        result = run()
+        if change == "palette":
+            # A mismatched field projection invalidates that result only.
+            assert len(result["result"]["succeeded"]) == 1
+            assert extract.call_count == 2
+        else:
+            # The saved semantic record remains valid without the job cache.
+            assert len(result["result"]["skipped"]) == 1
+            assert extract.call_count == 1
 
 
 def test_corrupt_cached_output_is_rejected_before_application(setup):

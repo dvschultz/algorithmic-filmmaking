@@ -593,8 +593,8 @@ class TestProjectFramePersistence:
         assert loaded.frames[0].analyzed is True
 
     def test_schema_version_bumped(self):
-        """Explicit media coordinates require the 1.6 migration."""
-        assert SCHEMA_VERSION == "1.6"
+        """Analysis records require the 1.7 migration."""
+        assert SCHEMA_VERSION == "1.7"
 
     def test_repr_includes_frames(self):
         """Project repr includes frame count."""

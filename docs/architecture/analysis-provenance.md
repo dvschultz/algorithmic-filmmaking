@@ -1,0 +1,74 @@
+# Analysis provenance and derived artifacts
+
+The first U10 implementation covers color palettes and thumbnail DINOv2
+embeddings across the desktop, shared spine, CLI, MCP jobs, and embedding
+prerequisites used by sequencing. This document describes that bounded scope.
+The complete U10 contract remains in the shared editing engine plan.
+
+## Reuse
+
+`AnalysisIdentity` identifies source content, source frame range, operation and
+schema versions, model revision and package versions, normalized parameters,
+sampling policy, and optional prompt digest. Its key excludes paths and target
+IDs so moving unchanged media does not require inference. `AnalysisInput`
+separately captures target bindings, paths, and file stamps for queued-work and
+owner-thread checks. Workers verify full source hashes before reuse and reject
+media changed during computation.
+
+`AnalysisRecord` distinguishes successful, failed, and missing results. A valid
+empty value is a successful result. Legacy values have unknown provenance and
+do not automatically satisfy migrated operations. Unrecognized record versions
+survive save/load without becoming reusable. Existing clip/frame fields remain
+read projections for display and consumers that have not migrated.
+
+Colors include the palette size and extraction policy in their identity.
+Thumbnail embeddings use the DINOv2 revision declared in
+`core/analysis_model_identity.py`; both the loader and the identity use that pin.
+A changed thumbnail path invalidates the cheap completion check even when the
+previous thumbnail still exists. Content-identical relocated inputs can be
+revalidated by a worker without inference.
+
+Semantic reuse and job recovery are separate. Durable jobs still journal
+computation before guarded model publication, and GUI results retain their
+one-use delivery guards. An artifact-backed embedding can be reused after the
+old job cache is removed. Ordinary projects without artifacts or job receipts
+do not initialize either cache during save.
+
+## Storage and ownership
+
+The configured cache directory contains `artifacts/`, with a SQLite reference
+index and registered payload files. References contain a digest, size, and media
+type. Writes stream into staging files, verify content, and pin the registered
+payload before publishing its reference in an atomic project save. Thumbnail
+embedding vectors are stored as JSON artifacts rather than repeated in project
+JSON. Loading hydrates their read projections. Missing or corrupt payloads mark
+only the affected operation missing, preserving editorial notes and sequences.
+
+Known saved-project manifests retain payloads after projects close. Live
+projects retain current results and source-removal undo history. Detached save
+and bundle-export snapshots hold leases until their consumers retire. Unchanged
+reference sets do not cause database writes on ordinary project edits. Garbage
+collection callbacks use nonblocking pin release and retry after store
+transactions, avoiding a wait on a lock held by the same thread.
+
+Collection removes only unreferenced registered files whose inode, content
+stamp, and single-link status still match. It preserves source files, unknown
+files, replaced files, and conservative pins left by uncertain publication.
+Successful replacement saves reconcile pending manifest pins for that path.
+Portable bundle export copies and verifies referenced artifacts before writing
+the bundle manifest; loading a bundle can restore them into a fresh cache.
+Portable records retain semantic identity but discard original file bindings.
+A worker revalidates the relocated media before reuse, without inference when
+the content is unchanged. Missing thumbnails fail their own embedding target
+without stopping analysis of valid neighboring clips.
+
+## Remaining U10 work
+
+- Migrate the other U7 analysis families, including boundary embeddings, to
+  semantic reuse and operation-owned failure records.
+- Expose the explicit legacy-reuse decision through user and agent flows; the
+  current record model supports the decision but the flows are not wired.
+- Move preview/prerender media and durable job array payloads into managed
+  storage, with pins spanning execution, playback, export, and recovery.
+- Complete end-to-end retention and recovery coverage for those additional
+  consumers. Abandoned save pins without a later replacement remain retained.

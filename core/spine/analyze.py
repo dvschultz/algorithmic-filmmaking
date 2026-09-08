@@ -677,11 +677,11 @@ def embeddings(
 ) -> dict:
     """Extract DINOv2 embeddings from clip thumbnails."""
     from core.operations.embeddings import (
-        EmbeddingApplication, EmbeddingOptions, EmbeddingTask, run_embeddings,
+        EmbeddingApplication, EmbeddingOptions, embedding_task, run_embeddings,
     )
 
     tasks = tuple(
-        EmbeddingTask(c.id, _thumbnail_for_clip(c), skip_existing and c.embedding is not None)
+        embedding_task(c, project.sources_by_id.get(c.source_id), skip_existing=skip_existing)
         for c in _resolve_clip_ids(project, clip_ids)
     )
     application = EmbeddingApplication(project, tasks)
@@ -694,7 +694,10 @@ def embeddings(
             else:
                 result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
         elif outcome.status == "skipped":
-            result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
+            if outcome.record_json is not None and not application.apply(project, outcome):
+                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+            else:
+                result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
         elif outcome.status == "failed":
             item = {"clip_id": outcome.clip_id, "code": outcome.code}
             if outcome.message:

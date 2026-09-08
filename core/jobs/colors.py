@@ -11,17 +11,20 @@ import json
 from core.jobs.commits import ResultBatch, ResultSpec, StaleJobResult, result_batch
 from core.jobs.store import JobStore
 from core.jobs.spec import OperationSpec
+from core.analysis_records import AnalysisFingerprints, model_runtime
 from core.operations.colors import (
     ColorApplication,
     ColorRequest,
     ColorTarget,
     color_request,
+    color_identity,
     compute_colors,
+    reusable_colors,
 )
 from core.operations.contracts import ColorOutcome, ColorResult
 from core.project import Project
 
-COLOR_OPERATION_VERSION = 1
+COLOR_OPERATION_VERSION = 2
 
 
 def color_job_spec(
@@ -36,6 +39,7 @@ def color_job_spec(
     targets = []
     for target in request.targets:
         snapshot = asdict(target)
+        snapshot["inputs"] = target.inputs.to_dict() if target.inputs is not None else None
         for key in ("video_path", "image_path"):
             snapshot[key] = str(snapshot[key]) if snapshot[key] is not None else None
         targets.append(snapshot)
@@ -72,6 +76,7 @@ def _inputs(project: Project, target: ColorTarget) -> dict:
         "start_frame": target.start_frame,
         "end_frame": target.end_frame,
         "file_stamp": list(target.file_stamp) if target.file_stamp else None,
+        "analysis_input": target.inputs.to_dict() if target.inputs is not None else None,
     }
 
 
@@ -114,52 +119,57 @@ def _run_color_batch(
         "unprocessed": [],
         "total_clips": len(ids),
     }
-    managed_targets = set()
+    known: dict[str, list[dict]] = {}
+    fingerprints = AnalysisFingerprints(cancel)
+    runtime = model_runtime("kmeans-rgb", ("numpy", "scikit-learn", "opencv-python"))
     for result_id in project.metadata.job_results:
         row = store.get_result(result_id)
         if row is None:
-            raise StaleJobResult("Committed result payload is missing")
+            continue
         identity = json.loads(row["spec_json"])
         if identity["kind"] == "analyze_colors":
-            managed_targets.add(identity["target_id"])
+            known.setdefault(identity["target_id"], []).append(row)
     for index, clip_id in enumerate(ids):
         if cancel.is_set():
             output["unprocessed"].extend(
                 {"clip_id": cid, "reason": "cancelled"} for cid in ids[index:]
             )
             break
-        request = color_request(project, [clip_id], num_colors, skip_existing=False)
+        request = color_request(project, [clip_id], num_colors, skip_existing=True)
         target = request.targets[0]
         inputs = _inputs(project, target)
+        semantic = color_identity(target, num_colors, fingerprints, runtime) if target.inputs is not None and target.inputs.unchanged() else None
+        reused = semantic is not None and reusable_colors(target, semantic)
         spec = ResultSpec.build(
             path,
             kind="analyze_colors",
             version=COLOR_OPERATION_VERSION,
             target_id=clip_id,
             arguments={"num_colors": num_colors},
-            inputs=inputs,
+            inputs={
+                "basis": inputs, "analysis_key": semantic.key if semantic is not None else None,
+                "previous_colors": target.existing_colors, "previous_record": target.record_json,
+            },
         )
-        recorded = store.get_result(spec.result_id)
-        # Existing results without our receipts retain the legacy skip policy.
-        if target.existing_colors and clip_id not in managed_targets:
-            output["skipped"].append(
-                {"clip_id": clip_id, "reason": "already_populated"}
-            )
-            continue
-        if (
-            recorded
-            and spec.result_id not in project.metadata.job_results
-            and target.existing_colors
-        ):
-            raise StaleJobResult(
-                "Color output changed before pending result publication"
-            )
+        if reused:
+            assert semantic is not None
+            for row in known.get(clip_id, []):
+                saved_identity = json.loads(row["spec_json"])
+                payload = json.loads(row["payload_json"])
+                if (
+                    saved_identity["project_path"] == str(path)
+                    and saved_identity["inputs"].get("basis") == inputs
+                    and saved_identity["inputs"].get("analysis_key") == semantic.key
+                    and payload.get("record_json") == target.record_json
+                ):
+                    spec = ResultSpec(path, row["spec_json"])
+                    break
 
         def compute():
-            outcome = compute_colors(request, cancel_event=cancel).outcomes[0]
-            if outcome.status != "succeeded":
+            outcome = compute_colors(request, cancel_event=cancel, fingerprints=fingerprints, runtime=runtime).outcomes[0]
+            if outcome.status not in ("succeeded", "skipped"):
                 raise _OutcomeError(outcome)
-            return {"colors": [list(color) for color in outcome.colors]}
+            return {"colors": [list(color) for color in outcome.colors], "record_json": outcome.record_json}
 
         def validate(current, clip_id=clip_id, inputs=inputs):
             live = color_request(
@@ -172,7 +182,7 @@ def _run_color_batch(
                 current, [clip_id], num_colors, skip_existing=False
             )
             outcome = ColorOutcome(
-                clip_id, "succeeded", tuple(tuple(c) for c in payload["colors"])
+                clip_id, "succeeded", tuple(tuple(c) for c in payload["colors"]), record_json=payload.get("record_json"),
             )
             result = ColorApplication(current, live_request).apply(
                 ColorResult(live_request.request_id, (outcome,))
@@ -184,7 +194,11 @@ def _run_color_batch(
             clip = current.clips_by_id.get(clip_id)
             return clip is not None and clip.dominant_colors == [
                 tuple(c) for c in payload["colors"]
-            ]
+            ] and (
+                payload.get("record_json") is None
+                or (clip.analysis_records.get("colors") is not None
+                    and clip.analysis_records["colors"].to_dict() == json.loads(payload["record_json"]))
+            )
 
         try:
             receipt = batch.commit(
@@ -194,7 +208,7 @@ def _run_color_batch(
                 apply=apply,
                 is_applied=is_applied,
             )
-            if receipt["applied"]:
+            if receipt["applied"] and not reused:
                 output["succeeded"].append(
                     {
                         "clip_id": clip_id,

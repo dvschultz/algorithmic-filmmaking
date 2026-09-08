@@ -43,7 +43,30 @@ def clip_with_thumb(tmp_path):
 
 
 class TestEmbeddingWorkerFiltering:
-    def test_skips_clips_already_having_embeddings(
+    def test_saved_project_missing_thumbnail_does_not_fail_valid_neighbor(self, qapp_fixture, tmp_path):
+        from core.settings import Settings
+        from tests.test_description_operations import project_with_thumbnails
+        from ui.workers.embedding_worker import EmbeddingAnalysisWorker
+
+        project = project_with_thumbnails(tmp_path, 2)
+        project.clips[0].thumbnail_path = tmp_path / "missing-thumbnail.jpg"
+        assert project.clips[1].thumbnail_path.is_file()
+        assert project.save(tmp_path / "project.json")
+        try:
+            with patch("core.settings.load_settings", return_value=Settings(cache_dir=tmp_path / "cache")), patch(
+                "core.analysis.embeddings.extract_clip_embeddings_batch", return_value=[[0.1] * 768]
+            ) as extract, patch("core.analysis.embeddings.unload_model"):
+                worker = EmbeddingAnalysisWorker(project.clips, project=project)
+                worker.run()
+            assert [(outcome.clip_id, outcome.status) for outcome in worker.result] == [
+                ("c-0", "failed"), ("c-1", "succeeded"),
+            ]
+            assert worker.result[0].code == "thumbnail_missing"
+            assert extract.call_args.args[0] == [project.clips[1].thumbnail_path]
+        finally:
+            project.close_writer()
+
+    def test_legacy_embeddings_require_recomputation(
         self, qapp_fixture, sources_by_id, tmp_path
     ):
         from ui.workers.embedding_worker import EmbeddingAnalysisWorker
@@ -60,7 +83,7 @@ class TestEmbeddingWorkerFiltering:
         with (
             patch(
                 "core.analysis.embeddings.extract_clip_embeddings_batch",
-                return_value=[[0.1] * 768],
+                return_value=[[0.1] * 768, [0.1] * 768],
             ) as mock_extract,
             patch("core.analysis.embeddings.unload_model"),
         ):
@@ -69,11 +92,11 @@ class TestEmbeddingWorkerFiltering:
             )
             worker.run()
 
-        # Only clip2 was processed
+        # Field presence alone cannot establish model/input provenance.
         mock_extract.assert_called_once()
         passed_paths = mock_extract.call_args[0][0]
-        assert len(passed_paths) == 1
-        # clip2 has a detached result; clip1 kept its original
+        assert len(passed_paths) == 2
+        # Both results remain detached until owner-thread delivery.
         assert clip1.embedding == [0.5] * 768
         assert clip2.embedding is None
         assert worker.result[1].vector == (0.1,) * 768

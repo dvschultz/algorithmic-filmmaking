@@ -9,17 +9,23 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 import uuid
+import weakref
 
 from models.audio_source import AudioSource
 from models.clip import Source, Clip
 from models.frame import Frame
 from models.sequence import Sequence, SequenceClip
+from models.analysis_record import AnalysisRecord
 from core.project_lock import ProjectWriter
 from core.project_migrations import (
     SCHEMA_VERSION, is_future_schema, migrate_project_data, prepare_project_write,
 )
+
+if TYPE_CHECKING:
+    from core.artifacts import ArtifactStore
+    from models.analysis_record import ArtifactRef
 
 logger = logging.getLogger(__name__)
 
@@ -385,30 +391,28 @@ def _save_project_owned(
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
-        # Write to a temp file in the same directory, then rename
-        # This ensures atomic write - file is never in a partial state
-        fd, temp_path = tempfile.mkstemp(
-            suffix=".tmp",
-            prefix=".project_",
-            dir=filepath.parent
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(project_data, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
+        from core.artifacts import manifest_write
+        from core.project_lock import replace_project_file
 
-            # Atomic rename (POSIX guarantees this is atomic)
-            from core.project_lock import replace_project_file
-
-            replace_project_file(temp_path, filepath)
-        except Exception:
-            # Clean up temp file on failure
+        artifact_root = (extra_data or {}).get("_artifact_store_root")
+        with manifest_write(
+            filepath, project_data, Path(artifact_root) if artifact_root else None,
+            portable=bool((extra_data or {}).get("_portable")),
+            cancel_check=(extra_data or {}).get("_cancel_check"),
+        ):
+            fd, temp_path = tempfile.mkstemp(suffix=".tmp", prefix=".project_", dir=filepath.parent)
             try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(project_data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                replace_project_file(temp_path, filepath)
+            except Exception:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+                raise
 
         if project_data.get("job_results"):
             try:
@@ -676,6 +680,9 @@ def load_project(
     if progress_callback:
         progress_callback(1.0, f"Loaded {len(clips)} clips, {len(frames)} frames")
 
+    from core.analysis_records import restore_project_artifacts
+
+    restore_project_artifacts(filepath, data, [*clips, *frames, *audio_sources])
     logger.info(
         f"Project loaded from {filepath}: "
         f"{len(sources)} sources, {len(clips)} clips, "
@@ -731,6 +738,10 @@ class Project:
         self._retain_writer = False
         self._writer: Optional[ProjectWriter] = None
         self._pending_writer: Optional[ProjectWriter] = None
+        self._artifact_store: Optional[ArtifactStore] = None
+        self._artifact_pin: Optional[str] = None
+        self._artifact_refs: frozenset[ArtifactRef] = frozenset()
+        self._artifact_finalizer: Optional[weakref.finalize] = None
         self.path = path
         self.metadata = metadata or ProjectMetadata()
         self._sources = sources or []
@@ -754,6 +765,42 @@ class Project:
         from core.project_session import ProjectSession
 
         self.session = ProjectSession(self)
+        self.retain_artifacts()
+
+    @property
+    def artifact_store(self) -> "ArtifactStore":
+        """Open managed storage lazily; ordinary projects need no artifact index."""
+        if self._artifact_store is None:
+            from core.artifacts import ArtifactStore
+
+            self._artifact_store = ArtifactStore()
+        return self._artifact_store
+
+    def retain_artifacts(self, additional: tuple["ArtifactRef", ...] = ()) -> None:
+        """Pin current and undo-restorable analysis payloads before publication."""
+        from core.artifacts import analysis_references
+
+        targets = (*self._clips, *self._frames, *self._audio_sources, *self.session.retained_analysis_targets)
+        refs = frozenset(analysis_references(targets) + additional)
+        if refs:
+            if self._artifact_pin is None:
+                self._artifact_pin = self.artifact_store.create_pin(refs)
+                self._artifact_finalizer = weakref.finalize(self, self.artifact_store.retire_pin, self._artifact_pin)
+            elif refs != self._artifact_refs:
+                self.artifact_store.replace_pin(self._artifact_pin, refs)
+            self._artifact_refs = refs
+        elif self._artifact_pin is not None:
+            self.release_artifacts()
+
+    def release_artifacts(self) -> None:
+        """Release this session's ownership after pending users have retired."""
+        if self._artifact_pin is not None:
+            self.artifact_store.release_pin(self._artifact_pin)
+            if self._artifact_finalizer is not None:
+                self._artifact_finalizer.detach()
+                self._artifact_finalizer = None
+            self._artifact_pin = None
+            self._artifact_refs = frozenset()
 
     # --- Sequence compatibility property ---
 
@@ -1054,6 +1101,7 @@ class Project:
         if audio is None:
             raise ValueError(f"Audio source not found: {audio_source_id}")
         audio.transcript = deepcopy(segments)
+        audio.analysis_records["transcribe"] = AnalysisRecord.legacy({"transcript": [segment.to_dict() for segment in audio.transcript]})
         self.mark_dirty()
         self._notify_observers("audio_sources_changed", self._audio_sources)
 
@@ -1439,6 +1487,24 @@ class Project:
         self._dirty = False
         self.session.record_saved()
 
+    def record_analysis(self, kind: str, target_id: str, operation: str, record: AnalysisRecord) -> None:
+        """Attach a validated record during owner-thread result publication.
+
+        The application publishes the corresponding field projections and their
+        usual notification in the same external-change guard.
+        """
+        self._assert_writable()
+        targets = {"clip": self.clips_by_id, "frame": self.frames_by_id, "audio": self.audio_sources_by_id}
+        target = targets.get(kind, {}).get(target_id)
+        if target is None:
+            raise ValueError("Analysis target is missing")
+        if record.identity is not None and record.identity.operation != operation:
+            raise ValueError("Analysis record operation does not match its projection")
+        if record.artifact is not None:
+            self.retain_artifacts((record.artifact,))
+        target.analysis_records[operation] = record
+        self.mark_dirty()
+
     def record_job_result(self, result_id: str, digest: str) -> None:
         """Include a validated job receipt in the next atomic project save."""
         if any(
@@ -1518,6 +1584,8 @@ class Project:
             "_all_sequences": list(self.sequences),
             "active_sequence_index": self.active_sequence_index,
         }
+        if self._artifact_store is not None:
+            extra_data["_artifact_store_root"] = str(self._artifact_store.root)
         return {
             "sources": copy.deepcopy(self._sources),
             "clips": copy.deepcopy(self._clips),
@@ -1616,6 +1684,7 @@ class Project:
         # before load_project() processes it into the standard 6-tuple.
         sequences_list = None
         active_idx = 0
+        raw_data = {}
         try:
             with open(path, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)

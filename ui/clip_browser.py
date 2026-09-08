@@ -53,7 +53,7 @@ _GAZE_DISPLAY_TO_KEY = {v: k for k, v in GAZE_CATEGORY_DISPLAY.items()}
 # a missing dependency surfaces as a visible startup error rather than a
 # silently-bypassed filter.
 try:
-    from core.analysis_availability import operation_is_complete_for_clip as _op_complete
+    from core.analysis_availability import operation_has_result as _op_complete
 except ImportError:  # pragma: no cover — analysis_availability is always bundled
     _op_complete = None
 

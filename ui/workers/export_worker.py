@@ -37,6 +37,9 @@ class ExportBundleWorker(CancellableWorker):
     ):
         super().__init__(parent)
         self._snapshot = project.snapshot_for_save()
+        from core.artifacts import ArtifactLease
+
+        self._artifact_lease = ArtifactLease.for_snapshot(self._snapshot)
         self._project_path = project.path
         self._dest_dir = dest_dir
         self._include_videos = include_videos
@@ -44,6 +47,7 @@ class ExportBundleWorker(CancellableWorker):
 
     def run(self):
         self._log_start()
+        project = None
         try:
             from core.project_export import export_project_bundle
 
@@ -70,4 +74,8 @@ class ExportBundleWorker(CancellableWorker):
             if not self.is_cancelled():
                 logger.error(f"Bundle export failed: {e}")
                 self.error.emit(str(e))
+        finally:
+            if project is not None:
+                project.session.close()
+            self._artifact_lease.close()
         self._log_complete()

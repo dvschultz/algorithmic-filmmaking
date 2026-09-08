@@ -10,12 +10,15 @@ from core.jobs.embeddings import _runtime
 from core.jobs.commits import StaleJobResult
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
+from core.analysis_records import AnalysisFingerprints
 from core.operations.embeddings import (
     EmbeddingOptions,
     EmbeddingOutcome,
     EmbeddingTask,
     embedding_model_session,
     run_embeddings,
+    embedding_identity,
+    reusable_embedding,
 )
 
 
@@ -47,6 +50,7 @@ class GuiEmbeddingCache(GuiResultJournal):
         self.previous_json = json.dumps(
             previous_results, sort_keys=True, allow_nan=False
         )
+        self.reused_outcomes: dict[str, dict] = {}
 
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
@@ -84,11 +88,19 @@ class GuiEmbeddingCache(GuiResultJournal):
                 progress(len(outcomes), len(tasks))
 
         try:
-            self.start(cancel)
+            self.start(cancel, allow_missing_receipts=True)
+            fingerprints = AnalysisFingerprints(cancel, media_fingerprints=self.fingerprints)
             for task in tasks:
                 if cancel.is_set():
                     break
-                if task.skip:
+                if task.inputs is not None and task.skip and task.inputs.unchanged():
+                    semantic = embedding_identity(task, fingerprints, self.runtime)
+                    reused = reusable_embedding(task, semantic)
+                    if reused is not None:
+                        self.reused_outcomes[task.clip_id] = asdict(reused)
+                        publish(reused)
+                        continue
+                if task.skip and task.inputs is None:
                     publish(
                         EmbeddingOutcome(
                             task.clip_id, "skipped", code="already_populated"
@@ -136,6 +148,8 @@ class GuiEmbeddingCache(GuiResultJournal):
                                 self.options,
                                 cancel_event=cancel,
                                 model_session=session,
+                                fingerprints=fingerprints,
+                                runtime=self.runtime,
                             )
                             # Journal every valid vector in the computed batch before
                             # delivering any of them to the project owner.

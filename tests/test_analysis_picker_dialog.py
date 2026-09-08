@@ -3,6 +3,7 @@
 import pytest
 
 from tests.conftest import make_test_clip
+from tests.analysis_fixtures import verify_clip_analysis
 
 
 @pytest.fixture
@@ -20,10 +21,11 @@ class _Settings:
         self.analysis_selected_operations = selected or []
 
 
-def test_dialog_disables_completed_operations_and_ignores_saved_checks(qapp):
+def test_dialog_disables_completed_operations_and_ignores_saved_checks(qapp, tmp_path):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
+    verify_clip_analysis(clip, tmp_path)
     settings = _Settings(selected=["colors", "shots"])
 
     dialog = AnalysisPickerDialog(
@@ -42,10 +44,11 @@ def test_dialog_disables_completed_operations_and_ignores_saved_checks(qapp):
     assert shots_cb.isChecked() is True
 
 
-def test_dialog_select_all_skips_disabled_operations(qapp):
+def test_dialog_select_all_skips_disabled_operations(qapp, tmp_path):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
+    verify_clip_analysis(clip, tmp_path)
     settings = _Settings(selected=[])
 
     dialog = AnalysisPickerDialog(
@@ -60,10 +63,11 @@ def test_dialog_select_all_skips_disabled_operations(qapp):
     assert dialog._checkboxes["shots"].isChecked() is True
 
 
-def test_force_rerun_enables_completed_operations(qapp):
+def test_force_rerun_enables_completed_operations(qapp, tmp_path):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
+    verify_clip_analysis(clip, tmp_path)
     settings = _Settings(selected=[])
 
     dialog = AnalysisPickerDialog(
@@ -90,7 +94,7 @@ def test_force_rerun_enables_completed_operations(qapp):
     assert dialog._run_btn.isEnabled() is False
 
 
-def test_dialog_run_disabled_when_every_operation_complete(qapp):
+def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip(
@@ -110,6 +114,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp):
     clip.first_frame_embedding = [0.1] * 768
     clip.last_frame_embedding = [0.2] * 768
     clip.custom_queries = [{"query": "test", "match": True, "confidence": 0.9, "model": "test"}]
+    verify_clip_analysis(clip, tmp_path, embeddings=True)
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(
@@ -125,3 +130,13 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp):
             assert cb.isEnabled(), "custom_query should always be enabled"
         else:
             assert not cb.isEnabled(), f"{key} should be disabled when complete"
+
+
+def test_dialog_keeps_legacy_analysis_available_for_recomputation(qapp):
+    from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
+
+    clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
+    clip.embedding = [0.1] * 768
+    dialog = AnalysisPickerDialog(clip_count=1, scope_label="selected clips", settings=_Settings(), clips=[clip])
+    assert dialog._checkboxes["colors"].isEnabled()
+    assert dialog._checkboxes["embeddings"].isEnabled()

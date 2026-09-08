@@ -1,8 +1,7 @@
 """Durable, batched thumbnail embeddings for saved projects."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from hashlib import sha256
-from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
 from threading import Event
@@ -12,6 +11,7 @@ from core.jobs.commits import ResultSpec, StaleJobResult, canonical_json, result
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
+from core.analysis_records import AnalysisFingerprints
 from core.operations.embeddings import (
     EmbeddingApplication,
     EmbeddingOptions,
@@ -19,25 +19,18 @@ from core.operations.embeddings import (
     EmbeddingTask,
     embedding_model_session,
     run_embeddings,
+    embedding_task,
+    embedding_identity,
+    reusable_embedding,
 )
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    packages: dict[str, str | None] = {}
-    for package in ("torch", "transformers", "Pillow"):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    return {
-        "model": "facebook/dinov2-base",
-        "tag": "dinov2-vit-b-14",
-        "dimensions": 768,
-        "algorithm": "cls-l2/v1",
-        "packages": packages,
-    }
+    from core.analysis_model_identity import embedding_runtime
+
+    return embedding_runtime()
 
 
 def _ids(project: Project, ids: list[str] | None) -> list[str]:
@@ -50,7 +43,8 @@ def _ids(project: Project, ids: list[str] | None) -> list[str]:
 
 
 def _task(project: Project, cid: str) -> EmbeddingTask:
-    return EmbeddingTask(cid, project.clips_by_id[cid].thumbnail_path)
+    clip = project.clips_by_id[cid]
+    return embedding_task(clip, project.sources_by_id.get(clip.source_id))
 
 
 def _target(project: Project, cid: str) -> dict:
@@ -91,7 +85,7 @@ def embedding_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="embeddings",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={"targets": targets, "options": asdict(options), "runtime": _runtime()},
         persistence="job_history",
@@ -104,12 +98,20 @@ def _outcome(cid: str, payload: dict) -> EmbeddingOutcome:
     outcome = EmbeddingOutcome.from_vector(cid, payload["vector"])
     if outcome.model != payload["model"]:
         raise StaleJobResult("Embedding model identity is corrupt")
-    return outcome
+    return replace(outcome, record_json=payload.get("record_json"))
 
 
 def _values(project: Project, cid: str) -> dict:
     clip = project.clips_by_id[cid]
-    return {"vector": clip.embedding, "model": clip.embedding_model}
+    from models.analysis_record import AnalysisRecord
+
+    record = clip.analysis_records.get("embeddings")
+    if isinstance(record, AnalysisRecord) and record.artifact is not None and record.state == "succeeded":
+        record = replace(record, artifact=None, value_json=canonical_json({"embedding": clip.embedding, "embedding_model": clip.embedding_model}))
+    return {
+        "vector": clip.embedding, "model": clip.embedding_model,
+        "record_json": json.dumps(record.to_dict(), sort_keys=True) if isinstance(record, AnalysisRecord) else None,
+    }
 
 
 def _cached(store: JobStore, spec: ResultSpec) -> dict | None:
@@ -148,7 +150,9 @@ def run_embedding_job(
     if operation:
         force = bool(operation.arguments.get("force", False))
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with embedding_model_session() as model_session, result_batch(store, path) as batch:
         project = batch.project
         if operation:
@@ -171,7 +175,7 @@ def run_embedding_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -213,19 +217,18 @@ def run_embedding_job(
                 break
             plans = {}
             pending = []
+            reused_targets = set()
             try:
                 for cid in ids[start : start + options.chunk_size]:
-                    existing = project.clips_by_id[cid].embedding is not None
-                    if existing and not force and cid not in known:
-                        result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
-                        )
-                        settled.add(cid)
-                        continue
+                    task = replace(_task(project, cid), skip=not force)
                     basis = inputs(project, cid)
                     if basis["runtime"] != runtime:
                         raise StaleJobResult("Embedding runtime changed")
-                    identity_inputs: dict = {"basis": basis}
+                    semantic = embedding_identity(task, fingerprints, runtime) if task.inputs is not None and task.inputs.unchanged() else None
+                    reused = reusable_embedding(task, semantic) if semantic is not None and not force else None
+                    if reused is not None:
+                        reused_targets.add(cid)
+                    identity_inputs: dict = {"basis": basis, "analysis_key": semantic.key if semantic is not None else None, "previous": _values(project, cid)}
                     if force:
                         identity_inputs.update(
                             generation=len(known.get(cid, [])),
@@ -235,7 +238,7 @@ def run_embedding_job(
                         ResultSpec.build(
                             path,
                             kind="embeddings",
-                            version=1,
+                            version=2,
                             target_id=cid,
                             arguments=asdict(options),
                             inputs=identity_inputs,
@@ -252,13 +255,6 @@ def run_embedding_job(
                     ]
                     if matches:
                         specs = [ResultSpec(path, row["spec_json"]) for row in matches]
-                    elif existing and not force:
-                        result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
-                        )
-                        settled.add(cid)
-                        continue
-                    task = _task(project, cid)
                     plans[cid] = (basis, specs, EmbeddingApplication(project, (task,)))
                     if any(_cached(store, spec) is None for spec in specs):
                         pending.append(task)
@@ -267,11 +263,16 @@ def run_embedding_job(
                     options,
                     cancel_event=cancel,
                     model_session=model_session,
+                    fingerprints=fingerprints,
+                    runtime=runtime,
                 )
                 # Record the whole computed batch before project publication can fail.
                 for outcome in outcomes:
                     cid = outcome.clip_id
-                    if outcome.status != "succeeded":
+                    basis, specs, _ = plans[cid]
+                    if inputs(project, cid) != basis:
+                        raise StaleJobResult("Embedding inputs changed during computation")
+                    if outcome.status != "succeeded" and not (outcome.status == "skipped" and outcome.record_json is not None):
                         result[outcome.status].append(
                             {
                                 "clip_id": cid,
@@ -281,13 +282,8 @@ def run_embedding_job(
                         )
                         settled.add(cid)
                         continue
-                    basis, specs, _ = plans[cid]
-                    if inputs(project, cid) != basis:
-                        raise StaleJobResult(
-                            "Embedding inputs changed during computation"
-                        )
                     payload_json = canonical_json(
-                        {"vector": list(outcome.vector), "model": outcome.model}
+                        {"vector": list(outcome.vector), "model": outcome.model, "record_json": outcome.record_json}
                     )
                     for spec in specs:
                         store.record_result(
@@ -327,13 +323,14 @@ def run_embedding_job(
                             apply=apply,
                             is_applied=is_applied,
                         )
-                    key = "succeeded" if receipt["applied"] else "skipped"
+                    applied = receipt["applied"] and cid not in reused_targets
+                    key = "succeeded" if applied else "skipped"
                     item = (
                         {
                             "clip_id": cid,
                             "embedding_dim": len(receipt["payload"]["vector"]),
                         }
-                        if receipt["applied"]
+                        if applied
                         else {"clip_id": cid, "reason": "already_committed"}
                     )
                     result[key].append(item)

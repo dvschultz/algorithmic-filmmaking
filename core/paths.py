@@ -48,6 +48,13 @@ def get_managed_bin_dir() -> Path:
     return get_app_support_dir() / "bin"
 
 
+def get_artifact_store_dir() -> Path:
+    """Resolve derived storage through the user's configured cache location."""
+    from core.settings import load_settings
+
+    return load_settings().cache_dir / "artifacts"
+
+
 def get_bundled_bin_dir() -> Path:
     """Return the directory for binaries bundled inside a frozen app."""
     return get_base_path() / "bin"

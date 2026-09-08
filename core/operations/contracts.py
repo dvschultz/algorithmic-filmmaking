@@ -17,6 +17,7 @@ class ColorOutcome:
     colors: Palette = ()
     code: str | None = None
     message: str | None = None
+    record_json: str | None = None
 
 
 @dataclass(frozen=True)

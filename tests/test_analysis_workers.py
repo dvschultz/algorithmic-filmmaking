@@ -48,7 +48,7 @@ def _make_clip_with_thumb(clip_id, thumbnail_path, source_id="src-1", **kwargs):
 # --- ColorAnalysisWorker ---
 
 class TestColorWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_colors(self, source, sources_by_id, tmp_path):
+    def test_skip_existing_recomputes_unverified_colors(self, source, sources_by_id, tmp_path):
         from ui.workers.color_worker import ColorAnalysisWorker
 
         # Create a real file so source.file_path.exists() passes
@@ -68,7 +68,7 @@ class TestColorWorkerTaskBuilding:
         with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
             worker.run()
         assert [(o.target_id, o.status) for o in worker.result.outcomes] == [
-            ("c1", "skipped"), ("c2", "succeeded"),
+            ("c1", "succeeded"), ("c2", "succeeded"),
         ]
 
     def test_skip_existing_false_includes_all(self, source, sources_by_id, tmp_path):

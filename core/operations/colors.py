@@ -8,12 +8,15 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, replace
+import json
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Callable, Iterable
 from uuid import uuid4
 
 from core.operations.contracts import ColorOutcome, ColorResult, Palette
+from core.analysis_records import AnalysisFingerprints, AnalysisInput, model_runtime
+from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
 if TYPE_CHECKING:
     from core.analysis_target import AnalysisTarget
@@ -43,6 +46,8 @@ class ColorTarget:
     existing_colors: Palette | None = None
     file_stamp: tuple[int, int] | None = None
     missing: bool = False
+    inputs: AnalysisInput | None = None
+    record_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,8 @@ def _snapshot(target: AnalysisTarget) -> ColorTarget:
         video = None
     image = None if video is not None else target.image_path
     colors = target.dominant_colors
+    record = target.analysis_records.get("colors")
+    path = video or image
     return ColorTarget(
         target_id=target.id,
         target_type=target.target_type,
@@ -77,6 +84,12 @@ def _snapshot(target: AnalysisTarget) -> ColorTarget:
         if colors is not None
         else None,
         file_stamp=_file_stamp(video or image),
+        inputs=AnalysisInput.capture(
+            {"video" if video is not None else "image": path} if path is not None else {},
+            {"start_frame": target.start_frame, "end_frame": target.end_frame} if video is not None else {"frame_number": target.frame_number},
+            binding={"target_id": target.id, "target_type": target.target_type, "source_id": target.source_id},
+        ),
+        record_json=json.dumps(record.to_dict(), sort_keys=True) if isinstance(record, AnalysisRecord) else None,
     )
 
 
@@ -144,22 +157,54 @@ def color_request(
     )
 
 
+def color_identity(
+    target: ColorTarget, num_colors: int, fingerprints: AnalysisFingerprints,
+    runtime: dict | None = None,
+) -> AnalysisIdentity:
+    """Identify the color algorithm, its exact input range, and sampling policy."""
+    if target.inputs is None:
+        raise ValueError("Color analysis input snapshot is missing")
+    return fingerprints.identity(
+        target.inputs, operation="colors", operation_version=2,
+        model=runtime if runtime is not None else model_runtime("kmeans-rgb", ("numpy", "scikit-learn", "opencv-python")),
+        parameters={"num_colors": num_colors, "random_state": 42, "n_init": 1, "max_iter": 100},
+        sampling={"policy": "inner-15-50-85/v1" if target.video_path else "single-image/v1", "resize": [50, 50]},
+    )
+
+
+def reusable_colors(target: ColorTarget, identity: AnalysisIdentity, *, skip_empty: bool = False) -> bool:
+    if target.record_json is None or not (target.existing_colors or (skip_empty and target.existing_colors is not None)):
+        return False
+    try:
+        record = AnalysisRecord.from_dict(json.loads(target.record_json))
+        raw = record.value["dominant_colors"]
+        palette = tuple((color["r"], color["g"], color["b"]) if isinstance(color, dict) else tuple(color) for color in raw)
+        return record.reusable(identity) and palette == target.existing_colors
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def _compute_target(
-    target: ColorTarget, request: ColorRequest, cancel_event: Event | None
+    target: ColorTarget, request: ColorRequest, cancel_event: Event | None,
+    fingerprints: AnalysisFingerprints, runtime: dict,
 ) -> ColorOutcome:
     if cancel_event is not None and cancel_event.is_set():
         return ColorOutcome(target.target_id, "unprocessed", code="cancelled")
     if target.missing:
         return ColorOutcome(target.target_id, "failed", code="target_not_found")
-    existing = target.existing_colors
-    if request.skip_existing and (
-        bool(existing) or (request.skip_empty and existing is not None)
-    ):
-        return ColorOutcome(target.target_id, "skipped", code="already_populated")
     path = target.video_path or target.image_path
     try:
         if path is None or not path.is_file():
             return ColorOutcome(target.target_id, "failed", code="source_file_missing")
+        identity = color_identity(target, request.num_colors, fingerprints, runtime)
+        if request.skip_existing and reusable_colors(target, identity, skip_empty=request.skip_empty):
+            record = AnalysisRecord.from_dict(json.loads(target.record_json or "null"))
+            assert target.inputs is not None
+            record = replace(record, input_json=json.dumps(target.inputs.to_dict(), sort_keys=True))
+            return ColorOutcome(
+                target.target_id, "skipped", target.existing_colors or (), code="valid_analysis",
+                record_json=json.dumps(record.to_dict(), sort_keys=True),
+            )
         try:
             from core.analysis.color import extract_dominant_colors
         except ImportError as exc:
@@ -174,14 +219,24 @@ def _compute_target(
         )
         if not colors:
             return ColorOutcome(target.target_id, "failed", code="no_colors_extracted")
+        if target.inputs is None or not target.inputs.unchanged():
+            return ColorOutcome(target.target_id, "failed", code="stale_input")
+        record = AnalysisRecord.success(
+            identity, {"dominant_colors": colors}, input_snapshot=target.inputs.to_dict(),
+        )
         return ColorOutcome(
             target.target_id,
             "succeeded",
             tuple((int(r), int(g), int(b)) for r, g, b in colors),
+            record_json=json.dumps(record.to_dict(), sort_keys=True),
         )
     except ColorDependencyError:
         raise
     except Exception as exc:  # noqa: BLE001 — one failed clip must not discard the batch
+        from core.jobs.media import FingerprintCancelled
+
+        if isinstance(exc, FingerprintCancelled):
+            return ColorOutcome(target.target_id, "unprocessed", code="cancelled")
         return ColorOutcome(
             target.target_id, "failed", code="extraction_failed", message=str(exc)
         )
@@ -193,6 +248,8 @@ def compute_colors(
     parallelism: int = 1,
     cancel_event: Event | None = None,
     progress_callback: Callable[[int, int, ColorOutcome], None] | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
+    runtime: dict | None = None,
 ) -> ColorResult:
     """Compute with bounded dispatch; callbacks run on the calling thread.
 
@@ -202,6 +259,8 @@ def compute_colors(
     workers = min(max(1, parallelism), 8)
     outcomes: dict[str, ColorOutcome] = {}
     pending_targets = iter(request.targets)
+    fingerprints = fingerprints if fingerprints is not None else AnalysisFingerprints(cancel_event)
+    runtime = runtime if runtime is not None else model_runtime("kmeans-rgb", ("numpy", "scikit-learn", "opencv-python"))
 
     def cancelled() -> bool:
         return cancel_event is not None and cancel_event.is_set()
@@ -214,7 +273,7 @@ def compute_colors(
                 target = next(pending_targets, None)
                 if target is None:
                     break
-                pending.add(pool.submit(_compute_target, target, request, cancel_event))
+                pending.add(pool.submit(_compute_target, target, request, cancel_event, fingerprints, runtime))
 
         dispatch()
         while pending:
@@ -265,7 +324,7 @@ class ColorApplication:
         updated = []
         outcomes = []
         for target, outcome in zip(self.request.targets, result.outcomes):
-            if outcome.status == "succeeded":
+            if outcome.status == "succeeded" or (outcome.status == "skipped" and outcome.record_json is not None):
                 current = _project_target(
                     self.project,
                     target.target_id,
@@ -276,14 +335,29 @@ class ColorApplication:
                     outcome = replace(
                         outcome, status="failed", colors=(), code="stale_input"
                     )
-                elif target.target_type == "frame":
-                    self.project.update_frame(
-                        target.target_id, dominant_colors=list(outcome.colors)
-                    )
                 else:
-                    clip = self.project.clips_by_id[target.target_id]
-                    clip.dominant_colors = list(outcome.colors)
-                    updated.append(clip)
+                    if outcome.status == "skipped" and outcome.record_json == target.record_json:
+                        outcomes.append(outcome)
+                        continue
+                    record = (
+                        AnalysisRecord.from_dict(json.loads(outcome.record_json))
+                        if outcome.record_json else AnalysisRecord.legacy({"dominant_colors": outcome.colors})
+                    )
+                    if outcome.record_json and (
+                        record.identity is None or record.identity.operation != "colors"
+                        or record.value != {"dominant_colors": [list(c) for c in outcome.colors]}
+                        or target.inputs is None
+                        or json.loads(record.input_json or "null") != target.inputs.to_dict()
+                    ):
+                        outcome = replace(outcome, status="failed", code="invalid_analysis_record")
+                    else:
+                        self.project.record_analysis(target.target_type, target.target_id, "colors", record)
+                        if target.target_type == "frame":
+                            self.project.update_frame(target.target_id, dominant_colors=list(outcome.colors))
+                        else:
+                            clip = self.project.clips_by_id[target.target_id]
+                            clip.dominant_colors = list(outcome.colors)
+                            updated.append(clip)
             outcomes.append(outcome)
         if updated:
             self.project.update_clips(updated)

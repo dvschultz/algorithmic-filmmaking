@@ -181,11 +181,21 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["kind"] == "gui_embeddings":
             from core.operations.embeddings import EmbeddingOutcome
 
-            outcome = EmbeddingOutcome.from_dict(payload)
-            if (
-                clip.get("embedding") == list(outcome.vector)
-                and clip.get("embedding_model") == outcome.model
-            ):
+            embedding_outcome = EmbeddingOutcome.from_dict(payload)
+            matches = clip.get("embedding") == list(embedding_outcome.vector) and clip.get("embedding_model") == embedding_outcome.model
+            if embedding_outcome.record_json is not None and "embeddings" in clip.get("analysis_records", {}):
+                from models.analysis_record import AnalysisRecord
+                from core.artifacts import ArtifactStore
+
+                saved_record = AnalysisRecord.from_dict(clip["analysis_records"]["embeddings"])
+                expected_record = AnalysisRecord.from_dict(json.loads(embedding_outcome.record_json))
+                value = json.loads(ArtifactStore().read_bytes(saved_record.artifact)) if saved_record.artifact is not None else saved_record.value
+                matches = (
+                    saved_record.identity == expected_record.identity and saved_record.state == expected_record.state == "succeeded"
+                    and saved_record.provenance == expected_record.provenance and saved_record.input_json == expected_record.input_json
+                    and value == {"embedding": list(embedding_outcome.vector), "embedding_model": embedding_outcome.model}
+                )
+            if matches:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_boundary_embeddings":

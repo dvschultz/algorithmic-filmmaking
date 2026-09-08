@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from models.analysis_record import StoredAnalysisRecord, dump_analysis_records, load_analysis_records
 from typing import Optional, TYPE_CHECKING
 import uuid
 
@@ -54,6 +55,7 @@ class Frame:
     notes: str = ""
     object_labels: Optional[list[str]] = None
     person_count: Optional[int] = None
+    analysis_records: dict[str, StoredAnalysisRecord] = field(default_factory=dict)
 
     def display_name(self) -> str:
         """Get a human-readable display name for this frame.
@@ -129,6 +131,8 @@ class Frame:
             data["tags"] = self.tags
         if self.notes:
             data["notes"] = self.notes
+        if self.analysis_records:
+            data["analysis_records"] = dump_analysis_records(self.analysis_records)
 
         return data
 
@@ -209,4 +213,5 @@ class Frame:
             cinematography=cinematography,
             tags=data.get("tags", []),
             notes=data.get("notes", ""),
+            analysis_records=load_analysis_records(data),
         )

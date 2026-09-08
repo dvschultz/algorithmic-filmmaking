@@ -108,7 +108,7 @@ def test_color_surfaces_use_source_ranges_and_preserve_metadata(tmp_path, surfac
 
 
 @pytest.mark.parametrize(
-    "surface, expected_calls", [("spine", 1), ("cli", 1), ("mcp", 2), ("worker", 1)]
+    "surface, expected_calls", [("spine", 2), ("cli", 2), ("mcp", 2), ("worker", 2)]
 )
 def test_color_default_recompute_policy(tmp_path, surface, expected_calls):
     project = _build_project(tmp_path, n_clips=2, populate_colors=1)

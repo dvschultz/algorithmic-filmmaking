@@ -11,7 +11,7 @@ import re
 import tempfile
 from typing import Any
 
-SCHEMA_VERSION = "1.6"
+SCHEMA_VERSION = "1.7"
 
 
 def schema_version(value: Any) -> tuple[int, ...]:
@@ -44,7 +44,22 @@ def _media_time(data: dict) -> None:
     migrate_sequence_time(data)
 
 
-MIGRATIONS = (("1.4", _multiple_sequences), ("1.5", _job_receipts), ("1.6", _media_time))
+def _analysis_records(data: dict) -> None:
+    from models.analysis_record import dump_analysis_records, load_analysis_records
+
+    for collection in ("clips", "frames", "audio_sources"):
+        for target in data.get(collection, []):
+            if not isinstance(target, dict):
+                continue  # Let the model loader report and skip malformed entries.
+            records = load_analysis_records(target)
+            if records:
+                target["analysis_records"] = dump_analysis_records(records)
+
+
+MIGRATIONS = (
+    ("1.4", _multiple_sequences), ("1.5", _job_receipts),
+    ("1.6", _media_time), ("1.7", _analysis_records),
+)
 
 
 def migrate_project_data(data: dict) -> dict:

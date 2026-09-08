@@ -48,6 +48,10 @@ class RemoveSources:
     def event_data(self) -> list[str]:
         return [source.id for source in self.removed]
 
+    @property
+    def retained_analysis_targets(self) -> tuple[Clip | Frame, ...]:
+        return self.before_clips + self.before_frames
+
     def notification_events(self, *, undo: bool) -> list[tuple[str, Any]]:
         # The aggregate event projects a fully committed library; legacy source
         # observers still receive their existing per-source notifications.

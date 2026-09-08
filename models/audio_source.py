@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from models.analysis_record import StoredAnalysisRecord, dump_analysis_records, load_analysis_records
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -27,6 +29,7 @@ class AudioSource:
     sample_rate: int = 0
     channels: int = 0
     transcript: Optional[list["TranscriptSegment"]] = None
+    analysis_records: dict[str, StoredAnalysisRecord] = field(default_factory=dict)
 
     @property
     def filename(self) -> str:
@@ -56,6 +59,8 @@ class AudioSource:
         }
         if self.transcript is not None:
             data["transcript"] = [seg.to_dict() for seg in self.transcript]
+        if self.analysis_records:
+            data["analysis_records"] = dump_analysis_records(self.analysis_records)
 
         # Store relative path if base_path provided, with absolute fallback
         if base_path:
@@ -114,4 +119,5 @@ class AudioSource:
             sample_rate=data.get("sample_rate", 0),
             channels=data.get("channels", 0),
             transcript=transcript,
+            analysis_records=load_analysis_records(data),
         )

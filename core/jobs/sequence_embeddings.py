@@ -1,6 +1,6 @@
 """Recoverable embedding prerequisites for detached GUI sequence proposals."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from threading import Event
@@ -19,11 +19,15 @@ from core.operations.boundary_embeddings import (
 from core.operations.embeddings import (
     EmbeddingOptions,
     EmbeddingOutcome,
-    EmbeddingTask,
+    embedding_task,
+    embedding_identity,
+    reusable_embedding,
     embedding_model_session,
     run_embeddings,
 )
 from models.clip import Clip, Source
+from models.analysis_record import AnalysisRecord
+from core.analysis_records import AnalysisFingerprints
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -43,7 +47,8 @@ def _target(clip: Clip, source: Source, mode: str) -> dict:
         if mode == "thumbnail"
         else {"first": clip.first_frame_embedding, "last": clip.last_frame_embedding},
         "model": clip.embedding_model,
-        "skip": clip.embedding is not None
+        "record": clip.analysis_records["embeddings"].to_dict() if mode == "thumbnail" and "embeddings" in clip.analysis_records else None,
+        "skip": False
         if mode == "thumbnail"
         else clip.first_frame_embedding is not None
         and clip.last_frame_embedding is not None,
@@ -63,6 +68,7 @@ class SequenceEmbeddingJob:
         if project is not None:
             project.session.assert_owner()
         self.mode = mode
+        self.thumbnail_tasks = tuple(replace(embedding_task(clip, source), clip_id=str(i)) for i, (clip, source) in enumerate(clips)) if mode == "thumbnail" else ()
         self.path = (
             project.path.expanduser().resolve()
             if project is not None and project.path
@@ -73,7 +79,7 @@ class SequenceEmbeddingJob:
         paths = set()
         for clip, source in clips:
             skip = (
-                clip.embedding is not None
+                False
                 if mode == "thumbnail"
                 else clip.first_frame_embedding is not None
                 and clip.last_frame_embedding is not None
@@ -143,10 +149,19 @@ class SequenceEmbeddingJob:
                     media_stamps=self.stamps,
                 )
                 journal.start(cancel)
+            fingerprints = AnalysisFingerprints(cancel, media_fingerprints=journal.fingerprints if journal is not None else None)
             for index, target in enumerate(targets):
                 if cancel.is_set():
                     break
                 cid = str(index)
+                if self.mode == "thumbnail":
+                    task = self.thumbnail_tasks[index]
+                    if task.inputs is not None and task.inputs.unchanged():
+                        identity = embedding_identity(task, fingerprints, self.runtime_identity)
+                        reused = reusable_embedding(task, identity)
+                        if reused is not None:
+                            outcomes[cid] = asdict(reused)
+                            continue
                 if target["skip"]:
                     outcomes[cid] = {"clip_id": cid, "status": "skipped"}
                     continue
@@ -216,20 +231,14 @@ class SequenceEmbeddingJob:
                             EmbeddingOutcome | BoundaryEmbeddingOutcome, ...
                         ]
                         if self.mode == "thumbnail":
-                            tasks = tuple(
-                                EmbeddingTask(
-                                    cid,
-                                    Path(t["thumbnail_path"])
-                                    if t["thumbnail_path"]
-                                    else None,
-                                )
-                                for cid, t in chunk
-                            )
+                            tasks = tuple(self.thumbnail_tasks[int(cid)] for cid, _ in chunk)
                             computed = run_embeddings(
                                 tasks,
                                 EmbeddingOptions(),
                                 cancel_event=cancel,
                                 model_session=session,
+                                fingerprints=fingerprints,
+                                runtime=self.runtime_identity,
                             )
                         else:
                             boundary_tasks = tuple(
@@ -273,7 +282,7 @@ class SequenceEmbeddingJob:
                 journal.store.close()
 
     def _validate_payload(self, payload: dict) -> None:
-        if payload["status"] != "succeeded":
+        if payload["status"] != "succeeded" and not (self.mode == "thumbnail" and payload["status"] == "skipped" and payload.get("record_json") is not None):
             return
         if self.mode == "thumbnail":
             EmbeddingOutcome.from_dict(payload)
@@ -370,10 +379,14 @@ class SequenceEmbeddingJob:
             for (clip, _), payload in zip(clips, payloads):
                 if cancel.is_set():
                     return
-                if payload["status"] != "succeeded":
+                if payload["status"] != "succeeded" and not (self.mode == "thumbnail" and payload["status"] == "skipped" and payload.get("record_json") is not None):
+                    if self.mode == "thumbnail":
+                        clip.embedding = None
                     continue
                 if self.mode == "thumbnail":
                     clip.embedding = list(payload["vector"])
+                    if payload.get("record_json") is not None:
+                        clip.analysis_records["embeddings"] = AnalysisRecord.from_dict(json.loads(payload["record_json"]))
                 else:
                     clip.first_frame_embedding = list(payload["first"])
                     clip.last_frame_embedding = list(payload["last"])

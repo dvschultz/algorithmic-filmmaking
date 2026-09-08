@@ -84,6 +84,27 @@ def test_snapshot_for_save_is_independent_of_live_project(tmp_path):
     assert snapshot["clips"][0].shot_type is None
 
 
+def test_queued_save_retains_artifacts_after_new_project(qapp, tmp_path, monkeypatch):
+    from core.artifacts import ArtifactStore
+    from models.analysis_record import AnalysisRecord
+    from tests.test_analysis_records import identity
+    from ui.main_window import SaveProjectWorker
+
+    root = tmp_path / "artifacts"
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: root)
+    store = ArtifactStore(root)
+    project = _make_project_with_clip(tmp_path)
+    with store.pin() as producer:
+        ref = store.put_bytes(b"embedding", pin=producer)
+        project.record_analysis("clip", "clip-1", "embeddings", AnalysisRecord.success(identity(operation="embeddings"), artifact=ref))
+    worker = SaveProjectWorker(project.snapshot_for_save(), tmp_path / "queued.json")
+    project.clear()
+    assert store.collect() == []
+    worker.run()
+    assert store.collect() == []
+    assert store.read_bytes(ref) == b"embedding"
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 def test_desktop_save_preserves_manual_project_name_and_undo(
     qapp, tmp_path, monkeypatch, asynchronous

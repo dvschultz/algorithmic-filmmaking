@@ -144,6 +144,7 @@ class ColorAnalysisWorker(CancellableWorker):
                         colors=tuple(tuple(c) for c in o["colors"]),
                         code=o["code"],
                         message=o["message"],
+                        record_json=o.get("record_json"),
                     )
                     for o in payload["outcomes"]
                 )

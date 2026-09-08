@@ -141,7 +141,7 @@ class TestWorkerTaskBuilding:
             ("frame-1", "succeeded"),
         ]
 
-    def test_color_worker_skips_existing(self, image_file):
+    def test_color_worker_recomputes_unverified_colors(self, image_file):
         from ui.workers.color_worker import ColorAnalysisWorker
 
         target = AnalysisTarget(
@@ -155,8 +155,10 @@ class TestWorkerTaskBuilding:
             analysis_targets=[target],
             skip_existing=True,
         )
-        worker.run()
-        assert worker.result.outcomes[0].status == "skipped"
+        with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]) as extract:
+            worker.run()
+        extract.assert_called_once()
+        assert worker.result.outcomes[0].status == "succeeded"
 
     def test_color_worker_processes_existing_when_disabled(self, image_file):
         from ui.workers.color_worker import ColorAnalysisWorker

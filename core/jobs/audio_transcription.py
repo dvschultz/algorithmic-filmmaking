@@ -150,6 +150,7 @@ def run_audio_transcription_job(
                     return {"missing": True}
                 metadata = target.to_dict()
                 metadata.pop("transcript", None)
+                metadata.pop("analysis_records", None)
                 return {
                     "project_id": current.metadata.id,
                     "audio": metadata,

@@ -17,6 +17,34 @@ from models.frame import Frame
 from models.sequence import Sequence, SequenceClip
 
 
+def test_portable_analysis_revalidates_bundle_media_instead_of_originals(tmp_path):
+    from unittest.mock import patch
+    from core.analysis_availability import operation_is_complete_for_clip
+    from core.spine.analyze import analyze_colors
+    from tests.test_description_operations import project_with_thumbnails
+
+    project = project_with_thumbnails(tmp_path, 1)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+        analyze_colors(project)
+    original_record = project.clips[0].analysis_records["colors"]
+    destination = tmp_path / "bundle"
+    export_project_bundle(project, destination, include_clips=False)
+    restored = Project.load(next(destination.glob("*.sceneripper")))
+    try:
+        assert restored.clips[0].analysis_records["colors"].identity == original_record.identity
+        assert not operation_is_complete_for_clip("colors", restored.clips[0])
+        with patch("core.analysis.color.extract_dominant_colors") as extract:
+            analyze_colors(restored)
+        extract.assert_not_called()  # Same content can be rebound without inference.
+        assert operation_is_complete_for_clip("colors", restored.clips[0])
+        restored.sources[0].file_path.write_bytes(b"different bundled video")
+        assert project.sources[0].file_path.exists()
+        assert not operation_is_complete_for_clip("colors", restored.clips[0])
+        assert project.clips[0].analysis_records["colors"] == original_record
+    finally:
+        restored.close_writer()
+
+
 def _make_source(tmp_path: Path, name: str = "video.mp4", size: int = 1024) -> Source:
     """Create a Source with a real file on disk."""
     video_file = tmp_path / name
@@ -76,6 +104,52 @@ def _make_project(
         sequence=sequence,
         audio_sources=audio_sources or [],
     )
+
+
+def test_bundle_includes_managed_analysis_and_restores_on_another_machine(tmp_path, monkeypatch):
+    from core.artifacts import ArtifactStore
+    from models.analysis_record import AnalysisRecord
+    from tests.test_analysis_records import identity
+
+    root = tmp_path / "first-cache"
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: root)
+    store = ArtifactStore(root)
+    source = _make_source(tmp_path)
+    clip = Clip(id="clip", source_id=source.id, notes="Keep this note")
+    project = _make_project(sources=[source], clips=[clip])
+    payload = json.dumps({"embedding": [1.0] * 768, "embedding_model": "dinov2-vit-b-14"}).encode()
+    with store.pin() as producer:
+        ref = store.put_bytes(payload, pin=producer, media_type="application/json")
+        project.record_analysis("clip", clip.id, "embeddings", AnalysisRecord.success(identity(operation="embeddings"), artifact=ref))
+    dest = tmp_path / "bundle"
+    export_project_bundle(project, dest, include_clips=False)
+    assert (dest / "artifacts" / f"{ref.digest}.blob").read_bytes() == payload
+    second_root = tmp_path / "second-cache"
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: second_root)
+    restored = Project.load(dest / "Test Project.sceneripper")
+    assert restored.clips[0].embedding == [1.0] * 768
+    assert restored.clips[0].notes == "Keep this note"
+    assert restored.clips[0].analysis_records["embeddings"].artifact == ref
+    restored.session.close()
+    assert ArtifactStore(second_root).collect() == []
+
+
+def test_bundle_stages_unsaved_inline_embeddings_before_manifest(tmp_path, monkeypatch):
+    from core.spine.analyze import embeddings
+    from tests.test_description_operations import project_with_thumbnails
+
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: tmp_path / "cache")
+    project = project_with_thumbnails(tmp_path, 1)
+    monkeypatch.setattr("core.analysis.embeddings.extract_clip_embeddings_batch", lambda paths: [[0.1] * 768 for _ in paths])
+    monkeypatch.setattr("core.analysis.embeddings.unload_model", lambda: None)
+    embeddings(project)
+    dest = tmp_path / "bundle"
+    result = export_project_bundle(project, dest, include_clips=False)
+    assert result.artifacts_copied == 1
+    saved = json.loads(next(dest.glob("*.sceneripper")).read_text())
+    assert "embedding" not in saved["clips"][0]
+    ref = saved["clips"][0]["analysis_records"]["embeddings"]["artifact"]
+    assert (dest / "artifacts" / (ref["sha256"] + ".blob")).is_file()
 
 
 class TestBuildFilenameMap:

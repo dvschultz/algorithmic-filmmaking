@@ -38,6 +38,7 @@ class ExportResult:
     clips_exported: int = 0
     clips_skipped: int = 0
     thumbnails_copied: int = 0
+    artifacts_copied: int = 0
     sources_skipped: list[str] = field(default_factory=list)
     frames_skipped: list[str] = field(default_factory=list)
     audio_sources_skipped: list[str] = field(default_factory=list)
@@ -94,6 +95,22 @@ def export_project_bundle(
     include_clips: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+) -> ExportResult:
+    """Keep derived inputs alive for the entire portable bundle export."""
+    from core.artifacts import ArtifactLease, analysis_references
+
+    refs = analysis_references((*project.clips, *project.frames, *project.audio_sources))
+    with ArtifactLease(refs, project.artifact_store.root if refs else None):
+        return _export_project_bundle(project, dest_dir, include_videos, include_clips, progress_callback, cancel_check)
+
+
+def _export_project_bundle(
+    project: Project,
+    dest_dir: Path,
+    include_videos: bool,
+    include_clips: bool,
+    progress_callback: Optional[Callable[[int, int, str], None]],
+    cancel_check: Optional[Callable[[], bool]],
 ) -> ExportResult:
     """Export a project as a self-contained bundle folder.
 
@@ -260,24 +277,21 @@ def export_project_bundle(
                 file_path = source.file_path
             # Create a shallow copy with rewritten file_path
             from dataclasses import replace
-            rewritten = replace(source, file_path=file_path)
-            rewritten_sources.append(rewritten)
+            rewritten_sources.append(replace(source, file_path=file_path))
 
         # Build rewritten Frame objects
         rewritten_frames = []
         for frame in project.frames:
             bundle_rel = frame_name_map.get(frame.file_path, f"frames/{frame.file_path.name}")
             from dataclasses import replace
-            rewritten = replace(frame, file_path=Path(bundle_rel))
-            rewritten_frames.append(rewritten)
+            rewritten_frames.append(replace(frame, file_path=Path(bundle_rel)))
 
         # Build rewritten AudioSource objects
         rewritten_audio_sources: list[AudioSource] = []
         for audio in project.audio_sources:
             bundle_rel = audio_name_map.get(audio.file_path, f"audio/{audio.filename}")
             from dataclasses import replace
-            rewritten = replace(audio, file_path=Path(bundle_rel))
-            rewritten_audio_sources.append(rewritten)
+            rewritten_audio_sources.append(replace(audio, file_path=Path(bundle_rel)))
 
         # Copy clip thumbnails into the bundle and build rewritten Clip objects.
         # Carries cached thumbnails across machines so re-opening a bundle skips
@@ -315,12 +329,19 @@ def export_project_bundle(
             rewritten_audio_sources,
             rewritten_clips,
             music_paths=audio_name_map,
+            cancel_check=cancel_check,
         )
+        artifact_files = list((dest_dir / "artifacts").glob("*.blob"))
+        result.artifacts_copied = len(artifact_files)
+        result.total_bytes += sum(file.stat().st_size for file in artifact_files)
 
         if progress_callback:
             progress_callback(total_files, total_files, "Done")
 
     except Exception:
+        if cancel_check and cancel_check():
+            _cleanup_partial_bundle(dest_dir)
+            return result
         # On error, leave partial bundle on disk (per spec) but re-raise
         raise
 
@@ -409,6 +430,7 @@ def _write_bundle_project_file(
     rewritten_audio_sources,
     rewritten_clips,
     music_paths: Optional[dict[Path, str]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """Write the project JSON with rewritten paths.
 
@@ -421,6 +443,7 @@ def _write_bundle_project_file(
         if sequence.music_path and music_paths:
             sequence.music_path = music_paths.get(Path(sequence.music_path), sequence.music_path)
     snapshot["extra_data"]["_portable"] = True
+    snapshot["extra_data"]["_cancel_check"] = cancel_check
     snapshot.update(
         sources=rewritten_sources, clips=rewritten_clips,
         frames=rewritten_frames, audio_sources=rewritten_audio_sources,

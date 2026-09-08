@@ -112,11 +112,24 @@ class ProjectSession:
             self._observers.remove(callback)
 
     def _notify(self) -> None:
+        if self._closed:
+            self.project.release_artifacts()
+        else:
+            self.project.retain_artifacts()
         for callback in tuple(self._observers):
             try:
                 callback()
             except Exception:
                 logger.exception("Project session observer failed")
+
+    @property
+    def retained_analysis_targets(self) -> tuple[object, ...]:
+        """Library objects retained by reversible removal commands."""
+        return tuple(
+            target
+            for entry in (*self._undo, *self._redo)
+            for target in getattr(entry.command, "retained_analysis_targets", ())
+        )
 
     @property
     def retained_sequences(self) -> list[Sequence]:

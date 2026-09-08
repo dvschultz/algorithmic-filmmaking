@@ -55,7 +55,7 @@ class GuiResultJournal:
         self.results: dict[str, GuiResultReceipt] = {}
         self.target_id_field = target_id_field
 
-    def start(self, cancel: Event) -> None:
+    def start(self, cancel: Event, *, allow_missing_receipts: bool = False) -> None:
         from core.settings import load_settings
 
         self.store = JobStore(load_settings().cache_dir / "jobs.db")
@@ -64,6 +64,8 @@ class GuiResultJournal:
         for result_id, receipt_digest in self.receipts.items():
             row = self.store.get_result(result_id)
             if row is None:
+                if allow_missing_receipts:
+                    continue
                 raise StaleJobResult("Committed result payload is missing")
             if sha256(row["spec_json"].encode()).hexdigest() != result_id:
                 raise StaleJobResult("Committed result identity is corrupt")

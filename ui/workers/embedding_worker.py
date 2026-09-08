@@ -15,7 +15,7 @@ from core.jobs.spec import OperationSpec
 from core.operations.embeddings import (
     EmbeddingOptions,
     EmbeddingOutcome,
-    EmbeddingTask,
+    embedding_task,
     run_embeddings,
 )
 from ui.workers.base import CancellableWorker, summarize_clip_errors
@@ -53,11 +53,7 @@ class EmbeddingAnalysisWorker(CancellableWorker):
         super().__init__(parent)
         self.options = EmbeddingOptions(max(1, chunk_size))
         self.tasks = tuple(
-            EmbeddingTask(
-                c.id,
-                Path(c.thumbnail_path) if c.thumbnail_path else None,
-                skip_existing and c.embedding is not None,
-            )
+            embedding_task(c, (project.sources_by_id if project is not None else (sources_by_id or {})).get(c.source_id), skip_existing=skip_existing)
             for c in clips
         )
         self.result: tuple[EmbeddingOutcome, ...] = ()
@@ -81,18 +77,18 @@ class EmbeddingAnalysisWorker(CancellableWorker):
         paths = {
             task.thumbnail_path
             for task in self.tasks
-            if task.thumbnail_path and not task.skip
+            if task.thumbnail_path
         }
         paths.update(
             Path(targets[t.clip_id]["source_path"])
             for t in self.tasks
-            if not t.skip and targets[t.clip_id]["source_path"]
+            if targets[t.clip_id]["source_path"]
         )
         self._media_stamps = {path: media_stamp(path) for path in paths}
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="embeddings",
-                version=1,
+                version=2,
                 arguments={"clip_ids": [t.clip_id for t in self.tasks]},
                 inputs={
                     "targets": targets,
@@ -145,7 +141,7 @@ class EmbeddingAnalysisWorker(CancellableWorker):
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
+            elif value.status == "succeeded" or (value.status == "skipped" and value.record_json is not None):
                 self.outcome_ready.emit(value)
                 self.embedding_ready.emit(value.clip_id)
             elif value.status == "failed":

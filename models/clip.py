@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 import uuid
 
+from models.analysis_record import StoredAnalysisRecord, dump_analysis_records, load_analysis_records
+
 logger = logging.getLogger(__name__)
 
 # Valid embedding dimensions (CLIP ViT-B/32 = 512, DINOv2 ViT-B/14 = 768)
@@ -312,6 +314,7 @@ class Clip:
     gaze_pitch: Optional[float] = None  # Vertical gaze angle in degrees (positive = down)
     gaze_category: Optional[str] = None  # "at_camera", "looking_left", "looking_right", "looking_up", "looking_down"
     disabled: bool = False  # Excluded from sequence/export when True
+    analysis_records: dict[str, StoredAnalysisRecord] = field(default_factory=dict)
 
     @property
     def duration_frames(self) -> int:
@@ -504,6 +507,8 @@ class Clip:
             data["gaze_category"] = self.gaze_category
         if self.disabled:
             data["disabled"] = True
+        if self.analysis_records:
+            data["analysis_records"] = dump_analysis_records(self.analysis_records)
         return data
 
     @classmethod
@@ -624,4 +629,5 @@ class Clip:
             gaze_pitch=_validate_optional_float(data.get("gaze_pitch"), "gaze_pitch"),
             gaze_category=_validate_gaze_category(data.get("gaze_category")),
             disabled=data.get("disabled", False),
+            analysis_records=load_analysis_records(data),
         )

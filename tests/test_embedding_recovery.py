@@ -174,15 +174,15 @@ def test_corrupt_receipt_does_not_recompute(setup, column):
     compute.assert_called_once()
 
 
-def test_manual_embedding_edit_is_preserved(setup):
+def test_changed_embedding_projection_requires_recomputation(setup):
     path, _, compute = setup
     run(setup)
     project = Project.load(path)
     project.clips[0].embedding[0] = 0.99
     assert project.save()
     run(setup)
-    assert Project.load(path).clips[0].embedding[0] == 0.99
-    compute.assert_called_once()
+    assert Project.load(path).clips[0].embedding[0] == 0.123456789
+    assert compute.call_count == 2
 
 
 def test_generic_plan_retains_embeddings_after_later_failure(setup, monkeypatch):

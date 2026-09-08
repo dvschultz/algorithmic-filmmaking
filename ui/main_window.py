@@ -188,6 +188,9 @@ class SaveProjectWorker(QThread):
         self._snapshot = snapshot
         self.filepath = filepath
         self._writer = writer
+        from core.artifacts import ArtifactLease
+
+        self._artifact_lease = ArtifactLease.for_snapshot(snapshot)
 
     def run(self):
         try:
@@ -212,6 +215,8 @@ class SaveProjectWorker(QThread):
         except Exception as e:
             logger.error("Project save failed: %s", e, exc_info=True)
             self.save_finished.emit(False, str(self.filepath), str(e))
+        finally:
+            self._artifact_lease.close()
 
 
 class SequenceExportWorker(QThread):

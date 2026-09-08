@@ -1,8 +1,9 @@
 """Unified input for analysis operations on Clips or Frames."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
+from models.analysis_record import StoredAnalysisRecord
 
 if TYPE_CHECKING:
     from models.clip import Clip, Source
@@ -37,6 +38,9 @@ class AnalysisTarget:
     extracted_texts: Optional[list] = None
     cinematography: object = None
     person_count: Optional[int] = None
+    analysis_records: dict[str, StoredAnalysisRecord] = field(default_factory=dict)
+    source_id: Optional[str] = None
+    frame_number: Optional[int] = None
 
     @classmethod
     def from_clip(cls, clip: "Clip", source: "Optional[Source]") -> "AnalysisTarget":
@@ -62,6 +66,8 @@ class AnalysisTarget:
             extracted_texts=clip.extracted_texts,
             cinematography=clip.cinematography,
             person_count=clip.person_count,
+            analysis_records=dict(clip.analysis_records),
+            source_id=clip.source_id,
         )
 
     @classmethod
@@ -87,4 +93,7 @@ class AnalysisTarget:
             extracted_texts=frame.extracted_texts,
             cinematography=frame.cinematography,
             person_count=frame.person_count,
+            analysis_records=dict(frame.analysis_records),
+            source_id=frame.source_id,
+            frame_number=frame.frame_number,
         )

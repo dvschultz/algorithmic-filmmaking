@@ -77,7 +77,7 @@ def test_cancel_preserves_completed_and_accounts_for_unprocessed(tmp_path):
     ]
 
 
-def test_skip_policy_is_explicit_for_empty_palettes(tmp_path):
+def test_legacy_empty_palette_is_not_reused_without_provenance(tmp_path):
     project = _build_project(tmp_path, 1)
     project.clips[0].dominant_colors = []
     with patch(
@@ -85,9 +85,9 @@ def test_skip_policy_is_explicit_for_empty_palettes(tmp_path):
     ) as extract:
         assert (
             compute_colors(color_request(project, skip_empty=True)).outcomes[0].status
-            == "skipped"
+            == "succeeded"
         )
-        extract.assert_not_called()
+        assert extract.call_count == 1
         assert (
             compute_colors(color_request(project, skip_empty=False)).outcomes[0].status
             == "succeeded"

@@ -6,6 +6,7 @@ import pytest
 
 from models.clip import Source
 from tests.conftest import make_test_clip
+from tests.analysis_fixtures import verify_clip_analysis
 
 
 @pytest.fixture
@@ -37,11 +38,13 @@ def source():
     )
 
 
-def test_quick_run_disables_completed_operation_items(analyze_tab, source):
+def test_quick_run_disables_completed_operation_items(analyze_tab, source, tmp_path):
     clips = [
         make_test_clip("c1", dominant_colors=[(1, 2, 3)]),
         make_test_clip("c2", dominant_colors=[(4, 5, 6)]),
     ]
+    for clip in clips:
+        verify_clip_analysis(clip, tmp_path)
     clips_by_id = {c.id: c for c in clips}
     analyze_tab.set_lookups(clips_by_id, {source.id: source})
     analyze_tab.add_clips([c.id for c in clips])

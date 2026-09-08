@@ -15,6 +15,9 @@ import threading
 from pathlib import Path
 
 from core.binary_resolver import find_binary, get_subprocess_kwargs
+from core.analysis_model_identity import (
+    DINOV2_NAME, DINOV2_REVISION, DINOV2_DIMENSIONS, DINOV2_TAG,
+)
 
 from PIL import Image
 
@@ -26,9 +29,9 @@ _processor = None
 _model_lock = threading.Lock()
 
 # DINOv2 ViT-B/14 — self-supervised vision transformer (768-dim embeddings)
-_DINOV2_MODEL_NAME = "facebook/dinov2-base"
-_EMBEDDING_DIM = 768
-_EMBEDDING_MODEL_TAG = "dinov2-vit-b-14"  # Tag stored on Clip.embedding_model
+_DINOV2_MODEL_NAME = DINOV2_NAME
+_EMBEDDING_DIM = DINOV2_DIMENSIONS
+_EMBEDDING_MODEL_TAG = DINOV2_TAG  # Tag stored on Clip.embedding_model
 
 
 def _get_model():
@@ -53,8 +56,8 @@ def _get_model():
                 pass
 
             try:
-                _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME)
-                _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME)
+                _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME, revision=DINOV2_REVISION)
+                _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME, revision=DINOV2_REVISION)
             except Exception as e:
                 if "additional_chat_templates" in str(e):
                     # Newer huggingface_hub tries to fetch additional_chat_templates
@@ -68,6 +71,7 @@ def _get_model():
 
                     local_dir = snapshot_download(
                         _DINOV2_MODEL_NAME,
+                        revision=DINOV2_REVISION,
                         allow_patterns=["*.json", "*.safetensors", "*.txt", "*.bin"],
                     )
                     _processor = AutoImageProcessor.from_pretrained(

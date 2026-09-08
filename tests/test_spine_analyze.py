@@ -80,7 +80,9 @@ def test_analyze_colors_happy_path(tmp_path):
 
 
 def test_analyze_colors_skip_existing(tmp_path):
-    project = _build_project(tmp_path, n_clips=3, populate_colors=2)
+    project = _build_project(tmp_path, n_clips=3)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+        analyze_colors(project, clip_ids=["c-0", "c-1"])
     extract_calls = []
 
     def fake_extract(**kwargs):
@@ -90,7 +92,7 @@ def test_analyze_colors_skip_existing(tmp_path):
     with patch("core.analysis.color.extract_dominant_colors", side_effect=fake_extract):
         result = analyze_colors(project)
 
-    # Two clips already had colors -> skipped; only the third was processed.
+    # Two verified records are reusable; only the third clip needs computation.
     assert len(result["result"]["skipped"]) == 2
     assert len(result["result"]["succeeded"]) == 1
     assert len(extract_calls) == 1
