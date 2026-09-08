@@ -538,11 +538,40 @@ class JobStore:
         return deleted
 
     def get_result(self, result_id: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM job_results WHERE result_id = ?", (result_id,)
-            ).fetchone()
-        return self._hydrate_result(dict(row)) if row is not None else None
+        rows = self._read_results("SELECT * FROM job_results WHERE result_id = ?", (result_id,))
+        return rows[0] if rows else None
+
+    def _read_results(self, sql: str, params: Sequence) -> list[dict]:
+        """Pin managed receipt bodies while reading outside the job connection."""
+        from models.analysis_record import ArtifactRef
+
+        artifacts = None
+        lease = None
+        try:
+            with self._connect() as conn:
+                rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+                if any(row[f"{field}_artifact_json"] is not None for row in rows for field in ("spec", "payload")):
+                    # Acquire ownership before a pruning writer can remove the
+                    # persistent receipt pin. Artifact publication releases its
+                    # transaction before taking this job-database lock.
+                    with conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+                        try:
+                            refs = [
+                                ArtifactRef.from_dict(json.loads(row[f"{field}_artifact_json"]))
+                                for row in rows for field in ("spec", "payload")
+                                if row[f"{field}_artifact_json"] is not None
+                            ]
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise StaleJobResult("Job result reference is corrupt") from exc
+                        if refs:
+                            artifacts = self._artifact_store()
+                            lease = artifacts.create_pin(refs)
+            return [self._hydrate_result(row) for row in rows]
+        finally:
+            if artifacts is not None and lease is not None:
+                artifacts.release_pin(lease)
 
     def _hydrate_result(self, row: dict) -> dict:
         """Resolve payloads outside the job connection to avoid lock inversion."""
@@ -564,22 +593,17 @@ class JobStore:
         return row
 
     def get_pending_results(self, result_ids: Sequence[str]) -> list[dict]:
-        """Read pending receipts in bounded queries using one connection."""
+        """Read pending receipts in bounded queries with managed-payload leases."""
         if not result_ids:
             return []
         rows: list[dict] = []
-        with self._connect() as conn:
-            for offset in range(0, len(result_ids), 500):
-                batch = result_ids[offset : offset + 500]
-                placeholders = ",".join("?" for _ in batch)
-                rows.extend(
-                    dict(row)
-                    for row in conn.execute(
-                        f"SELECT * FROM job_results WHERE committed=0 AND result_id IN ({placeholders})",
-                        batch,
-                    ).fetchall()
-                )
-        return [self._hydrate_result(row) for row in rows]
+        for offset in range(0, len(result_ids), 500):
+            batch = result_ids[offset : offset + 500]
+            placeholders = ",".join("?" for _ in batch)
+            rows.extend(self._read_results(
+                f"SELECT * FROM job_results WHERE committed=0 AND result_id IN ({placeholders})", batch,
+            ))
+        return rows
 
     def get_download_receipt(self, request_id: str) -> dict | None:
         with self._connect() as conn:

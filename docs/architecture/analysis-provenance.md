@@ -794,6 +794,14 @@ vectors alone no longer make a deleted or modified payload look complete. Both
 boundary failure cases reproduced before the fix; 121 artifact, bundle, boundary,
 and cost regressions pass. Scoped availability typing and changed-file Ruff pass.
 
+Managed computation-receipt reads now acquire temporary artifact pins under the
+job-database writer lock before hydrating external bodies. Single and batched
+reads retain their payloads during concurrent receipt deletion/collection and
+release leases after successful or failed reads. Both cleanup-race tests failed
+before the fix; 141 receipt/history/scalar regressions pass. Scoped store typing
+and changed-file Ruff pass. This is a prerequisite for pruning; no automatic
+receipt deletion policy is enabled yet.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

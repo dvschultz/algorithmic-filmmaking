@@ -654,7 +654,11 @@ Boundary embedding completion now checks managed payload availability as well as
 projection identity, so deleted/modified files require revalidation even while
 vectors remain in memory. Both failure cases reproduced; 121 artifact, bundle,
 boundary, and cost regression tests pass. Scoped availability typing and changed-file
-Ruff are clean. Receipt pruning and abandoned-pin reconciliation remain pending.
+Ruff are clean. Receipt readers now lease managed payloads before concurrent
+cleanup can retire their persisted pins. Both single/batched read races reproduced;
+141 receipt/history/scalar regression tests pass, including lease release after
+failed reads. Scoped store typing and changed-file Ruff pass. Receipt pruning
+policy and abandoned-pin reconciliation remain pending.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

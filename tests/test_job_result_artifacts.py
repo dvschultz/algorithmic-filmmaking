@@ -132,3 +132,42 @@ def test_concurrent_duplicate_writers_keep_one_durable_owner(tmp_path):
     assert artifacts.collect() == []
     with sqlite3.connect(artifacts.database) as db:
         assert db.execute("SELECT count(*) FROM owners").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_receipt_reader_retains_payload_during_concurrent_cleanup(tmp_path, monkeypatch, pending):
+    store = JobStore(tmp_path / "jobs.db")
+    payload = "p" * 100_000
+    store.record_result("r", "{}", payload, "d")
+    read = ArtifactStore.read_bytes
+
+    def delete_then_read(artifacts, ref):
+        with sqlite3.connect(store.db_path) as db:
+            pin = db.execute("SELECT artifact_pin FROM job_results WHERE result_id='r'").fetchone()[0]
+            db.execute("DELETE FROM job_results WHERE result_id='r'")
+        artifacts.release_pin(pin)
+        assert artifacts.collect() == []
+        return read(artifacts, ref)
+
+    monkeypatch.setattr(ArtifactStore, "read_bytes", delete_then_read)
+    result = store.get_pending_results(["r"])[0] if pending else store.get_result("r")
+    assert result["payload_json"] == payload
+    assert len(ArtifactStore(tmp_path / "artifacts").collect()) == 1
+    store.close()
+
+
+def test_failed_receipt_read_releases_temporary_lease(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "jobs.db")
+    store.record_result("r", "{}", "p" * 100_000, "d")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+
+    def fail_read(*args):
+        raise OSError("read interrupted")
+
+    monkeypatch.setattr(ArtifactStore, "read_bytes", fail_read)
+    with pytest.raises(StaleJobResult, match="unavailable or corrupt"):
+        store.get_result("r")
+    with sqlite3.connect(artifacts.database) as db:
+        assert db.execute("SELECT count(*) FROM owners").fetchone()[0] == 1
+    assert artifacts.collect() == []
+    store.close()
