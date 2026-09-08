@@ -254,9 +254,10 @@ def test_analyze_shots_thumbnail_missing(tmp_path):
 
 
 def test_transcribe_happy_path(tmp_path):
+    from core.transcription_models import TranscriptSegment
     project = _build_project(tmp_path, n_clips=2)
     fake_segments = [
-        {"start_time": 0.0, "end_time": 1.0, "text": "hello", "confidence": 0.9}
+        TranscriptSegment(0.0, 1.0, "hello", 0.9)
     ]
 
     with patch("core.transcription.transcribe_clip", return_value=fake_segments):
@@ -268,14 +269,15 @@ def test_transcribe_happy_path(tmp_path):
 
 
 def test_transcribe_skip_existing(tmp_path):
+    from core.transcription_models import TranscriptSegment
     project = _build_project(tmp_path, n_clips=2)
-    project.clips[0].transcript = [{"text": "old"}]
+    project.clips[0].transcript = [TranscriptSegment(0, 1, "old")]
 
-    with patch("core.transcription.transcribe_clip", return_value=[{"text": "new"}]):
+    with patch("core.transcription.transcribe_clip", return_value=[TranscriptSegment(0, 1, "new")]):
         result = transcribe(project)
 
-    assert len(result["result"]["skipped"]) == 1
-    assert len(result["result"]["succeeded"]) == 1
+    assert len(result["result"]["skipped"]) == 0
+    assert len(result["result"]["succeeded"]) == 2
 
 
 def test_transcribe_empty_segments_treated_as_success(tmp_path):

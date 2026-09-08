@@ -199,14 +199,16 @@ def transcribe(
     ``core.transcription`` to keep the spine import boundary clean.
     """
     from core.operations.transcription import (
-        TranscriptionApplication, TranscriptionOptions, run_transcription, snapshot_tasks,
+        TranscriptionApplication, TranscriptionOptions, run_transcription, resolve_transcription_options,
     )
+    from core.operations.transcription_records import transcription_task
 
     clips = _resolve_clip_ids(project, clip_ids)
-    tasks = snapshot_tasks(clips, project.sources_by_id, skip_existing=skip_existing)
-    application = TranscriptionApplication(project, tasks)
+    tasks = tuple(transcription_task(clip, project.sources_by_id.get(clip.source_id), skip_existing=skip_existing) for clip in clips)
+    options = resolve_transcription_options(TranscriptionOptions(model=model, language=language))
+    application = TranscriptionApplication(project, tasks, options)
     outcomes = run_transcription(
-        tasks, TranscriptionOptions(model=model, language=language),
+        tasks, options,
         cancel_event=cancel_event,
         progress=(lambda current, total: progress_callback(current / total, f"Transcribing ({current}/{total})")) if progress_callback else None,
     )
@@ -219,6 +221,9 @@ def transcribe(
                 continue
             succeeded.append({"clip_id": clip.id, "segment_count": len(outcome.segments)})
         elif outcome.status == "skipped":
+            if outcome.can_apply and not applied:
+                failed.append({"clip_id": clip.id, "code": "stale_target", "message": "Transcription target changed during execution"})
+                continue
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
         elif outcome.status == "failed":
             failed.append({"clip_id": clip.id, "code": outcome.code, "message": outcome.message})

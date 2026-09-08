@@ -20,7 +20,7 @@ def test_cancel_stops_unscheduled_tasks_and_preserves_order():
 
     with patch(
         "core.operations.transcription.compute_task",
-        side_effect=lambda task, _: TranscriptionOutcome(task.clip_id, "succeeded"),
+        side_effect=lambda task, _, **kwargs: TranscriptionOutcome(task.clip_id, "succeeded"),
     ):
         outcomes = run_transcription(
             tasks,
@@ -81,7 +81,7 @@ def test_mlx_parallelism_is_serial_and_callbacks_stay_on_caller():
     maximum = 0
     lock = threading.Lock()
 
-    def compute(task, options):
+    def compute(task, options, **kwargs):
         nonlocal active, maximum
         with lock:
             active += 1
@@ -155,7 +155,7 @@ def test_critical_failure_preserves_running_success():
 
     gate = Barrier(2)
 
-    def compute(task, options):
+    def compute(task, options, **kwargs):
         gate.wait(timeout=3)
         return TranscriptionOutcome(
             task.clip_id,

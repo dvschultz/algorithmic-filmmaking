@@ -374,8 +374,27 @@ clips cannot silently switch cloud models. Retrying a failed save with the same
 frozen model reuses the computed result; a new request selecting another model
 does not recover that result. The combined regression run, including all MCP
 tests, passed 312 tests; scoped typing passed for all seven changed modules.
-Shared transcript records, semantic reuse, and record-aware delivery migration
-remain unfinished. Legacy transcript presence still controls existing skip paths.
+Shared clip transcription and the direct headless operation now support verified
+records. The identity includes media content, frame range/frame rate, resolved
+backend and actual model, provider packages, FFmpeg/ffprobe identity, language,
+segmentation, and inference configuration. Batches share media hashes. Verified
+empty transcripts are reusable; old display values require recomputation. New
+timestamps on identical media refresh bindings without inference. Model and
+settings changes invalidate reuse, while parallelism does not.
+
+Publication checks the prior transcript/record, source and clip objects, range,
+media stamps, requested settings, and exact detached input binding. Failures retain
+the earlier displayed transcript and publish failed verification state. Malformed
+inference output is a failure; valid negative segment log probabilities remain
+supported. Legacy raw delivery clears verification. Runtime or media changes
+during computation discard the result.
+
+The migration regression run passed 357 tests including MCP coverage, with 74
+follow-up tests after guard refinements and 26 final record tests including shared
+hashing and binding refresh. Scoped operation typing and changed-file Ruff passed.
+GUI workers/journals and durable jobs still use the legacy task path and do not yet
+carry verified transcript records. Their existing field-presence skip behavior,
+standalone audio, alignment, and completion indicators remain to migrate.
 
 ## Remaining U10 work
 

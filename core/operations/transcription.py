@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import json
 from math import isfinite
 from pathlib import Path
 from threading import Event
@@ -14,6 +15,7 @@ from core.operations.contracts import OutcomeStatus
 
 if TYPE_CHECKING:
     from core.project import Project
+    from core.analysis_records import AnalysisFingerprints
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class TranscriptionTask:
     fps: float
     skip: bool = False
     error: str | None = None
+    analysis_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +41,9 @@ class TranscriptionOptions:
     cloud_model: str | None = None
 
 
-def resolve_transcription_options(options: TranscriptionOptions) -> TranscriptionOptions:
+def resolve_transcription_options(
+    options: TranscriptionOptions,
+) -> TranscriptionOptions:
     """Freeze backend and cloud settings before queueing or identifying a batch."""
     from core.transcription import _resolve_backend, transcription_model
 
@@ -60,6 +65,19 @@ class TranscriptionOutcome:
     code: str | None = None
     message: str | None = None
     critical: bool = False
+    record_json: str | None = None
+
+    @property
+    def has_result(self) -> bool:
+        return self.status == "succeeded" or (
+            self.status == "skipped" and self.record_json is not None
+        )
+
+    @property
+    def can_apply(self) -> bool:
+        return self.has_result or (
+            self.status == "failed" and self.record_json is not None
+        )
 
 
 def snapshot_tasks(
@@ -98,8 +116,10 @@ def snapshot_tasks(
     return tuple(tasks)
 
 
-def compute_task(
-    task: TranscriptionTask, options: TranscriptionOptions
+def _compute_task(
+    task: TranscriptionTask,
+    options: TranscriptionOptions,
+    on_execution: Callable[[dict[str, str | None]], None] | None = None,
 ) -> TranscriptionOutcome:
     from core.transcription_models import (
         FFmpegNotFoundError,
@@ -134,6 +154,7 @@ def compute_task(
             segmentation_mode=options.segmentation_mode,
             segment_max_seconds=options.segment_max_seconds,
             cloud_model=options.cloud_model,
+            on_execution=on_execution,
         )
         return TranscriptionOutcome(
             task.clip_id, "succeeded", tuple(deepcopy(segments))
@@ -157,6 +178,117 @@ def compute_task(
         )
 
 
+def compute_task(
+    task: TranscriptionTask,
+    options: TranscriptionOptions,
+    *,
+    fingerprints: AnalysisFingerprints | None = None,
+) -> TranscriptionOutcome:
+    """Verify detached records before inference and retain failed execution state."""
+    if task.analysis_json is None:
+        return _compute_task(task, options)
+    if (
+        task.error is not None
+        or task.source_path is None
+        or not task.source_path.is_file()
+    ):
+        return _compute_task(replace(task, skip=False), options)
+    from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+    from core.operations.transcription_records import (
+        transcription_identity,
+        transcription_runtime,
+        transcription_segments_value,
+    )
+    from core.transcription import _has_audio_stream
+    from core.transcription_models import TranscriptSegment
+    from models.analysis_record import AnalysisRecord
+
+    try:
+        options = resolve_transcription_options(options)
+        snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+        fingerprints = fingerprints or AnalysisFingerprints()
+        runtime = transcription_runtime(options)
+        if (
+            task.source_path is not None
+            and _has_audio_stream(task.source_path) is False
+        ):
+            runtime = transcription_runtime(
+                options,
+                execution={
+                    "backend": "audio-probe",
+                    "model": None,
+                    "input_mode": "no-audio",
+                },
+            )
+        identity = transcription_identity(snapshot, options, fingerprints, runtime)
+        reused = snapshot.reusable_record(identity) if task.skip else None
+        if reused is not None:
+            if (
+                not snapshot.inputs.unchanged()
+                or transcription_runtime(options, execution=runtime["execution"])
+                != runtime
+            ):
+                return TranscriptionOutcome(task.clip_id, "failed", code="stale_input")
+            return TranscriptionOutcome(
+                task.clip_id,
+                "skipped",
+                tuple(
+                    TranscriptSegment.from_dict(s) for s in reused.value["transcript"]
+                ),
+                code="valid_analysis",
+                record_json=json.dumps(reused.to_dict(), sort_keys=True),
+            )
+        execution = None
+        execution_runtime = None
+
+        def report(value: dict[str, str | None]) -> None:
+            nonlocal execution, execution_runtime
+            execution = dict(value)
+            execution_runtime = transcription_runtime(options, execution=execution)
+
+        outcome = _compute_task(replace(task, skip=False), options, report)
+        if outcome.status == "succeeded":
+            try:
+                transcription_segments_value(outcome.segments)
+            except (ValueError, AttributeError, TypeError) as exc:
+                outcome = replace(
+                    outcome,
+                    status="failed",
+                    segments=(),
+                    code="invalid_result",
+                    message=str(exc),
+                )
+        actual = execution_runtime if execution_runtime is not None else runtime
+        if (
+            not snapshot.inputs.unchanged()
+            or transcription_runtime(options, execution=runtime["execution"]) != runtime
+            or transcription_runtime(options, execution=actual["execution"]) != actual
+        ):
+            return TranscriptionOutcome(task.clip_id, "failed", code="stale_input")
+        identity = transcription_identity(snapshot, options, fingerprints, actual)
+        record = (
+            AnalysisRecord.success(
+                identity,
+                {"transcript": [s.to_dict() for s in outcome.segments]},
+                input_snapshot=snapshot.inputs.to_dict(),
+            )
+            if outcome.status == "succeeded"
+            else replace(
+                AnalysisRecord.failure(
+                    identity, outcome.message or outcome.code or "Transcription failed"
+                ),
+                input_json=json.dumps(snapshot.inputs.to_dict(), sort_keys=True),
+            )
+        )
+        return replace(
+            outcome, record_json=json.dumps(record.to_dict(), sort_keys=True)
+        )
+    except Exception as exc:
+        return TranscriptionOutcome(
+            task.clip_id, "failed", code="stale_input", message=str(exc)
+        )
+
+
 def run_transcription(
     tasks: tuple[TranscriptionTask, ...],
     options: TranscriptionOptions,
@@ -173,6 +305,9 @@ def run_transcription(
         1 if options.backend == "mlx-whisper" else min(max(1, options.parallelism), 4)
     )
     cancelled = cancel_event or Event()
+    from core.analysis_records import AnalysisFingerprints
+
+    fingerprints = AnalysisFingerprints(cancelled)
     outcomes: dict[int, TranscriptionOutcome] = {}
     next_index = 0
     halted = False
@@ -185,9 +320,14 @@ def run_transcription(
                 and len(pending) < parallelism
                 and next_index < len(tasks)
             ):
-                pending[pool.submit(compute_task, tasks[next_index], options)] = (
-                    next_index
-                )
+                pending[
+                    pool.submit(
+                        compute_task,
+                        tasks[next_index],
+                        options,
+                        fingerprints=fingerprints,
+                    )
+                ] = next_index
                 next_index += 1
             if not pending:
                 break
@@ -241,10 +381,18 @@ def _media_stamp(path: Path | None) -> tuple[int, int, int, int, int] | None:
 class TranscriptionApplication:
     """Owner-thread, one-use application of results to unchanged clip targets."""
 
-    def __init__(self, project: Project, tasks: tuple[TranscriptionTask, ...]) -> None:
+    def __init__(
+        self,
+        project: Project,
+        tasks: tuple[TranscriptionTask, ...],
+        options: TranscriptionOptions | None = None,
+    ) -> None:
         project.session.assert_owner()
         self.project = project
         self.session_id = project.session.session_id
+        self.options = (
+            resolve_transcription_options(options) if options is not None else None
+        )
         self._consumed: set[str] = set()
         self._targets: dict[str, tuple] = {}
         stamps = {
@@ -276,8 +424,7 @@ class TranscriptionApplication:
             project is not self.project
             or project.session.session_id != self.session_id
             or not any(
-                o.status == "succeeded" and o.clip_id not in self._consumed
-                for o in outcomes
+                o.can_apply and o.clip_id not in self._consumed for o in outcomes
             )
         ):
             return tuple(False for _ in outcomes)
@@ -287,7 +434,7 @@ class TranscriptionApplication:
             updated = [
                 project.clips_by_id[o.clip_id]
                 for o, valid in zip(outcomes, accepted)
-                if valid
+                if valid and o.status == "succeeded"
             ]
             if updated:
                 project.update_clips(updated)
@@ -296,7 +443,7 @@ class TranscriptionApplication:
         return project.session.apply_external(publish)
 
     def _apply(self, project: Project, outcome: TranscriptionOutcome) -> bool:
-        if outcome.status != "succeeded" or outcome.clip_id in self._consumed:
+        if not outcome.can_apply or outcome.clip_id in self._consumed:
             return False
         self._consumed.add(outcome.clip_id)
         binding = self._targets.get(outcome.clip_id)
@@ -321,5 +468,62 @@ class TranscriptionApplication:
             or _media_stamp(task.source_path) != stamp
         ):
             return False
-        clip.transcript = list(deepcopy(outcome.segments))
+        from core.analysis_records import AnalysisSnapshot
+        from core.operations.transcription_records import (
+            transcription_parameters,
+            transcription_value,
+            transcription_task,
+            transcription_segments_value,
+        )
+        from models.analysis_record import AnalysisRecord
+
+        try:
+            value = transcription_segments_value(outcome.segments)
+        except (ValueError, AttributeError, TypeError):
+            return False
+        if outcome.record_json is not None:
+            try:
+                record = AnalysisRecord.from_dict(json.loads(outcome.record_json))
+                snapshot = (
+                    AnalysisSnapshot.from_json(task.analysis_json)
+                    if task.analysis_json
+                    else None
+                )
+                previous = clip.analysis_records.get("transcribe")
+                if not isinstance(previous, AnalysisRecord):
+                    previous = None
+                current_json = transcription_task(clip, source).analysis_json
+                if (
+                    snapshot is None
+                    or record.identity is None
+                    or current_json is None
+                    or snapshot.inputs
+                    != AnalysisSnapshot.from_json(current_json).inputs
+                    or record.identity.operation != "transcribe"
+                    or record.identity.to_dict()["operation_version"] != 2
+                    or record.identity.to_dict()["schema_version"] != 1
+                    or previous != snapshot.record
+                    or transcription_value(clip) != json.loads(snapshot.value_json)
+                    or not snapshot.inputs.unchanged()
+                    or json.loads(record.input_json or "null")
+                    != snapshot.inputs.to_dict()
+                    or (
+                        self.options is not None
+                        and record.identity.to_dict()["parameters"]
+                        != transcription_parameters(self.options)
+                    )
+                    or (
+                        outcome.has_result
+                        and (record.state != "succeeded" or record.value != value)
+                    )
+                    or (outcome.status == "failed" and record.state != "failed")
+                ):
+                    return False
+            except (ValueError, TypeError, KeyError):
+                return False
+        else:
+            record = AnalysisRecord.legacy(value)
+        project.record_analysis("clip", outcome.clip_id, "transcribe", record)
+        if outcome.status == "succeeded":
+            clip.transcript = list(deepcopy(outcome.segments))
         return True

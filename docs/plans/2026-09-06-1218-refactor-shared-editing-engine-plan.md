@@ -414,8 +414,12 @@ for each provider call and accepts an explicit queued selection. The provider
 regression run passed 135 tests, with 15 follow-up execution tests. Queued clip and
 audio jobs, GUI workers/journals, and shared batches now freeze the cloud model in
 their options and match it during recovery. The subsequent regression run passed
-312 tests including MCP coverage. Shared transcript records, semantic reuse, and
-record-aware delivery remain unfinished.
+312 tests including MCP coverage. Shared clip transcription and the direct
+headless operation now retain verified success/reuse/failure records, including
+actual execution metadata and guarded publication. The migration regression run
+passed 357 tests, with 74 guard follow-up tests and 26 final record tests. GUI and
+durable-job record delivery, standalone audio, alignment, and completion indicators
+remain unfinished.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
