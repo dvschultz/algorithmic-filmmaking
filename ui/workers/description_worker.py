@@ -14,7 +14,7 @@ from PySide6.QtCore import Signal
 from core.settings import load_settings
 from core.jobs import JobRuntime
 from core.jobs.spec import OperationSpec
-from core.jobs.description import _runtime, _task_data
+from core.jobs.description import _task_data
 from core.jobs.gui_description import GuiDescriptionCache
 from core.jobs.media import media_stamp
 from ui.workers.job_adapter import (
@@ -120,7 +120,8 @@ class DescriptionWorker(CancellableWorker):
                 inputs={
                     "targets": [_task_data(task) for task in self.tasks],
                     "options": asdict(self.options),
-                    "runtime": _runtime(self.options),
+                    # Actual backend identity is resolved and verified by
+                    # run_description / GuiDescriptionCache off the UI thread.
                 },
                 persistence="session_only",
                 session_id=project.session.session_id if project is not None else None,

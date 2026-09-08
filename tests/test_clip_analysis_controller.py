@@ -252,3 +252,26 @@ with patch.object(ColorAnalysisWorker, 'run', color_run), patch.object(Descripti
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_description_worker_construction_does_not_import_inference():
+    code = r'''
+import builtins
+from PySide6.QtCore import QCoreApplication
+from core.operations.description import DescriptionOptions
+from ui.workers.description_worker import DescriptionWorker
+app = QCoreApplication([])
+original_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    assert name not in ('core.analysis.description', 'mlx_vlm', 'torch', 'transformers'), name
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = guarded_import
+worker = DescriptionWorker([], options=DescriptionOptions(
+    tier='local', model='mlx-community/test', input_mode='frame'))
+assert not worker.isRunning()
+'''
+    result = subprocess.run(
+        [sys.executable, '-c', code], capture_output=True, text=True, timeout=15,
+        env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
