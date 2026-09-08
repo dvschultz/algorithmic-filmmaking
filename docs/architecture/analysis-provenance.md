@@ -692,9 +692,15 @@ same records across inline and artifact storage. Missing face payloads can be
 recomputed without treating the loss as a manual edit. Source-removal undo keeps
 artifact references alive. The regression run passed 207 tests, followed by 27
 damage/retry and 44 retention/checkpoint checks; four modules passed scoped typing
-and changed-file Ruff is clean. Portable face identity rebinding after relocation
-still needs verification and implementation; restored projections alone do not
-prove reusable computation.
+and changed-file Ruff is clean. Portable face identities now reconstruct model
+bindings from the saved file names/hashes and the current model directory, then
+verify full media and weight contents before rebinding. Identical relocated
+results reuse without inference even when the original paths are gone; changed
+video, weights, model-pack membership, range, sampling, or packages invalidate
+reuse. Loaded model caching also tracks the configured model directory and
+rejects changes during initialization. The relocation regression run passed 203
+tests plus 20 focused follow-ups; both provider and record modules pass scoped
+typing, and changed-file Ruff is clean.
 
 ## Remaining U10 work
 

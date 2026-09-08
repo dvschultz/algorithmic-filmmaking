@@ -9,7 +9,7 @@ import logging
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING, cast
 import colorsys
 import random
 
@@ -71,13 +71,19 @@ def _load_insightface():
     """
     global _model
 
+    def current() -> bool:
+        directory = (_get_model_cache_dir() / "insightface" / "models" / "buffalo_l").resolve()
+        return bool(_model is not None
+                and _model._scene_ripper_weights.directory == directory
+                and _model._scene_ripper_weights.unchanged())
+
     # Fast path: already loaded
-    if _model is not None and _model._scene_ripper_weights.unchanged():
+    if current():
         return _model
 
     with _model_lock:
         # Double-check after acquiring lock
-        if _model is None or not _model._scene_ripper_weights.unchanged():
+        if not current():
             _model = None
             logger.info("Loading InsightFace model...")
 
@@ -142,7 +148,8 @@ def _load_insightface():
                     raise
 
             # A failed prepare must never become the next call's cached model.
-            if not weights.unchanged():
+            if (not weights.unchanged()
+                    or weights.directory != (_get_model_cache_dir() / "insightface" / "models" / "buffalo_l").resolve()):
                 raise ValueError("Face model weights changed during initialization")
             candidate._scene_ripper_weights = weights
             _model = candidate
@@ -385,7 +392,7 @@ def average_embeddings(embeddings: list[list[float]]) -> list[float]:
     norm = np.linalg.norm(mean)
     if norm > 0:
         mean = mean / norm
-    return mean.tolist()
+    return cast(list[float], mean.tolist())
 
 
 def is_model_loaded() -> bool:

@@ -223,18 +223,35 @@ def verified_face_execution(
     }
 
 
-def saved_execution(record) -> dict:
+def saved_execution(record, *, directory: Path | None = None) -> dict:
     """Reconstruct bindings for worker-side full-content verification."""
     data = record.identity.to_dict()
-    inputs = AnalysisInput.from_dict(json.loads(record.input_json))
+    if directory is None:
+        inputs = AnalysisInput.from_dict(json.loads(record.input_json))
+        paths = [
+            (role, path, stamp)
+            for role, path, stamp in inputs.files
+            if role.startswith("model:")
+        ]
+    else:
+        from core.jobs.media import media_stamp
+
+        paths = []
+        for role in data["sources"]:
+            if not role.startswith("model:"):
+                continue
+            name = role.removeprefix("model:")
+            if Path(name).name != name or Path(name).suffix != ".onnx":
+                raise ValueError("Invalid saved face model filename")
+            path = directory / name
+            paths.append((role, path, media_stamp(path)))
     files = [
         {
             "path": str(path),
             "stamp": list(stamp) if stamp else [],
             "sha256": data["sources"][role],
         }
-        for role, path, stamp in inputs.files
-        if role.startswith("model:")
+        for role, path, stamp in paths
     ]
     by_name = {Path(f["path"]).name: f for f in files}
     components = []
@@ -270,10 +287,10 @@ def reusable_face_record(
         from core.jobs.media import media_stamp
         from core.analysis.faces import _get_model_cache_dir
 
-        execution = saved_execution(snapshot.record)
         directory = (
             _get_model_cache_dir() / "insightface" / "models" / "buffalo_l"
         ).resolve()
+        execution = saved_execution(snapshot.record, directory=directory)
         for item in execution["weight_files"]:
             if Path(item["path"]).parent != directory:
                 return None

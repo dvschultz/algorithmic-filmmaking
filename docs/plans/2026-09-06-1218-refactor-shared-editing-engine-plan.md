@@ -541,8 +541,13 @@ understand artifact-backed records. Damage is isolated, payloads restore from
 bundles in a fresh store, missing derived data can be recomputed, and undo retains
 references. The regression run passed 207 tests plus 27 damage/retry and 44
 retention/checkpoint checks; four modules passed scoped typing and changed-file
-Ruff is clean. Portable face identity rebinding after relocation and cost-check
-migration for the other analysis families remain pending.
+Ruff is clean. Portable face reuse now rebinds to current media and model locations
+after full-content verification; original paths need not exist. Changed media,
+weights, pack membership, range, sampling, and packages invalidate reuse. Model
+loading also respects cache-root changes, including changes during initialization.
+The relocation regression run passed 203 tests plus 20 follow-ups, with both
+provider and record modules passing scoped typing and changed-file Ruff clean.
+Cost-check migration for the other analysis families remains pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

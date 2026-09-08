@@ -14,12 +14,14 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(faces, "_model", None)
     monkeypatch.setattr(faces, "_get_model_cache_dir", lambda: tmp_path)
     from core.analysis.face_weights import FaceWeights
-    (tmp_path / "recognition.onnx").write_bytes(b"weights")
-    monkeypatch.setattr(faces, "_stage_face_weights", lambda _: FaceWeights.capture(tmp_path))
+    directory = tmp_path / "insightface" / "models" / "buffalo_l"
+    directory.mkdir(parents=True)
+    (directory / "recognition.onnx").write_bytes(b"weights")
+    monkeypatch.setattr(faces, "_stage_face_weights", lambda _: FaceWeights.capture(directory))
     monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
         get_available_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
     ))
-    return tmp_path
+    return directory
 
 
 def test_failed_prepare_never_leaves_cached_model(runtime, monkeypatch):
@@ -149,3 +151,30 @@ def test_loaded_execution_does_not_rehash_weights(runtime, monkeypatch):
     model = SimpleNamespace(models={"recognition": component}, _scene_ripper_weights=weights)
     monkeypatch.setattr("core.jobs.media.MediaFingerprints.get", Mock(side_effect=AssertionError("must not rehash")))
     assert faces.face_model_execution(model)["components"][0]["weights"]["sha256"] == sha256(b"weights").hexdigest()
+
+
+def test_model_cache_relocation_reloads_prepared_runtime(runtime, tmp_path, monkeypatch):
+    from core.analysis.face_weights import FaceWeights
+    factory = Mock(side_effect=lambda **kwargs: SimpleNamespace(prepare=Mock(), models={}))
+    monkeypatch.setattr(faces, 'ensure_face_detection_runtime_available', lambda: factory)
+    first = faces._load_insightface()
+    moved = tmp_path / 'moved-cache'
+    weights = moved / 'insightface' / 'models' / 'buffalo_l'
+    weights.mkdir(parents=True)
+    (weights / 'recognition.onnx').write_bytes(b'new model')
+    monkeypatch.setattr(faces, '_get_model_cache_dir', lambda: moved)
+    monkeypatch.setattr(faces, '_stage_face_weights', lambda _: FaceWeights.capture(weights))
+    second = faces._load_insightface()
+    assert second is not first
+    assert second._scene_ripper_weights.directory == weights.resolve()
+    assert factory.call_count == 2
+
+
+def test_cache_root_change_during_prepare_is_not_published(runtime, tmp_path, monkeypatch):
+    def prepare(**kwargs):
+        monkeypatch.setattr(faces, '_get_model_cache_dir', lambda: tmp_path / 'changed-root')
+    candidate = SimpleNamespace(prepare=prepare, models={})
+    monkeypatch.setattr(faces, 'ensure_face_detection_runtime_available', lambda: Mock(return_value=candidate))
+    with pytest.raises(ValueError, match='changed during initialization'):
+        faces._load_insightface()
+    assert faces._model is None
