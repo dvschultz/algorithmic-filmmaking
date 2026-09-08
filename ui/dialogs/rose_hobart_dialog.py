@@ -7,6 +7,7 @@ person's face appears. Named after Joseph Cornell's 1936 film.
 
 import logging
 import json
+from dataclasses import asdict
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -37,6 +38,7 @@ from core.operations.faces import (
     run_faces,
 )
 from core.jobs.media import media_stamp, MediaFingerprints
+from core.jobs.gui_faces import GuiFaceCache
 from core.operations.face_records import (
     verified_face_execution,
     face_environment,
@@ -85,6 +87,8 @@ class RoseHobartWorker(CancellableWorker):
         ordering: str,
         sample_interval: float,
         parent=None,
+        *,
+        project: "Project | None" = None,
     ):
         super().__init__(parent)
         self._reference_paths = tuple(reference_image_paths)
@@ -102,6 +106,24 @@ class RoseHobartWorker(CancellableWorker):
         self._sensitivity = sensitivity_preset
         self._ordering = ordering
         self._sample_interval = sample_interval
+        self.cache: GuiFaceCache | None = None
+        if project is not None and project.path is not None:
+            self.cache = GuiFaceCache(
+                project.path,
+                project.metadata.id,
+                {task.clip_id: task.source_id for task in self.tasks},
+                project.metadata.job_results,
+                options=self.options,
+                previous_results={
+                    clip.id: deepcopy(clip.face_embeddings) for clip, _ in clips
+                },
+                media_stamps={
+                    task.source_path: media_stamp(task.source_path)
+                    for task in self.tasks
+                    if task.source_path is not None
+                },
+                verified=True,
+            )
 
     def run(self) -> None:
         """Run face matching pipeline."""
@@ -184,14 +206,7 @@ class RoseHobartWorker(CancellableWorker):
             total = len(self._clips)
             matched = []
             match_count = 0
-            self.outcomes = run_faces(
-                self.tasks,
-                self.options,
-                cancel_event=self._cancel_event,
-                progress=lambda current, count: self.progress_message.emit(
-                    f"Analyzing clip {current} of {count}..."
-                ),
-            )
+            self.outcomes = self._analyze_faces()
 
             for i, (clip, source) in enumerate(self._clips):
                 if self.is_cancelled():
@@ -256,6 +271,29 @@ class RoseHobartWorker(CancellableWorker):
                 self.failure = "Face matching failed. Check logs for details."
                 logger.error(f"Rose Hobart generation error: {e}", exc_info=True)
                 self.error.emit(self.failure)
+
+    def _analyze_faces(self) -> tuple[FaceOutcome, ...]:
+        def deliver(outcome: FaceOutcome) -> None:
+            self.outcomes += (outcome,)
+
+        def progress(current: int, count: int) -> None:
+            self.progress_message.emit(f"Analyzing clip {current} of {count}...")
+
+        if self.cache is not None:
+            return self.cache.run(
+                self.tasks,
+                self._cancel_event,
+                lambda: not self.is_cancelled() and self.references_current(),
+                deliver,
+                progress,
+            )
+        return run_faces(
+            self.tasks,
+            self.options,
+            cancel_event=self._cancel_event,
+            on_outcome=deliver,
+            progress=progress,
+        )
 
     def references_current(self) -> bool:
         if self._reference_execution is not None:
@@ -700,6 +738,7 @@ class RoseHobartDialog(QDialog):
             ordering=self.ordering_combo.currentText(),
             sample_interval=self.sample_spin.value(),
             parent=self,
+            project=self.project,
         )
         self._application = (
             FaceApplication(self.project, self.worker.tasks, self.worker.options)
@@ -778,6 +817,25 @@ class RoseHobartDialog(QDialog):
                             ):
                                 applied = False
                                 break
+                            receipt = None
+                            if worker.cache is not None:
+                                if (
+                                    self.project.path is None
+                                    or self.project.path.resolve() != worker.cache.path
+                                ):
+                                    raise ValueError(
+                                        "Face result save location changed"
+                                    )
+                                receipt = worker.cache.results.get(outcome.clip_id)
+                                if receipt is not None:
+                                    if not receipt.matches(outcome):
+                                        raise ValueError(
+                                            "Face result differs from its receipt"
+                                        )
+                                elif worker.cache.transient_outcomes.get(
+                                    outcome.clip_id
+                                ) != asdict(outcome):
+                                    raise ValueError("Face result was not recorded")
                             expected, source = deepcopy(worker._clips[index])
                             expected.analysis_records["face_embeddings"] = (
                                 AnalysisRecord.from_dict(
@@ -796,6 +854,10 @@ class RoseHobartDialog(QDialog):
                             ):
                                 applied = False
                                 break
+                            if receipt is not None:
+                                self.project.record_job_result(
+                                    receipt.result_id, receipt.digest
+                                )
                     except Exception:
                         logger.exception("Rose Hobart publication failed")
                         applied = False

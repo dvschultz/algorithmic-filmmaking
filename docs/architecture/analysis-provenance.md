@@ -666,7 +666,14 @@ generation completion refresh the estimate without hashing or loading models.
 Sequence-tab and reference-guide estimate calls also carry their current sources.
 The regression run passed 139 tests with two modules passing scoped typing and
 changed-file Ruff clean. Other analysis-family cost checks still need migration.
-Rose Hobart still needs computed-receipt recovery and agent-path migration. Managed face
+Saved-project Rose Hobart clip analysis now uses the verified GUI face journal.
+Receipts precede owner publication and are authenticated before records are applied;
+explicit saves checkpoint accepted receipts. Interrupted publication, cancellation
+after recording, and initial model downloads recover without repeating clip
+inference. Regular face-analysis receipts also work in Rose Hobart. Reference
+images are still extracted on each attempt. The regression run passed 127 tests,
+with six recovery follow-ups, scoped dialog typing, and changed-file Ruff clean.
+Rose Hobart still needs agent-path migration. Managed face
 embedding storage also remains pending.
 
 ## Remaining U10 work
