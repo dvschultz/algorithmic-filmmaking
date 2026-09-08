@@ -510,9 +510,13 @@ clean. Controller follow-up exposed an intermittent baseline timeout caused by
 description worker construction importing the inference backend on the UI thread.
 Construction now defers that probe to worker execution; a failing import-boundary
 regression passed after the fix, along with all 139 controller and description
-tests. Rose Hobart still uses field-only face reuse and worker-side mutation, and
-its cost gate needs migration. These consumers and managed embedding storage
-remain pending.
+tests. Rose Hobart's GUI worker now uses detached verified face tasks and the
+dialog publishes records only after native exit. Cancellation retains both
+generation and reference-image workers until they stop; stale input and observer
+cancellation checks prevent sequence publication. The regression run passed 103
+tests with scoped dialog typing and changed-file Ruff. Its computed-receipt
+recovery, reference-model execution identity, agent path, and source-aware cost
+gate remain pending, along with managed face embedding storage.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

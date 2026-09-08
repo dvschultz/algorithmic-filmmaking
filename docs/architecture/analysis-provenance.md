@@ -646,9 +646,14 @@ projection without hashing files or importing InsightFace/ONNX Runtime. Operatio
 pickers compute model metadata once per scope; the general analysis controller
 dispatches verified face work instead of skipping populated legacy fields. The
 combined regression run passed 362 tests, with scoped availability typing and
-changed-file Ruff clean. The Rose Hobart worker still bypasses these shared
-operations and mutates face fields directly; its cost gate also uses field-only
-checks. Those consumers and managed embedding storage remain to migrate.
+changed-file Ruff clean. Rose Hobart's GUI worker now captures detached verified
+face tasks and uses shared analysis before matching. The dialog publishes records
+on the owner thread after native exit, rejects changed project/reference inputs,
+and retains generation and reference-image workers through cancellation. Its
+regression run passed 103 tests with scoped dialog typing and changed-file Ruff.
+Rose Hobart still needs computed-receipt recovery, reference-model execution
+identity checks, agent-path migration, and a source-aware cost gate. Managed face
+embedding storage also remains pending.
 
 ## Remaining U10 work
 

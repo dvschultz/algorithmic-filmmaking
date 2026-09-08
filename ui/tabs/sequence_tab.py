@@ -1444,6 +1444,7 @@ class SequenceTab(BaseTab):
             clips=clip_objects,
             sources_by_id=sources_by_id,
             parent=self,
+            project=self._project,
         )
 
         dialog.sequence_ready.connect(self._apply_rose_hobart_sequence)
