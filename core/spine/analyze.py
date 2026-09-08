@@ -600,23 +600,20 @@ def face_embeddings(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Extract face embeddings from clip frame samples."""
-    from core.operations.faces import FaceTask, FaceOptions, FaceApplication, run_faces
+    from core.operations.faces import face_task, FaceOptions, FaceApplication, run_faces
 
     clips = _resolve_clip_ids(project, clip_ids)
     sources = project.sources_by_id
-    tasks = tuple(FaceTask(c.id, c.source_id,
-        sources[c.source_id].file_path if c.source_id in sources else None,
-        c.start_frame, c.end_frame,
-        sources[c.source_id].fps if c.source_id in sources else 0.0,
-        skip=skip_existing and c.face_embeddings is not None) for c in clips)
-    application = FaceApplication(project, tasks)
+    tasks = tuple(face_task(c, sources.get(c.source_id), skip_existing=skip_existing) for c in clips)
+    options = FaceOptions(sample_interval)
+    application = FaceApplication(project, tasks, options)
     result: dict = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(clips)}
     def deliver(outcome):
+        if outcome.can_apply and not application.apply(project, outcome):
+            result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+            return
         if outcome.status == "succeeded":
-            if application.apply(project, outcome):
-                result["succeeded"].append({"clip_id": outcome.clip_id, "face_count": len(outcome.faces)})
-            else:
-                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+            result["succeeded"].append({"clip_id": outcome.clip_id, "face_count": len(outcome.faces)})
         elif outcome.status == "skipped":
             result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
         elif outcome.status == "failed":
@@ -624,7 +621,7 @@ def face_embeddings(
     def report(current, total):
         if progress_callback:
             progress_callback(current / total if total else 1.0, f"Face detection ({current}/{total})")
-    outcomes = run_faces(tasks, FaceOptions(sample_interval), cancel_event=cancel_event,
+    outcomes = run_faces(tasks, options, cancel_event=cancel_event,
                          on_outcome=deliver, progress=report)
     result["unprocessed"] = [{"clip_id": outcome.clip_id, "code": outcome.code} for outcome in outcomes if outcome.status == "unprocessed"]
     if progress_callback:

@@ -483,18 +483,16 @@ observers see the new words; transcription failure preserves existing alignment.
 The combined regression run passed 362 tests with scoped typing and Ruff clean.
 Detached project-free compatibility remains to audit.
 
-Face-provider work has started: failed model preparation no longer leaves a cached
-partial runtime, and extraction reports actual ONNX component paths and execution
-providers after fallback. Provider regression coverage passed 251 tests with five
-focused follow-ups. Face records, verified reuse, managed embeddings, and delivery
-surface migration remain unfinished; execution paths alone are not model content
-identities.
-
-Face loading now fingerprints staged ONNX weights before opening sessions and
-rejects weight changes during initialization or cached reuse. Execution reports
-carry those content hashes, and repeated reports do not rehash files. The
-regression run passed 259 tests with changed-file Ruff clean. Saved face result
-verification, managed embedding storage, and delivery migration remain pending.
+Face loading fingerprints staged ONNX weights before opening sessions and rejects
+changed files or failed initialization. Shared face operations and direct spine
+calls now use version 2 records with full media/model-pack hashes, actual runtime,
+sampling inputs, and save-compatible embedding precision. Valid empty results
+reuse without model loading. Guarded publication rejects stale or cancelled output
+and preserves existing faces on failure. Raw compatibility keeps its existing
+precision and task identities; older GUI receipt shapes retain authenticated IDs
+and digests. The combined regression run passed 308 tests, with four operation/job
+modules passing scoped typing and changed-file Ruff. GUI/durable face delivery,
+completion checks, and managed embedding storage remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

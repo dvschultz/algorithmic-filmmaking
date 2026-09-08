@@ -66,6 +66,9 @@ def _task(project: Project, cid: str) -> FaceTask:
 
 def _task_data(task: FaceTask) -> dict:
     data = asdict(task)
+    if task.analysis_json is None:
+        # Preserve existing version-1 receipt identities for raw callers.
+        data.pop("analysis_json")
     data["source_path"] = str(task.source_path) if task.source_path else None
     return data
 

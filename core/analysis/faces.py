@@ -183,6 +183,10 @@ def face_model_execution(model: Any) -> dict:
         "model": "buffalo_l",
         "detection_size": [640, 640],
         "components": components,
+        "weight_files": [
+            {"path": str(path), "stamp": list(stamp), "sha256": digest}
+            for path, stamp, digest in weights.files
+        ] if weights is not None else [],
     }
 
 

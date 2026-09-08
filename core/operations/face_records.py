@@ -1,0 +1,195 @@
+"""Face analysis input bindings and content identities, independent of GUI code."""
+
+from dataclasses import replace
+import json
+from math import isfinite
+from pathlib import Path
+from typing import Any
+
+from core.analysis_records import AnalysisInput, AnalysisSnapshot, model_runtime
+
+FACE_SAMPLING = {
+    "policy": "half-open-uniform-frames/v1",
+    "short_clip": "midpoint",
+    "embedding_precision": 5,
+}
+
+
+def face_value(target: Any) -> dict:
+    return face_result_value(target.face_embeddings)
+
+
+def face_result_value(faces: list[dict] | None) -> dict:
+    from core.operations.faces import Face
+
+    if faces is None:
+        return {"face_embeddings": None}
+    validated = [Face.from_dict(face).to_dict() for face in faces]
+    for face in validated:
+        face["embedding"] = [round(v, 5) for v in face["embedding"]]
+    return {"face_embeddings": validated}
+
+
+def face_snapshot(target: Any, source: Any) -> AnalysisSnapshot:
+    return AnalysisSnapshot.capture(
+        target,
+        "face_embeddings",
+        {"video": Path(source.file_path)} if source else {},
+        {
+            "start_frame": target.start_frame,
+            "end_frame": target.end_frame,
+            "fps": source.fps if source else 0.0,
+        },
+        face_value(target),
+    )
+
+
+def face_packages() -> dict:
+    return dict(
+        model_runtime(
+            "buffalo_l",
+            ("insightface", "onnxruntime", "onnxruntime-gpu", "opencv-python", "numpy"),
+        )["packages"]
+    )
+
+
+def face_environment() -> dict:
+    """Worker-only runtime selection; no face model is loaded here."""
+    import onnxruntime
+
+    return {
+        "packages": face_packages(),
+        "available_providers": list(onnxruntime.get_available_providers()),
+    }
+
+
+def face_parameters(interval: float) -> dict:
+    if isinstance(interval, bool) or not isfinite(interval) or interval <= 0:
+        raise ValueError("Invalid face sampling interval")
+    return {"sample_interval": float(interval)}
+
+
+def validate_face_frames(
+    value: dict, start: int, end: int, fps: float, interval: float
+) -> None:
+    """Every observation must belong to an actual requested frame sample."""
+    face_parameters(interval)
+    if not isfinite(fps) or fps <= 0 or start < 0 or end <= start:
+        raise ValueError("Invalid face sampling range")
+    short = (end - start) / fps < interval
+    step = max(1, int(interval * fps))
+    for face in value["face_embeddings"]:
+        frame = face.get("frame_number")
+        if (
+            frame is None
+            or not start <= frame < end
+            or (short and frame != start + (end - start) // 2)
+            or (not short and (frame - start) % step != 0)
+        ):
+            raise ValueError("Face observation does not match submitted frame sampling")
+
+
+def execution_inputs(snapshot: AnalysisSnapshot, execution: dict) -> AnalysisInput:
+    """Bind all staged files, including unselected components in the model pack."""
+    files = execution.get("weight_files", [])
+    if not files:
+        raise ValueError("Face execution did not report verified weight files")
+    captured = list(snapshot.inputs.files)
+    parents = set()
+    roles = set()
+    for item in files:
+        path = Path(item["path"]).resolve()
+        role = f"model:{path.name}"
+        if path.suffix != ".onnx" or role in roles:
+            raise ValueError("Invalid face model pack")
+        roles.add(role)
+        parents.add(path.parent)
+        captured.append((role, path, tuple(item["stamp"])))
+    if len(parents) != 1 or set(next(iter(parents)).glob("*.onnx")) != {
+        p for role, p, _ in captured if role.startswith("model:")
+    }:
+        raise ValueError("Face model pack changed")
+    result = replace(snapshot.inputs, files=tuple(sorted(captured)))
+    if not result.unchanged():
+        raise ValueError("Face media or weights changed")
+    return result
+
+
+def face_runtime(execution: dict, environment: dict) -> dict:
+    """Keep paths and stamps in bindings; semantic runtime uses content hashes."""
+    if (
+        execution.get("backend") != "insightface"
+        or execution.get("model") != "buffalo_l"
+        or execution.get("detection_size") != [640, 640]
+    ):
+        raise ValueError("Unknown face execution")
+    weights = {
+        str(Path(item["path"]).resolve()): item for item in execution["weight_files"]
+    }
+    components = []
+    for component in execution["components"]:
+        item = weights.get(str(Path(component["path"]).resolve()))
+        value = component.get("weights")
+        if (
+            item is None
+            or value is None
+            or value != {"sha256": item["sha256"], "stamp": item["stamp"]}
+        ):
+            raise ValueError("Face component fingerprint does not match its model pack")
+        if not component["providers"] or not set(component["providers"]).issubset(
+            environment["available_providers"]
+        ):
+            raise ValueError("Face execution providers are unavailable")
+        components.append(
+            {
+                "task": component["task"],
+                "file": Path(component["path"]).name,
+                "sha256": item["sha256"],
+                "providers": component["providers"],
+            }
+        )
+    tasks = [c["task"] for c in components]
+    if len(tasks) != len(set(tasks)) or not {"detection", "recognition"}.issubset(
+        tasks
+    ):
+        raise ValueError("Face execution lacks detection or recognition")
+    return {
+        **environment,
+        "model": "buffalo_l",
+        "detection_size": [640, 640],
+        "components": sorted(components, key=lambda c: c["task"]),
+    }
+
+
+def saved_execution(record) -> dict:
+    """Reconstruct bindings for worker-side full-content verification."""
+    data = record.identity.to_dict()
+    inputs = AnalysisInput.from_dict(json.loads(record.input_json))
+    files = [
+        {
+            "path": str(path),
+            "stamp": list(stamp) if stamp else [],
+            "sha256": data["sources"][role],
+        }
+        for role, path, stamp in inputs.files
+        if role.startswith("model:")
+    ]
+    by_name = {Path(f["path"]).name: f for f in files}
+    components = []
+    for component in data["model"]["components"]:
+        item = by_name[component["file"]]
+        components.append(
+            {
+                "task": component["task"],
+                "path": item["path"],
+                "providers": component["providers"],
+                "weights": {"sha256": component["sha256"], "stamp": item["stamp"]},
+            }
+        )
+    return {
+        "backend": "insightface",
+        "model": "buffalo_l",
+        "detection_size": [640, 640],
+        "components": components,
+        "weight_files": files,
+    }

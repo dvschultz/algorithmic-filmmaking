@@ -570,15 +570,13 @@ words. The combined alignment/transcription, GUI recovery, completion, and MCP
 regression run passed 362 tests; scoped typing and changed-file Ruff passed.
 Detached project-free controller/worker compatibility remains a separate audit.
 
-## Remaining U10 work
+## Face provenance
 
 Face-provider preparation now publishes the cached InsightFace model only after
 successful preparation, including accelerator-to-CPU fallback. A failed prepare
 leaves no partially initialized model for the next request. Image and clip
 extraction accept an execution callback reporting actual ONNX component paths and
-session providers before inference. Paths are not content identities: verified
-face records, worker-side weight fingerprints, managed embedding storage, and
-delivery/recovery migration remain unfinished. Provider regression coverage passed
+session providers before inference. Provider regression coverage passed
 251 tests with five focused follow-ups; changed-file Ruff passed. Scoped typing
 still reports the pre-existing NumPy `tolist()` return-type issue in
 `average_embeddings`; the pre-existing result-list annotation issue was fixed.
@@ -590,8 +588,31 @@ publication. Execution reports carry the selected components' pre-load SHA-256
 hashes and file stamps. Reports check metadata without repeating hashes, and
 components outside the captured pack are rejected. The regression run passed
 259 tests; changed-file Ruff passed. Scoped typing retains only the previously
-identified `average_embeddings` return-type issue. Binding these weight identities
-to saved face results and managed embedding artifacts is still pending.
+identified `average_embeddings` return-type issue.
+
+Shared face operations and direct spine calls now use version 2 records with
+full-content media and model-pack identities, actual component/provider selection,
+package versions, source ranges, and sampling policy. Valid empty results reuse.
+Embeddings use the existing five-decimal save precision so reopening a project
+does not invalidate the saved projection. Identical weight-file replacement can
+refresh file bindings without inference; changed content, sampling, or legacy
+values recompute. Reuse does not load the face model.
+
+Publication checks the original project/session/path, target/source objects,
+source and model file stamps, prior record, current projection, and result shape.
+Failures retain operation-owned records without overwriting faces. Cancellation,
+late changes, malformed confidence, unsampled frame observations, and missing or
+changed weight execution do not publish successful results. Raw compatibility
+retains full in-memory precision and version 1 task identities. Older GUI receipt
+shapes are normalized only after their original checksum has been verified; their
+receipt IDs and digests remain unchanged.
+
+The combined face, GUI recovery, spine, and MCP regression run passed 308 tests;
+four changed operation/job modules passed scoped typing and changed-file Ruff.
+GUI and durable-job face record delivery, completion checks, and managed face
+embedding storage remain unfinished.
+
+## Remaining U10 work
 
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,

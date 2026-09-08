@@ -1,6 +1,6 @@
 """Record GUI faces before publication and explicit project saves."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from threading import Event
@@ -19,6 +19,17 @@ from core.operations.faces import (
 
 
 class GuiFaceCache(GuiResultJournal):
+    def _accept(self, request: GuiResultRequest, row: dict) -> dict:
+        payload = super()._accept(request, row)
+        if "record_json" not in payload:
+            # The base authenticates the original receipt first. Normalize only
+            # its comparison shape; keep its original result ID and digest.
+            payload = {**payload, "record_json": None}
+            self.results[request.clip_id] = replace(
+                self.results[request.clip_id], payload_json=json.dumps(payload, sort_keys=True)
+            )
+        return payload
+
     def __init__(
         self,
         path: Path,

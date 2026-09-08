@@ -9,6 +9,7 @@ from tests.test_description_operations import project_with_thumbnails
 from ui.workers.face_detection_worker import FaceDetectionWorker
 from core.operations.faces import FaceTask, FaceOptions, FaceApplication, run_faces
 from core.analysis.faces import extract_faces_from_clip as extract_video_faces
+from tests.test_face_records import setup as verified_face_setup  # noqa: F401
 
 
 @pytest.fixture
@@ -147,10 +148,14 @@ def test_invalid_provider_result_is_failed(setup, raw):
     assert all(o.status == "failed" for o in run_faces(tasks(project), FaceOptions()))
 
 
-def test_spine_uses_same_results_and_notifies(setup):
+def test_spine_uses_same_results_and_notifies(request):
+    from dataclasses import replace
     from core.spine.analyze import face_embeddings
 
-    project, provider = setup
+    project, provider, _ = request.getfixturevalue("verified_face_setup")
+    project.add_clips([replace(project.clips[0], id="c-1", analysis_records={})])
+    original = provider.side_effect
+    provider.side_effect = lambda **kwargs: original(**kwargs) and []
     result = face_embeddings(project, sample_interval=0.5)["result"]
     assert len(result["succeeded"]) == 2
     assert all(c.face_embeddings == [] for c in project.clips)

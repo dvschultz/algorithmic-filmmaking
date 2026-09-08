@@ -81,6 +81,29 @@ def test_restart_recovers_full_precision_then_checkpoints_saved_precision(setup)
         store.close()
 
 
+def test_legacy_gui_receipt_without_record_field_recovers(setup, monkeypatch):
+    from hashlib import sha256
+    import json
+    from core.jobs.commits import canonical_json
+
+    project, compute = setup
+    original = JobStore.record_result
+
+    def legacy(self, result_id, spec_json, payload_json, payload_digest):
+        payload = json.loads(payload_json)
+        payload.pop("record_json", None)
+        encoded = canonical_json(payload)
+        return original(self, result_id, spec_json, encoded, sha256(encoded.encode()).hexdigest())
+
+    with monkeypatch.context() as patch:
+        patch.setattr(JobStore, "record_result", legacy)
+        run(project)
+    reopened = Project.load(project.path)
+    run(reopened, apply=True, prepare=Mock(side_effect=AssertionError("must recover")))
+    assert compute.call_count == 2
+    assert len(reopened.metadata.job_results) == 2
+
+
 def test_skipped_offline_source_does_not_block_other_results(setup):
     project, compute = setup
     project.clips[0].face_embeddings = []
