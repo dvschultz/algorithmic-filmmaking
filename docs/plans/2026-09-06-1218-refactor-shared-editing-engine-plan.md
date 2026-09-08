@@ -400,8 +400,9 @@ verifies saved records without duplicate history or local weight loading. Durabl
 query retries recover records with their answers; later explicit requests still
 append new history. Cinematography shared operations and direct headless calls now
 retain verified records for actual frame/video execution. GUI delivery, recovery,
-and combined clip/frame pipelines now carry those records. Its durable-job adapters
-and completion checks remain to be migrated.
+and combined clip/frame pipelines now carry those records. Durable jobs verify reuse,
+retain failed-attempt records, and recover forced refreshes without repeated
+inference. Cinematography completion and availability checks remain to be migrated.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

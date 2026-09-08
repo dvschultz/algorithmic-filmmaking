@@ -1,6 +1,7 @@
 """Cinematography results survive save/checkpoint failures without extra inference."""
 
 from threading import Event
+from dataclasses import replace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -27,10 +28,10 @@ def setup(tmp_path, monkeypatch):
     return path, store, compute
 
 
-def run(setup, **kwargs):
+def run(setup, *, options=OPTIONS, **kwargs):
     path, store, _ = setup
     return run_cinematography_job(
-        store, path, None, lambda *_: None, Event(), options=OPTIONS, **kwargs
+        store, path, None, lambda *_: None, Event(), options=options, **kwargs
     )["result"]
 
 
@@ -51,7 +52,7 @@ def test_failed_save_reuses_recorded_computation(setup):
     assert len(Project.load(path).metadata.job_results) == 2
 
 
-def test_checkpoint_failure_reconciles_and_preserves_user_edits(setup):
+def test_checkpoint_failure_reconciles_then_changed_projection_recomputes(setup):
     path, store, compute = setup
     with patch.object(
         store, "checkpoint_results", side_effect=RuntimeError("checkpoint failed")
@@ -64,8 +65,8 @@ def test_checkpoint_failure_reconciles_and_preserves_user_edits(setup):
     saved.clips[0].shot_type = "wide"
     assert saved.save()
     run(setup)
-    assert Project.load(path).clips[0].shot_type == "wide"
-    assert compute.call_count == 2
+    assert Project.load(path).clips[0].shot_type == "close-up"
+    assert compute.call_count == 3
 
 
 def test_changed_media_during_compute_is_not_saved(setup):
@@ -135,14 +136,14 @@ def test_cancel_preserves_prior_results(setup):
     assert compute.call_count == 1
 
 
-def test_missing_receipt_payload_refuses_paid_recomputation(setup):
+def test_missing_receipts_reuse_verified_project_records(setup):
     path, _, compute = setup
     run(setup)
     empty = JobStore(path.parent / "empty-jobs.db")
-    with pytest.raises(StaleJobResult, match="missing"):
-        run_cinematography_job(
-            empty, path, None, lambda *_: None, Event(), options=OPTIONS
-        )
+    result = run_cinematography_job(
+        empty, path, None, lambda *_: None, Event(), options=OPTIONS
+    )["result"]
+    assert len(result["skipped"]) == 2
     assert compute.call_count == 2
 
 
@@ -169,7 +170,11 @@ def test_generic_analysis_reuses_result_after_later_failure(setup, monkeypatch):
     from core.spine.analyze import ANALYZE_CLIP_OPERATION_MAP
 
     path, store, compute = setup
-    settings = Settings(cinematography_tier="cloud", cinematography_model="gpt-test")
+    settings = Settings(
+        cinematography_tier="cloud",
+        cinematography_model="gpt-test",
+        cinematography_input_mode="frame",
+    )
     monkeypatch.setattr("core.settings.load_settings", lambda: settings)
     monkeypatch.setitem(
         ANALYZE_CLIP_OPERATION_MAP,
@@ -237,3 +242,114 @@ def test_changed_source_media_during_compute_is_not_saved(setup):
     with pytest.raises(StaleJobResult, match="inputs changed"):
         run(setup)
     assert not Project.load(path).metadata.job_results
+
+
+def test_legacy_analysis_is_recomputed(setup):
+    path, _, compute = setup
+    project = Project.load(path)
+    for clip in project.clips:
+        clip.cinematography = CinematographyAnalysis(shot_size="MS")
+    assert project.save()
+    assert len(run(setup)["succeeded"]) == 2
+    assert compute.call_count == 2
+    assert all(
+        c.analysis_records["cinematography"].provenance == "verified"
+        for c in Project.load(path).clips
+    )
+
+
+def test_failure_record_keeps_previous_display(setup):
+    path, _, compute = setup
+    run(setup)
+    compute.side_effect = ValueError("Invalid answer")
+    assert len(run(setup, force=True)["failed"]) == 2
+    saved = Project.load(path)
+    assert all(
+        c.cinematography.shot_size == "CU"
+        and c.analysis_records["cinematography"].state == "failed"
+        for c in saved.clips
+    )
+
+
+@pytest.mark.parametrize("failure", ["save", "checkpoint"])
+def test_force_recovery_does_not_recompute_after_parallelism_change(setup, failure):
+    path, store, compute = setup
+    run(setup)
+    target = (
+        patch(
+            "core.jobs.commits.save_with_mtime_check",
+            side_effect=RuntimeError("failed"),
+        )
+        if failure == "save"
+        else patch.object(
+            store, "checkpoint_results", side_effect=RuntimeError("failed")
+        )
+    )
+    with target:
+        with pytest.raises(RuntimeError, match="failed"):
+            run(setup, force=True)
+    assert compute.call_count == 4
+    compute.side_effect = AssertionError("Must recover existing computation")
+    result = run(setup, force=True, options=replace(OPTIONS, parallelism=4))
+    assert len(result["succeeded"] if failure == "save" else result["skipped"]) == 2
+    assert compute.call_count == 4
+
+
+def test_video_fallback_is_not_reused_for_video_request(setup):
+    path, _, compute = setup
+    options = replace(OPTIONS, mode="video")
+    run(setup, options=options)
+    record = Project.load(path).clips[0].analysis_records["cinematography"]
+    assert record.identity.to_dict()["model"]["execution"]["input_mode"] == "frame"
+    assert len(run(setup, options=options)["succeeded"]) == 2
+    assert compute.call_count == 4
+
+
+def test_identical_media_refreshes_saved_bindings_without_inference(setup):
+    import os
+
+    path, _, compute = setup
+    run(setup)
+    project = Project.load(path)
+    original = project.clips[0].analysis_records["cinematography"].input_json
+    image = project.clips[0].thumbnail_path
+    stat = image.stat()
+    os.utime(image, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    assert len(run(setup)["skipped"]) == 2
+    assert compute.call_count == 2
+    assert (
+        Project.load(path).clips[0].analysis_records["cinematography"].input_json
+        != original
+    )
+
+
+def test_large_forced_refresh_has_no_partial_save_generation(tmp_path, monkeypatch):
+    project = project_with_thumbnails(tmp_path, 18)
+    assert project.save(tmp_path / "project.json")
+    compute = Mock(return_value=CinematographyAnalysis(shot_size="CU"))
+    monkeypatch.setattr("core.analysis.cinematography.analyze_cinematography", compute)
+    setup = project.path, JobStore(tmp_path / "jobs.db"), compute
+    with patch(
+        "core.jobs.commits.save_with_mtime_check",
+        side_effect=RuntimeError("save failed"),
+    ):
+        with pytest.raises(RuntimeError, match="save failed"):
+            run(setup, force=True)
+    assert all(c.cinematography is None for c in Project.load(project.path).clips)
+    assert len(run(setup, force=True)["succeeded"]) == 18
+    assert compute.call_count == 18
+
+
+def test_changed_runtime_invalidates_unsaved_receipt(setup, monkeypatch):
+    with patch(
+        "core.jobs.commits.save_with_mtime_check",
+        side_effect=RuntimeError("save failed"),
+    ):
+        with pytest.raises(RuntimeError):
+            run(setup)
+    monkeypatch.setattr(
+        "core.operations.cinematography.model_runtime",
+        lambda *args: {"packages": {"test": "changed"}},
+    )
+    assert len(run(setup)["succeeded"]) == 2
+    assert setup[2].call_count == 4

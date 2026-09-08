@@ -92,6 +92,7 @@ class GuiCinematographyCache(GuiResultJournal):
                     raise StaleJobResult("Cinematography source changed while queued")
                 data = {
                     **_task_data(task),
+                    "snapshot_json": task.snapshot_json,
                     "previous_cinematography": previous[task.clip_id],
                     "source_media": self.fingerprints.get(task.source_path),
                     "runtime": cinematography_runtime(task, self.options),

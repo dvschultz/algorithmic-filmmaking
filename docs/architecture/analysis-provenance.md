@@ -325,7 +325,14 @@ reused and failed outcomes have exact delivery guards without successful receipt
 GUI recovery checks full media/runtime identity, excludes parallelism from receipt
 matching, tolerates missing old receipts, and requires the exact record at explicit
 save. The combined pipelines queue existing cinematography for verification.
-Durable headless receipts and completion/availability checks still need migration;
+Durable headless jobs now carry the records through result receipts and project
+saves. Legacy or stale display values require recomputation; valid project records
+can be reused even after old receipt rows are removed. Identical media with new
+timestamps refreshes record bindings without inference. Failures preserve previous
+display values while saving failed verification state. Forced refreshes publish as
+one batch and recover from save/checkpoint failures without repeated inference;
+parallelism is excluded from receipt matching. A frame fallback does not satisfy a
+later video request. Completion/availability checks still need migration;
 cinematography and U10 remain incomplete.
 
 ## Remaining U10 work

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from threading import Event
 from typing import Callable
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from models.analysis_record import AnalysisRecord
 
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
@@ -16,19 +18,15 @@ from core.operations.cinematography import (
     CinematographyOptions,
     CinematographyOutcome,
     CinematographyTask,
+    cinematography_task,
+    cinematography_runtime,
+    cinematography_identity,
+    cinematography_parameters,
     resolve_options,
     run_cinematography,
 )
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
-
-
-def _runtime(options: CinematographyOptions) -> dict:
-    if options.tier != "local":
-        return {"backend": "cloud"}
-    from core.analysis.description import is_mlx_vlm_available
-
-    return {"backend": "mlx" if is_mlx_vlm_available() else "unavailable"}
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -45,18 +43,14 @@ def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
 def _task(project: Project, cid: str) -> CinematographyTask:
     clip = project.clips_by_id[cid]
     source = project.sources_by_id.get(clip.source_id)
-    return CinematographyTask(
-        cid,
-        clip.thumbnail_path,
-        source.file_path if source and source.file_path.exists() else None,
-        clip.start_frame,
-        clip.end_frame,
-        source.fps if source else None,
-    )
+    return cinematography_task(clip, source, skip_existing=False)
 
 
 def _task_data(task: CinematographyTask) -> dict:
     data = asdict(task)
+    data.pop("snapshot_json")
+    data["skip"] = False
+    data["analysis_version"] = 2 if task.snapshot_json else 1
     for key in ("thumbnail_path", "source_path"):
         data[key] = str(data[key]) if data[key] is not None else None
     return data
@@ -85,6 +79,7 @@ def cinematography_job_spec(
             {
                 **_task_data(task),
                 **_source_data(project, cid),
+                "runtime": cinematography_runtime(task, options),
                 "image_stamp": media_stamp(task.thumbnail_path)
                 if task.thumbnail_path
                 else None,
@@ -96,12 +91,11 @@ def cinematography_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="cinematography",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={
             "targets": targets,
             "options": asdict(options),
-            "runtime": _runtime(options),
         },
         persistence="job_history",
         session_id=project.session.session_id,
@@ -123,15 +117,19 @@ def run_cinematography_job(
     *,
     options: CinematographyOptions | None = None,
     operation: OperationSpec | None = None,
+    force: bool = False,
 ) -> dict:
-    """Reuse completed computation after failed saves, without implicit provider calls."""
+    """Verify saved analysis or recover computed results before publication."""
     options = (
         CinematographyOptions(**json.loads(operation.inputs_json)["options"])
         if operation
         else (options or resolve_options())
     )
-    runtime = _runtime(options)
-    fingerprint = MediaFingerprints(cancel).get
+    if operation is not None:
+        force = bool(operation.arguments.get("force", force))
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -146,11 +144,13 @@ def run_cinematography_job(
             if live.inputs_json != operation.inputs_json:
                 raise StaleJobResult("Cinematography inputs changed while queued")
         ids = _ids(project, clip_ids)
+        if force:
+            batch.max_items = max(1, len(ids))
         known: dict[str, list[tuple[dict, dict, dict]]] = {}
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -173,7 +173,7 @@ def run_cinematography_job(
                 "task": _task_data(task),
                 "image": fingerprint(task.thumbnail_path),
                 "source": fingerprint(task.source_path),
-                "runtime": _runtime(options),
+                "runtime": cinematography_runtime(task, options),
             }
 
         def output(current: Project, cid: str) -> dict:
@@ -183,7 +183,24 @@ def run_cinematography_job(
                 if clip.cinematography
                 else None,
                 "shot_type": clip.shot_type,
+                "record_json": json.dumps(
+                    clip.analysis_records["cinematography"].to_dict(), sort_keys=True
+                )
+                if "cinematography" in clip.analysis_records
+                else None,
             }
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "cinematography", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("cinematography")
+                == record,
+            )
 
         result: dict = {
             "succeeded": [],
@@ -200,49 +217,76 @@ def run_cinematography_job(
                 break
             clip = project.clips_by_id[cid]
             existing = clip.cinematography is not None
-            if existing and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
                 basis = inputs(project, cid)
-                if basis["runtime"] != runtime:
-                    raise StaleJobResult("Cinematography runtime changed")
                 task = _task(project, cid)
-                identity_inputs: dict = {"basis": basis}
-                arguments = asdict(options)
+                assert task.snapshot_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.snapshot_json)
+                semantic = (
+                    cinematography_identity(
+                        snapshot, options, fingerprints, basis["runtime"]
+                    )
+                    if snapshot.inputs.unchanged()
+                    else None
+                )
+                reused = (
+                    snapshot.reusable_record(semantic)
+                    if semantic is not None and not force
+                    else None
+                )
+                identity_inputs: dict = {
+                    "basis": basis,
+                    "previous_cinematography": output(project, cid),
+                }
+                if force:
+                    identity_inputs["refresh_generation"] = len(known.get(cid, []))
+                arguments = cinematography_parameters(options)
                 spec = ResultSpec.build(
                     path,
                     kind="cinematography",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs=identity_inputs,
                 )
                 specs = [spec]
-                if existing:
+                if force:
+                    for row, identity, payload in known.get(cid, []):
+                        if (
+                            not row["committed"]
+                            and identity["project_path"] == str(path)
+                            and identity["arguments"] == arguments
+                            and identity["inputs"]["basis"] == basis
+                            and payload == output(project, cid)
+                        ):
+                            specs = [ResultSpec(path, row["spec_json"])]
+                            break
+                if existing and not force:
                     matches = [
                         row
-                        for row, identity, payload in known[cid]
-                        if identity["project_path"] == str(path)
+                        for row, identity, payload in known.get(cid, [])
+                        if reused is not None
+                        and identity["project_path"] == str(path)
                         and identity["inputs"]["basis"] == basis
                         and identity["arguments"] == arguments
                         and payload == output(project, cid)
                     ]
-                    if not matches:
+                    if matches:
+                        specs = [ResultSpec(path, row["spec_json"]) for row in matches]
+                    elif reused is not None:
+                        if reused != clip.analysis_records.get("cinematography"):
+                            stage_record(cid, reused, basis)
                         result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
+                            {"clip_id": cid, "reason": "valid_analysis"}
                         )
                         continue
-                    specs = [ResultSpec(path, row["spec_json"]) for row in matches]
 
-                application = CinematographyApplication(project, (task,))
+                application = CinematographyApplication(project, (task,), options)
 
                 def compute(task=task):
-                    outcome = run_cinematography((task,), options, cancel_event=cancel)[
-                        0
-                    ]
+                    outcome = run_cinematography(
+                        (task,), options, cancel_event=cancel, fingerprints=fingerprints
+                    )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(outcome)
                     analysis = outcome.analysis
@@ -250,11 +294,15 @@ def run_cinematography_job(
                     return {
                         "analysis": analysis.to_dict(),
                         "shot_type": analysis.get_simple_shot_type(),
+                        "record_json": outcome.record_json,
                     }
 
                 def apply(current, payload, cid=cid, application=application):
                     outcome = CinematographyOutcome(
-                        cid, "succeeded", json.dumps(payload["analysis"])
+                        cid,
+                        "succeeded",
+                        json.dumps(payload["analysis"]),
+                        record_json=payload["record_json"],
                     )
                     if not application.apply(current, outcome):
                         raise StaleJobResult(
@@ -293,6 +341,16 @@ def run_cinematography_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult(
+                        "Cinematography inputs changed during computation"
+                    )
+                if outcome.can_apply and outcome.record_json is not None:
+                    stage_record(
+                        cid,
+                        AnalysisRecord.from_dict(json.loads(outcome.record_json)),
+                        basis,
+                    )
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )
