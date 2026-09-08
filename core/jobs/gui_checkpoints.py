@@ -317,6 +317,9 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         else:
             from core.analysis.alignment import distribute_words_to_segments
 
+            if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("align_words") != json.loads(payload["record_json"]):
+                continue
+
             segments = [
                 TranscriptSegment.from_dict(s)
                 for s in json.loads(identity["inputs"]["task"]["transcript_json"])

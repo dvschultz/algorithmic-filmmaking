@@ -455,8 +455,14 @@ spine route now carry verified records binding media, editorial transcript, cach
 model revision, and actual execution; failed attempts preserve existing words.
 Empty word results reuse, changed inputs invalidate reuse, and late owner delivery
 is guarded. The shared regression run passed 271 tests, with 43 final focused tests
-and clean scoped typing. GUI/durable alignment recovery and completion checks
-remain to migrate, along with the broader U10 audit.
+and clean scoped typing. Project-backed GUI alignment now carries verified records
+through queued delivery and recovery, authenticates transient reuse/failure,
+checks saved records before acknowledgement, and skips preparation on reuse.
+First model loading updates recovery identity without repeating inference on
+restart. The GUI regression run passed 246 tests, with 16 focused follow-ups and
+clean scoped typing. The standalone word-source picker compatibility path,
+durable alignment recovery, and completion checks remain to migrate, along with
+the broader U10 audit.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 from queue import Empty, Queue
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,7 @@ class ForcedAlignmentWorker(CancellableWorker):
 
     progress = Signal(int, int)
     clip_aligned = Signal(str, list)
+    outcome_ready = Signal(object)
     alignment_completed = Signal()
 
     def __init__(
@@ -49,7 +51,10 @@ class ForcedAlignmentWorker(CancellableWorker):
         self.tasks = tuple(
             task
             for task in snapshot_alignment_tasks(
-                clips or [], sources_by_id or {}, skip_existing=skip_existing
+                clips or [],
+                sources_by_id or {},
+                skip_existing=skip_existing,
+                verified=project is not None,
             )
             if task.skip_reason is None and task.target.source_path is not None
         )
@@ -118,17 +123,46 @@ class ForcedAlignmentWorker(CancellableWorker):
         events: Queue[tuple[str, tuple]] = Queue()
 
         def emit_event(event: tuple[str, tuple]) -> None:
+            if self.is_cancelled():
+                return
             kind, args = event
             if kind == "progress":
                 self.progress.emit(*args)
             elif kind == "aligned":
                 self.clip_aligned.emit(*args)
+            elif kind == "outcome":
+                self.outcome_ready.emit(*args)
 
         def compute(progress, cancel):
             try:
+                from core.operations.alignment_records import alignment_runtime
+
+                for target in json.loads(self.operation.inputs_json)["targets"]:
+                    expected_runtime = target.get("runtime")
+                    if expected_runtime is not None:
+                        current_runtime = alignment_runtime()
+                        if expected_runtime.get("revision") is None:
+                            current_runtime["revision"] = None
+                        if current_runtime != expected_runtime:
+                            raise ValueError("Alignment runtime changed while queued")
+                prepared = False
+                preparation_error = None
+
+                def prepare_once():
+                    nonlocal prepared, preparation_error
+                    if prepared:
+                        return not cancel.is_set()
+                    try:
+                        prepared = self._prepare()
+                        return prepared
+                    except Exception as exc:
+                        preparation_error = str(exc)
+                        raise
 
                 def deliver(outcome: AlignmentOutcome) -> None:
-                    if outcome.status == "succeeded":
+                    if outcome.can_apply:
+                        events.put(("outcome", (outcome,)))
+                    if outcome.has_result:
                         events.put(("aligned", (outcome.clip_id, list(outcome.words))))
 
                 def report(current: int, total: int) -> None:
@@ -140,12 +174,7 @@ class ForcedAlignmentWorker(CancellableWorker):
 
                 if self.cache is not None:
                     outcomes = self.cache.run(
-                        self.tasks, cancel, self._prepare, deliver, report
-                    )
-                elif not self._prepare():
-                    outcomes = tuple(
-                        AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled")
-                        for task in self.tasks
+                        self.tasks, cancel, prepare_once, deliver, report
                     )
                 else:
                     outcomes = run_alignment(
@@ -153,8 +182,13 @@ class ForcedAlignmentWorker(CancellableWorker):
                         cancel_event=cancel,
                         on_outcome=deliver,
                         progress=report,
+                        prepare=prepare_once,
                     )
-                return {"outcomes": [asdict(outcome) for outcome in outcomes]}
+                return {
+                    "outcomes": [asdict(outcome) for outcome in outcomes],
+                    "success": preparation_error is None,
+                    "error": preparation_error,
+                }
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
 

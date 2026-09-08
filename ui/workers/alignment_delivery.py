@@ -1,6 +1,7 @@
 """Owner-thread alignment publication scoped to one tab run and project."""
 
 from PySide6.QtCore import Slot
+from dataclasses import asdict
 
 from ui.workers.qt_lifetime import RetiringQObject
 
@@ -19,7 +20,10 @@ class AlignmentDelivery(RetiringQObject):
         self._delivered: set[str] = set()
         worker.progress.connect(self.progress)
         worker.error.connect(self.error)
-        worker.clip_aligned.connect(self.aligned)
+        if hasattr(worker, "outcome_ready"):
+            worker.outcome_ready.connect(self.receive)
+        else:
+            worker.clip_aligned.connect(self.aligned)
         worker.alignment_completed.connect(self.completed)
         worker.finished.connect(self.finished)
 
@@ -29,6 +33,7 @@ class AlignmentDelivery(RetiringQObject):
             and self.tab._alignment_generation == self.generation
             and self.tab._project_provider() is self.project
             and self.project.session.session_id == self.session_id
+            and not getattr(self.worker, "is_cancelled", lambda: False)()
         )
 
     @Slot(int, int)
@@ -43,6 +48,13 @@ class AlignmentDelivery(RetiringQObject):
 
     @Slot(str, list)
     def aligned(self, clip_id: str, words: list) -> None:
+        self.receive(AlignmentOutcome(clip_id, "succeeded", tuple(words)))
+
+    @Slot(object)
+    def receive(self, outcome: AlignmentOutcome) -> None:
+        if not isinstance(outcome, AlignmentOutcome) or not outcome.can_apply:
+            return
+        clip_id = outcome.clip_id
         if not self._current() or clip_id in self._delivered:
             return
         self._delivered.add(clip_id)
@@ -55,9 +67,14 @@ class AlignmentDelivery(RetiringQObject):
             )
             return
         try:
-            receipt = cache.results[clip_id] if cache is not None else None
-            outcome = AlignmentOutcome(clip_id, "succeeded", tuple(words))
-            if receipt is not None and not receipt.matches(outcome):
+            receipt = cache.results.get(clip_id) if cache is not None else None
+            if cache is not None and (
+                (receipt is not None and not receipt.matches(outcome))
+                or (
+                    receipt is None
+                    and cache.transient_outcomes.get(clip_id) != asdict(outcome)
+                )
+            ):
                 raise ValueError(
                     "Queued alignment output differs from its recorded result"
                 )
@@ -70,9 +87,9 @@ class AlignmentDelivery(RetiringQObject):
         except Exception as exc:
             self.error(f"Could not apply word alignment: {exc}")
             return
-        if applied:
-            self.tab._on_clip_aligned(clip_id, words)
-        else:
+        if applied and outcome.has_result:
+            self.tab._on_clip_aligned(clip_id, list(outcome.words))
+        elif not applied:
             self.error(
                 f"Alignment result discarded for changed clip {clip_id}. Run alignment again."
             )

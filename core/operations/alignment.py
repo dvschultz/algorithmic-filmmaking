@@ -158,9 +158,13 @@ def _compute_raw(
 
 
 def _compute(
-    task: AlignmentTask, cancel: Event, fingerprints: AnalysisFingerprints | None = None
+    task: AlignmentTask, cancel: Event, fingerprints: AnalysisFingerprints | None = None,
+    prepare: Callable[[], bool] | None = None,
 ) -> AlignmentOutcome:
     if task.analysis_json is None or task.skip_reason:
+        if not task.skip_reason and prepare is not None and not prepare():
+            cancel.set()
+            return AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled")
         return _compute_raw(task, cancel)
     try:
         snapshot = AnalysisSnapshot.from_json(task.analysis_json)
@@ -199,6 +203,11 @@ def _compute(
                 code="valid_analysis",
                 record_json=json.dumps(reused.to_dict(), sort_keys=True),
             )
+        if prepare is not None and not prepare():
+            cancel.set()
+            return AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled")
+        if cancel.is_set() or not snapshot.inputs.unchanged():
+            raise ValueError("Alignment inputs changed during preparation")
         before = alignment_runtime()
         events: list[dict] = []
         outcome = _compute_raw(
@@ -270,6 +279,7 @@ def run_alignment(
     on_outcome: Callable[[AlignmentOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
     fingerprints: AnalysisFingerprints | None = None,
+    prepare: Callable[[], bool] | None = None,
 ) -> tuple[AlignmentOutcome, ...]:
     """Run serially; cancellation suppresses in-flight publication, not cleanup."""
     cancel = cancel_event if cancel_event is not None else Event()
@@ -284,7 +294,7 @@ def run_alignment(
                 for t in tasks[index:]
             )
             break
-        outcome = _compute(task, cancel, fingerprints)
+        outcome = _compute(task, cancel, fingerprints, prepare)
         if cancel.is_set():
             outcomes.extend(
                 AlignmentOutcome(t.clip_id, "unprocessed", code="cancelled")

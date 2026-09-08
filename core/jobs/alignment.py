@@ -73,9 +73,13 @@ def alignment_operation_spec(
     input_revision: str | None,
 ) -> OperationSpec:
     """Describe detached alignment inputs for either runtime surface."""
+    from core.operations.alignment_records import alignment_runtime
+
+    runtime = alignment_runtime() if any(task.analysis_json is not None for task in tasks) else None
     targets = [
         {
             **_task_data(task),
+            **({"runtime": runtime} if task.analysis_json is not None else {}),
             "media_stamp": media_stamp(task.target.source_path)
             if task.target.source_path
             else None,
@@ -84,7 +88,7 @@ def alignment_operation_spec(
     ]
     return OperationSpec.build(
         kind="align_words",
-        version=1,
+        version=2 if runtime is not None else 1,
         arguments=arguments,
         inputs={"targets": targets, "force": force},
         persistence=persistence,
