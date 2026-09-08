@@ -438,7 +438,12 @@ workers now request verified tasks, carry records through queued delivery and
 recovery, preserve transcripts on failed refresh, and require matching saved
 records before acknowledging receipts. Verified reuse avoids inference, including
 empty transcripts. The GUI regression run passed 298 tests with clean scoped
-typing. Durable audio jobs, audio completion surfaces, and alignment remain.
+typing. Durable audio jobs now also verify semantic reuse, persist failure records
+without replacing displayed text, and recover exact transcript/record pairs after
+save or checkpoint failures. Missing old receipts no longer invalidate verified
+project records; edited managed transcripts require force. The durable regression
+run passed 308 tests, with 31 focused follow-ups and clean scoped typing. Audio
+completion surfaces and alignment remain.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

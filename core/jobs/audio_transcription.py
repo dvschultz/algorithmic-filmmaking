@@ -11,13 +11,20 @@ from core.jobs.commits import ResultSpec, StaleJobResult, canonical_json, result
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.operations.transcription_records import transcription_parameters
 from core.operations.audio_transcription import (
     AudioTranscriptionApplication,
     AudioTranscriptionOutcome,
     AudioTranscriptionTask,
     run_audio_transcription,
+    audio_transcription_runtime as audio_transcription_runtime,
+    audio_transcription_identity,
 )
-from core.operations.transcription import TranscriptionOptions, resolve_transcription_options
+from core.operations.transcription import (
+    TranscriptionOptions,
+    resolve_transcription_options,
+)
 from core.project import Project
 
 
@@ -43,34 +50,6 @@ def resolve_audio_options(options: TranscriptionOptions) -> TranscriptionOptions
     return resolve_transcription_options(options)
 
 
-def audio_transcription_runtime() -> dict:
-    """Identify installed transcription providers and FFmpeg without loading them."""
-    from importlib.metadata import PackageNotFoundError, version
-    from core.binary_resolver import find_binary
-
-    packages: dict[str, str | None] = {}
-    for package in (
-        "faster-whisper",
-        "ctranslate2",
-        "lightning-whisper-mlx",
-        "mlx-whisper",
-        "mlx",
-        "groq",
-        "numpy",
-    ):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    binary = find_binary("ffmpeg")
-    return {
-        "algorithm": "audio-transcription/v1",
-        "packages": packages,
-        "ffmpeg": str(binary) if binary else None,
-        "ffmpeg_stamp": list(media_stamp(Path(binary)) or ()) if binary else None,
-    }
-
-
 def audio_transcription_job_spec(
     project: Project,
     audio_source_id: str,
@@ -82,10 +61,11 @@ def audio_transcription_job_spec(
     if audio is None:
         raise ValueError(f"Unknown audio source: {audio_source_id}")
     options = resolve_audio_options(options)
+    task = AudioTranscriptionTask.from_audio(audio, verified=True)
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="audio_transcribe",
-        version=1,
+        version=2,
         arguments={
             "audio_source_id": audio_source_id,
             "options": asdict(options),
@@ -94,7 +74,7 @@ def audio_transcription_job_spec(
         inputs={
             "audio": audio.to_dict(),
             "media_stamp": media_stamp(audio.file_path),
-            "runtime": audio_transcription_runtime(),
+            "runtime": audio_transcription_runtime(task, options),
         },
         persistence="job_history",
         session_id=project.session.session_id,
@@ -118,9 +98,12 @@ def run_audio_transcription_job(
     force: bool = False,
     operation: OperationSpec | None = None,
 ) -> dict:
-    """Transcribe one exact audio ID; preserve existing text unless force is set."""
+    """Verify one audio transcript; force refreshes while retaining save recovery."""
     options = resolve_audio_options(options)
     fingerprints = MediaFingerprints(cancel)
+    analysis_fingerprints = AnalysisFingerprints(
+        cancel, media_fingerprints=fingerprints
+    )
     try:
         with result_batch(store, path, max_items=1) as batch:
             project = batch.project
@@ -153,22 +136,40 @@ def run_audio_transcription_job(
                     "project_id": current.metadata.id,
                     "audio": metadata,
                     "media": fingerprints.get(target.file_path),
-                    "runtime": audio_transcription_runtime(),
+                    "runtime": audio_transcription_runtime(
+                        AudioTranscriptionTask.from_audio(target, verified=True),
+                        options,
+                    ),
+                }
+
+            def current_output(current: Project) -> dict:
+                target = current.get_audio_source(audio_source_id)
+                assert target is not None
+                record = target.analysis_records.get("transcribe")
+                return {
+                    "segments": [s.to_dict() for s in target.transcript]
+                    if target.transcript is not None
+                    else None,
+                    "record": record.to_dict() if record is not None else None,
+                }
+
+            def payload_output(payload: dict) -> dict:
+                outcome = AudioTranscriptionOutcome.from_dict(payload)
+                return {
+                    "segments": [s.to_dict() for s in outcome.segments],
+                    "record": json.loads(outcome.record_json)
+                    if outcome.record_json is not None
+                    else None,
                 }
 
             captured = inputs(project)
-            previous = (
-                [s.to_dict() for s in audio.transcript]
-                if audio.transcript is not None
-                else None
-            )
+            previous = current_output(project)
             known = []
             for result_id, digest in project.metadata.job_results.items():
                 row = store.get_result(result_id)
-                if (
-                    row is None
-                    or sha256(row["spec_json"].encode()).hexdigest() != result_id
-                ):
+                if row is None:
+                    continue
+                if sha256(row["spec_json"].encode()).hexdigest() != result_id:
                     raise StaleJobResult(
                         "Committed result identity is missing or corrupt"
                     )
@@ -185,6 +186,55 @@ def run_audio_transcription_job(
                     raise StaleJobResult("Committed audio transcription is corrupt")
                 known.append((row, identity))
 
+            if (
+                known
+                and not force
+                and not any(
+                    payload_output(json.loads(row["payload_json"]))["segments"]
+                    == previous["segments"]
+                    for row, _ in known
+                )
+            ):
+                raise StaleJobResult(
+                    "Previously committed audio text changed; use force to replace it"
+                )
+
+            task = AudioTranscriptionTask.from_audio(
+                audio, verified=True, skip_existing=False
+            )
+            application = AudioTranscriptionApplication(project, task, options)
+            snapshot = (
+                AnalysisSnapshot.from_json(task.analysis_json)
+                if task.analysis_json
+                else None
+            )
+            reused = None
+            if not force and snapshot is not None and snapshot.inputs.unchanged():
+                from core.transcription import _has_audio_stream
+
+                runtime = audio_transcription_runtime(task, options)
+                if _has_audio_stream(task.path) is False:
+                    runtime = audio_transcription_runtime(
+                        task,
+                        options,
+                        execution={
+                            "backend": "audio-probe",
+                            "model": None,
+                            "input_mode": "no-audio",
+                        },
+                    )
+                semantic = audio_transcription_identity(
+                    snapshot, options, analysis_fingerprints, runtime
+                )
+                reused = snapshot.reusable_record(semantic)
+                if inputs(project) != captured or not snapshot.inputs.unchanged():
+                    raise StaleJobResult("Audio inputs changed during verification")
+            if cancel.is_set():
+                raise _OutcomeError(
+                    AudioTranscriptionOutcome(audio_source_id, "unprocessed")
+                )
+            arguments = transcription_parameters(options)
+
             # A save may succeed before checkpointing fails. Reconcile that exact
             # saved output before treating force as a request for another generation.
             pending = next(
@@ -193,26 +243,30 @@ def run_audio_transcription_job(
                     for row, identity in known
                     if not row["committed"]
                     and identity["project_path"] == str(path.resolve())
-                    and identity["inputs"]["basis"] == captured
-                    and identity["arguments"] == asdict(options)
-                    and [
-                        s.to_dict()
-                        for s in AudioTranscriptionOutcome.from_dict(
-                            json.loads(row["payload_json"])
-                        ).segments
-                    ]
-                    == previous
+                    and identity["inputs"].get("basis") == captured
+                    and identity["arguments"] == arguments
+                    and payload_output(json.loads(row["payload_json"])) == previous
+                    and (force or reused is not None)
                 ),
                 None,
             )
-            if previous is not None and not force and pending is None:
+            if reused is not None and pending is None:
+                if reused != audio.analysis_records.get("transcribe"):
+                    batch.stage_analysis(
+                        apply=lambda current: current.record_analysis(
+                            "audio", audio_source_id, "transcribe", reused
+                        ),
+                        validate_input=lambda current: inputs(current) == captured,
+                        is_applied=lambda current: current_output(current)["record"]
+                        == reused.to_dict(),
+                    )
                 return {
                     "success": True,
                     "result": {
                         "audio_source_id": audio_source_id,
                         "status": "skipped",
-                        "reason": "already_populated",
-                        "segment_count": len(previous),
+                        "reason": "valid_analysis",
+                        "segment_count": len(previous["segments"]),
                     },
                 }
             spec = (
@@ -221,9 +275,9 @@ def run_audio_transcription_job(
                 else ResultSpec.build(
                     path,
                     kind="audio_transcribe",
-                    version=1,
+                    version=2,
                     target_id=audio_source_id,
-                    arguments=asdict(options),
+                    arguments=arguments,
                     inputs={
                         "basis": captured,
                         "generation": len(known),
@@ -231,14 +285,13 @@ def run_audio_transcription_job(
                     },
                 )
             )
-            task = AudioTranscriptionTask.from_audio(audio)
-            application = AudioTranscriptionApplication(project, task)
 
             def compute() -> dict:
                 outcome = run_audio_transcription(
                     task,
                     options,
                     cancel_event=cancel,
+                    fingerprints=analysis_fingerprints,
                     progress=lambda n, total: progress(
                         n / total if total else 1.0, "Transcribing audio"
                     ),
@@ -267,17 +320,45 @@ def run_audio_transcription_job(
                     and outcome.audio_source_id == audio_source_id
                     and target is not None
                     and target.transcript is not None
-                    and [s.to_dict() for s in target.transcript]
-                    == [s.to_dict() for s in outcome.segments]
+                    and current_output(current) == payload_output(payload)
                 )
 
-            receipt = batch.commit(
-                spec,
-                compute=compute,
-                validate_input=lambda current: inputs(current) == captured,
-                apply=apply,
-                is_applied=is_applied,
-            )
+            try:
+                receipt = batch.commit(
+                    spec,
+                    compute=compute,
+                    validate_input=lambda current: inputs(current) == captured,
+                    apply=apply,
+                    is_applied=is_applied,
+                )
+            except _OutcomeError as exc:
+                outcome = exc.outcome
+                if (
+                    outcome.can_apply
+                    and outcome.record_json is not None
+                    and not cancel.is_set()
+                ):
+                    expected_record = json.loads(outcome.record_json)
+
+                    def publish_failure(current: Project) -> None:
+                        if not application.apply(current, outcome):
+                            raise StaleJobResult(
+                                "Audio changed during failure publication"
+                            )
+
+                    batch.stage_analysis(
+                        apply=publish_failure,
+                        validate_input=lambda current: inputs(current) == captured,
+                        is_applied=lambda current: current_output(current)["record"]
+                        == expected_record,
+                    )
+                return {
+                    "success": False,
+                    "audio_source_id": audio_source_id,
+                    "error": "cancelled"
+                    if cancel.is_set()
+                    else outcome.message or "Audio transcription failed",
+                }
             progress(1.0, "Audio transcription saved")
             return {
                 "success": True,

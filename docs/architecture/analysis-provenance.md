@@ -445,7 +445,7 @@ verification, and failed refreshes preserve the displayed transcript.
 the transcript before notifying observers. It rejects mismatched records before
 mutation. Raw callers continue to create unknown-provenance values. The audio
 task factory retains its legacy default for unmigrated consumers. GUI workers
-now request verified tasks; durable audio jobs still need migration.
+and durable audio jobs now request verified tasks.
 
 The regression run passed 294 tests including audio GUI, ownership, agent, project,
 and MCP coverage. Changed-file Ruff passed. Scoped operation typing is clean;
@@ -459,8 +459,19 @@ both transcript and record. The launcher verifies existing transcripts instead o
 rejecting them based on field presence. Audio card/completion surfaces still need
 migration. The GUI regression run passed 298 tests, including real queued success,
 reuse, failure, cancellation, and altered-payload delivery; scoped typing passed
-for all three changed worker/journal modules. Durable audio recovery and alignment
-remain unfinished, along with the broader U10 audit.
+for all three changed worker/journal modules.
+
+Durable audio jobs use version 2 specifications and semantic record identities.
+Valid transcripts (including silence) reuse without inference; legacy values or
+changed settings/media/metadata recompute. A manually edited managed transcript
+requires force. Failure records preserve existing text. Recovery matches both the
+saved transcript and its record; failed forced-refresh saves reuse their computed
+receipt, while a successful refresh advances the generation. Missing historical
+receipt rows do not invalidate an independently verified project record, but
+present corrupt rows still fail validation. Cancellation during reuse does not
+report success. The durable regression run passed 308 tests, plus 31 focused
+follow-ups; scoped typing and changed-file Ruff passed. Audio completion surfaces,
+alignment, and the broader U10 audit remain unfinished.
 
 ## Remaining U10 work
 
