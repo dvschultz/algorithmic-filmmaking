@@ -1,6 +1,6 @@
 # Analysis provenance and derived artifacts
 
-The U10 implementation covers color palettes, thumbnail DINOv2 embeddings,
+The U10 implementation covers color palettes, thumbnail and boundary DINOv2 embeddings,
 object detection, OCR, ImageNet and shot classification, and gaze across the desktop, shared spine, CLI, MCP jobs, and embedding
 prerequisites used by sequencing. This document describes that bounded scope.
 The complete U10 contract remains in the shared editing engine plan.
@@ -74,6 +74,13 @@ jobs retain their all-or-nothing publication behavior; failed non-atomic jobs an
 GUI runs publish failure records without successful receipts. Frame inference
 uses its image even when the original source video is offline.
 
+Boundary embeddings identify source content, frame range and FPS, the pinned
+DINOv2 runtime, FFmpeg, and first/last-frame sampling. Verified pairs remain
+reusable after job-cache removal and source relocation. A damaged pair triggers
+targeted recomputation while preserving thumbnail embeddings and editorial data.
+Match-cut verifies its private prerequisites and excludes stale vectors when
+refresh fails. It cannot relabel thumbnail embeddings from another model.
+
 Gaze records source content, frame range and FPS, sampling interval, the
 FaceLandmarker version and detector settings, and the angle-classification
 constants. Reuse compares angles at the existing two-decimal project precision.
@@ -97,8 +104,7 @@ The shared embedding model label survives damage to either vector family.
 Unsaved legacy vectors are staged with unknown provenance. Old display vectors
 retained after a failed refresh are also managed, while the record remains failed
 through save, load, payload loss, and restoration. GUI save acknowledgments compare
-the stored payload and its record rather than requiring inline arrays. Boundary
-array storage is implemented; boundary analysis reuse still needs migration.
+the stored payload and its record rather than requiring inline arrays.
 
 Known saved-project manifests retain payloads after projects close. Live
 projects retain current results and source-removal undo history. Detached save
@@ -120,9 +126,9 @@ without stopping analysis of valid neighboring clips.
 
 ## Remaining U10 work
 
-- Migrate the other U7 analysis families, including boundary embeddings, to
+- Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
-  OCR, ImageNet and shot classification, and gaze.
+  OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Move preview/prerender media and durable job array payloads into managed

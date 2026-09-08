@@ -11,7 +11,7 @@ from core.jobs.gui_boundary_embeddings import GuiBoundaryEmbeddingCache
 from core.jobs.media import media_stamp
 from core.jobs.spec import OperationSpec
 from core.operations.boundary_embeddings import (
-    BoundaryEmbeddingTask,
+    boundary_embedding_task,
     BoundaryEmbeddingOutcome,
     run_boundary_embeddings,
 )
@@ -42,19 +42,10 @@ class BoundaryEmbeddingWorker(CancellableWorker):
         super().__init__(parent)
         project.session.assert_owner()
         self.tasks = tuple(
-            BoundaryEmbeddingTask(
-                clip.id,
-                project.sources_by_id[clip.source_id].file_path
-                if clip.source_id in project.sources_by_id
-                else None,
-                clip.start_frame,
-                clip.end_frame,
-                project.sources_by_id[clip.source_id].fps
-                if clip.source_id in project.sources_by_id
-                else 0.0,
-                skip_existing
-                and clip.first_frame_embedding is not None
-                and clip.last_frame_embedding is not None,
+            boundary_embedding_task(
+                clip,
+                project.sources_by_id.get(clip.source_id),
+                skip_existing=skip_existing,
             )
             for clip in clips
         )
@@ -62,13 +53,13 @@ class BoundaryEmbeddingWorker(CancellableWorker):
         self._media_stamps = {
             task.source_path: media_stamp(task.source_path)
             for task in self.tasks
-            if task.source_path and not task.skip
+            if task.source_path
         }
         self.runtime_identity = _runtime()
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="boundary_embeddings",
-                version=1,
+                version=2,
                 arguments={"clip_ids": [task.clip_id for task in self.tasks]},
                 inputs={
                     "targets": [_target(project, task.clip_id) for task in self.tasks],
@@ -117,16 +108,18 @@ class BoundaryEmbeddingWorker(CancellableWorker):
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
-                self.outcome_ready.emit(value)
-                self.embedding_ready.emit(value.clip_id)
-            elif value.status == "failed":
-                errors.append(
-                    (
-                        value.clip_id,
-                        value.message or value.code or "Boundary analysis failed",
+            else:
+                if value.can_apply:
+                    self.outcome_ready.emit(value)
+                if value.status == "succeeded":
+                    self.embedding_ready.emit(value.clip_id)
+                elif value.status == "failed":
+                    errors.append(
+                        (
+                            value.clip_id,
+                            value.message or value.code or "Boundary analysis failed",
+                        )
                     )
-                )
 
         def compute(progress, cancel):
             collected = {}

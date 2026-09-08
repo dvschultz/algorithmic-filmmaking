@@ -1,11 +1,16 @@
 """Detached first/last-frame embeddings with shared DINOv2 model ownership."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import json
 from contextlib import nullcontext
 from math import isfinite
 from pathlib import Path
 from threading import Event
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
+
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.analysis_model_identity import boundary_embedding_runtime
+from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -27,6 +32,50 @@ class BoundaryEmbeddingTask:
     end_frame: int
     fps: float
     skip: bool = False
+    analysis_json: str | None = None
+
+
+def boundary_embedding_task(
+    clip: Any, source: Any = None, *, skip_existing: bool = True
+) -> BoundaryEmbeddingTask:
+    path = Path(source.file_path) if source is not None else None
+    fps = source.fps if source is not None else 0.0
+    snapshot = AnalysisSnapshot.capture(
+        clip,
+        "boundary_embeddings",
+        {"video": path} if path is not None else {},
+        {"start_frame": clip.start_frame, "end_frame": clip.end_frame, "fps": fps},
+        {
+            "first_frame_embedding": clip.first_frame_embedding,
+            "last_frame_embedding": clip.last_frame_embedding,
+            "embedding_model": clip.embedding_model,
+        },
+    )
+    return BoundaryEmbeddingTask(
+        clip.id,
+        path,
+        clip.start_frame,
+        clip.end_frame,
+        fps,
+        skip_existing,
+        snapshot.to_json(),
+    )
+
+
+def boundary_embedding_identity(
+    snapshot: AnalysisSnapshot, fingerprints: AnalysisFingerprints, runtime: dict
+) -> AnalysisIdentity:
+    return fingerprints.identity(
+        snapshot.inputs,
+        operation="boundary_embeddings",
+        operation_version=2,
+        model=runtime,
+        parameters={},
+        sampling={
+            "policy": "boundary-start/end-minus-one-v1",
+            "processor": "dinov2-default",
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -38,17 +87,30 @@ class BoundaryEmbeddingOutcome:
     model: str | None = None
     code: str | None = None
     message: str | None = None
+    record_json: str | None = None
+
+    @property
+    def has_result(self) -> bool:
+        return self.status == "succeeded" or (
+            self.status == "skipped" and self.record_json is not None
+        )
+
+    @property
+    def can_apply(self) -> bool:
+        return self.has_result or (
+            self.status == "failed" and self.record_json is not None
+        )
 
     @classmethod
     def from_dict(cls, payload: dict) -> "BoundaryEmbeddingOutcome":
-        outcome = cls(**payload)
-        if outcome.status == "succeeded":
+        outcome = cls(**{**payload, "first": tuple(payload.get("first", ())), "last": tuple(payload.get("last", ()))})
+        if outcome.has_result:
             first = EmbeddingOutcome.from_vector(outcome.clip_id, outcome.first)
             last = EmbeddingOutcome.from_vector(outcome.clip_id, outcome.last)
             if outcome.model != first.model:
                 raise ValueError("Boundary embedding model does not match")
-            return cls(
-                outcome.clip_id, "succeeded", first.vector, last.vector, first.model
+            return replace(
+                outcome, first=first.vector, last=last.vector, model=first.model
             )
         if outcome.status not in ("failed", "skipped", "unprocessed"):
             raise ValueError("Invalid boundary embedding status")
@@ -60,15 +122,18 @@ def run_boundary_embeddings(
     *,
     cancel_event: Event | None = None,
     model_session: _EmbeddingModelSession | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
+    runtime: dict | None = None,
 ) -> tuple[BoundaryEmbeddingOutcome, ...]:
     """Validate each pair atomically and reject changed media or late cancellation."""
     from core.errors import ModelDownloadError
     from core.jobs.media import media_stamp
 
     cancel = cancel_event or Event()
+    fingerprints = fingerprints or AnalysisFingerprints(cancel)
+    runtime = runtime if runtime is not None else boundary_embedding_runtime()
     stamps = [
-        media_stamp(task.source_path) if task.source_path and not task.skip else None
-        for task in tasks
+        media_stamp(task.source_path) if task.source_path else None for task in tasks
     ]
     outcomes: list[BoundaryEmbeddingOutcome] = []
     with (
@@ -79,13 +144,15 @@ def run_boundary_embeddings(
         for task, stamp in zip(tasks, stamps):
             if cancel.is_set() or session.failed:
                 break
-            if task.skip:
+            if task.skip and task.analysis_json is None:
                 outcomes.append(
                     BoundaryEmbeddingOutcome(
                         task.clip_id, "skipped", code="already_populated"
                     )
                 )
                 continue
+            snapshot = None
+            identity = None
             try:
                 if (
                     isinstance(task.fps, bool)
@@ -107,6 +174,36 @@ def run_boundary_embeddings(
                     or media_stamp(task.source_path) != stamp
                 ):
                     raise ValueError("Boundary embedding source is missing or changed")
+                if task.analysis_json is not None:
+                    snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                    identity = boundary_embedding_identity(
+                        snapshot, fingerprints, runtime
+                    )
+                    reused = snapshot.reusable_record(identity) if task.skip else None
+                    if reused is not None:
+                        value = reused.value
+                        reused_first = EmbeddingOutcome.from_vector(
+                            task.clip_id, value["first_frame_embedding"]
+                        )
+                        reused_last = EmbeddingOutcome.from_vector(
+                            task.clip_id, value["last_frame_embedding"]
+                        )
+                        if value["embedding_model"] != reused_first.model:
+                            raise ValueError("Boundary embedding model does not match")
+                        outcomes.append(
+                            BoundaryEmbeddingOutcome(
+                                task.clip_id,
+                                "skipped",
+                                reused_first.vector,
+                                reused_last.vector,
+                                reused_first.model,
+                                code="valid_analysis",
+                                record_json=json.dumps(
+                                    reused.to_dict(), sort_keys=True
+                                ),
+                            )
+                        )
+                        continue
                 if not session.acquire(cancel):
                     break
                 if media_stamp(task.source_path) != stamp:
@@ -138,6 +235,20 @@ def run_boundary_embeddings(
                     last_result.vector,
                     first_result.model,
                 )
+                if snapshot is not None and identity is not None:
+                    record = AnalysisRecord.success(
+                        identity,
+                        {
+                            "first_frame_embedding": list(outcome.first),
+                            "last_frame_embedding": list(outcome.last),
+                            "embedding_model": outcome.model,
+                        },
+                        input_snapshot=snapshot.inputs.to_dict(),
+                    )
+                    outcome = replace(
+                        outcome,
+                        record_json=json.dumps(record.to_dict(), sort_keys=True),
+                    )
             except Exception as exc:
                 if cancel.is_set():
                     break
@@ -146,6 +257,21 @@ def run_boundary_embeddings(
                 outcome = BoundaryEmbeddingOutcome(
                     task.clip_id, "failed", code="embedding_failed", message=str(exc)
                 )
+                if (
+                    snapshot is not None
+                    and identity is not None
+                    and snapshot.inputs.unchanged()
+                ):
+                    record = replace(
+                        AnalysisRecord.failure(identity, str(exc)),
+                        input_json=json.dumps(
+                            snapshot.inputs.to_dict(), sort_keys=True
+                        ),
+                    )
+                    outcome = replace(
+                        outcome,
+                        record_json=json.dumps(record.to_dict(), sort_keys=True),
+                    )
             outcomes.append(outcome)
         outcomes.extend(
             BoundaryEmbeddingOutcome(
@@ -162,7 +288,7 @@ def run_boundary_embeddings(
             code="source_changed",
             message="Boundary embedding source changed before delivery",
         )
-        if outcome.status == "succeeded"
+        if outcome.can_apply
         and (task.source_path is None or media_stamp(task.source_path) != stamp)
         else outcome
         for task, stamp, outcome in zip(tasks, stamps, outcomes)
@@ -186,6 +312,7 @@ class BoundaryEmbeddingApplication:
     ) -> None:
         project.session.assert_owner()
         self.project = project
+        self.path = project.path
         self.session_id = project.session.session_id
         self.tasks = {task.clip_id: task for task in tasks}
         self.bindings = {task.clip_id: self._binding(project, task) for task in tasks}
@@ -224,6 +351,7 @@ class BoundaryEmbeddingApplication:
                 if clip.last_frame_embedding is not None
                 else None,
                 clip.embedding_model,
+                clip.analysis_records.get("boundary_embeddings"),
             ),
         )
 
@@ -231,7 +359,8 @@ class BoundaryEmbeddingApplication:
         if (
             project is not self.project
             or project.session.session_id != self.session_id
-            or outcome.status != "succeeded"
+            or project.path != self.path
+            or not outcome.can_apply
         ):
             return False
 
@@ -253,7 +382,43 @@ class BoundaryEmbeddingApplication:
             from dataclasses import asdict
 
             checked = BoundaryEmbeddingOutcome.from_dict(asdict(outcome))
-            validate_boundary_model(current[0], checked.model)
+            value = {
+                "first_frame_embedding": list(checked.first),
+                "last_frame_embedding": list(checked.last),
+                "embedding_model": checked.model,
+            }
+            record = (
+                AnalysisRecord.from_dict(json.loads(checked.record_json))
+                if checked.record_json is not None
+                else AnalysisRecord.legacy(value)
+            )
+            if checked.record_json is not None:
+                snapshot = (
+                    AnalysisSnapshot.from_json(task.analysis_json)
+                    if task is not None and task.analysis_json
+                    else None
+                )
+                if (
+                    snapshot is None
+                    or record.identity is None
+                    or record.identity.operation != "boundary_embeddings"
+                    or record.identity.to_dict()["parameters"] != {}
+                    or json.loads(record.input_json or "null")
+                    != snapshot.inputs.to_dict()
+                    or (
+                        checked.has_result
+                        and (record.state != "succeeded" or record.value != value)
+                    )
+                    or (checked.status == "failed" and record.state != "failed")
+                ):
+                    return False
+            if checked.has_result:
+                validate_boundary_model(current[0], checked.model)
+            project.record_analysis(
+                "clip", checked.clip_id, "boundary_embeddings", record
+            )
+            if checked.status == "failed":
+                return True
             current[0].first_frame_embedding = list(checked.first)
             current[0].last_frame_embedding = list(checked.last)
             current[0].embedding_model = checked.model

@@ -517,39 +517,8 @@ def _auto_compute_boundary_embeddings(
     clips: List[Tuple[Any, Any]], *, cancel_event: Event | None = None
 ) -> List[Tuple[Any, Any]]:
     """Resolve first/last-frame prerequisites on private sequencing snapshots."""
-    from core.operations.boundary_embeddings import (
-        BoundaryEmbeddingTask,
-        run_boundary_embeddings,
-    )
+    from core.remix.embedding_inputs import populate_boundary_embeddings
 
     snapshots = deepcopy(clips)
-    cancel = cancel_event or Event()
-    tasks = tuple(
-        BoundaryEmbeddingTask(
-            str(i), source.file_path, clip.start_frame, clip.end_frame, source.fps,
-            skip=clip.first_frame_embedding is not None and clip.last_frame_embedding is not None,
-        )
-        for i, (clip, source) in enumerate(snapshots)
-    )
-    if cancel.is_set() or all(task.skip for task in tasks):
-        return snapshots
-    from core.feature_registry import check_feature
-
-    available, missing = check_feature("embeddings")
-    if not available:
-        raise RuntimeError(
-            "DINOv2 boundary embeddings require torch and transformers. "
-            f"Missing: {', '.join(missing)}. "
-            "Run embedding analysis first or install dependencies via Settings."
-        )
-    outcomes = run_boundary_embeddings(tasks, cancel_event=cancel)
-    for (clip, _), outcome in zip(snapshots, outcomes):
-        if cancel.is_set():
-            break
-        if outcome.status == "succeeded":
-            clip.first_frame_embedding = list(outcome.first)
-            clip.last_frame_embedding = list(outcome.last)
-            clip.embedding_model = outcome.model
-        elif outcome.status == "failed":
-            logger.warning("Boundary embeddings failed for %s: %s", clip.id, outcome.message)
+    populate_boundary_embeddings(snapshots, cancel_event=cancel_event)
     return snapshots

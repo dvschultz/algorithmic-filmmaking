@@ -181,16 +181,101 @@ def test_model_failure_stops_later_pairs(setup):
     assert not Project.load(path).metadata.job_results
 
 
-def test_saved_pair_edit_is_preserved_without_force(setup):
+def test_saved_pair_edit_requires_verified_recomputation(setup):
     path, _, compute = setup
     run(setup)
     project = Project.load(path)
     project.clips[0].last_frame_embedding = [0.7] * 768
     assert project.save()
     compute.reset_mock()
-    assert len(run(setup)["skipped"]) == 3
-    compute.assert_not_called()
-    assert Project.load(path).clips[0].last_frame_embedding == [0.7] * 768
+    result = run(setup)
+    assert len(result["skipped"]) == 2 and len(result["succeeded"]) == 1
+    compute.assert_called_once()
+    assert Project.load(path).clips[0].last_frame_embedding != [0.7] * 768
+
+
+def test_verified_pairs_survive_job_cache_removal(setup):
+    path, _, compute = setup
+    run(setup)
+    fresh = JobStore(path.parent / "fresh.db")
+    try:
+        assert len(run((path, fresh, compute))["skipped"]) == 3
+        assert compute.call_count == 3
+    finally:
+        fresh.close()
+
+
+def test_gui_reuse_refreshes_relocated_source_binding(setup, monkeypatch):
+    from types import SimpleNamespace
+    from core.operations.boundary_embeddings import BoundaryEmbeddingApplication
+    from ui.workers.boundary_embedding_worker import BoundaryEmbeddingWorker
+
+    path, _, compute = setup
+    monkeypatch.setattr(
+        "core.settings.load_settings", lambda: SimpleNamespace(cache_dir=path.parent)
+    )
+    run(setup)
+    project = Project.load(path)
+    old = project.clips[0].analysis_records["boundary_embeddings"]
+    source = project.sources[0]
+    moved = path.parent / "relocated.mp4"
+    moved.write_bytes(source.file_path.read_bytes())
+    source.file_path = moved
+    worker = BoundaryEmbeddingWorker(project.clips, project=project)
+    application = BoundaryEmbeddingApplication(project, worker.tasks)
+    worker.run()
+    assert all(outcome.status == "skipped" for outcome in worker.result)
+    assert all(application.apply(project, outcome) for outcome in worker.result)
+    assert compute.call_count == 3
+    updated = project.clips[0].analysis_records["boundary_embeddings"]
+    assert updated.identity == old.identity and updated.input_json != old.input_json
+
+
+def test_failed_refresh_keeps_managed_pairs_and_retries(setup):
+    path, _, compute = setup
+    run(setup)
+    compute.side_effect = RuntimeError("provider unavailable")
+    assert len(run(setup, force=True)["failed"]) == 3
+    saved = Project.load(path)
+    assert all(
+        c.analysis_records["boundary_embeddings"].state == "failed" for c in saved.clips
+    )
+    assert all(c.first_frame_embedding == [0.123456789] * 768 for c in saved.clips)
+    compute.side_effect = None
+    assert len(run(setup)["succeeded"]) == 3
+    assert compute.call_count == 9
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_boundary_payload_recomputation_preserves_other_analysis_and_editorial_data(setup, monkeypatch, damage):
+    from core.artifacts import ArtifactStore
+
+    path, _, compute = setup
+    root = path.parent / "artifacts"
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: root)
+    compute.side_effect = lambda **kwargs: ([0.1 + kwargs["start_frame"]] * 768, [0.2 + kwargs["start_frame"]] * 768)
+    run(setup)
+    project = Project.load(path)
+    clip = project.clips[0]
+    clip.notes = "Keep this note"
+    clip.embedding = [0.4] * 768
+    project.add_to_sequence([c.id for c in project.clips])
+    sequence = project.sequence.to_dict()
+    assert project.save()
+    ref = clip.analysis_records["boundary_embeddings"].artifact
+    store = ArtifactStore(root)
+    if damage == "missing":
+        store.path_for(ref).unlink()
+    else:
+        store.path_for(ref).write_bytes(b"corrupt")
+    result = run(setup)
+    assert len(result["succeeded"]) == 1 and len(result["skipped"]) == 2
+    assert compute.call_count == 4
+    restored = Project.load(path)
+    assert restored.clips[0].embedding == [0.4] * 768
+    assert restored.clips[0].notes == "Keep this note"
+    assert restored.sequence.to_dict() == sequence
+    assert restored.clips[0].analysis_records["boundary_embeddings"].state == "succeeded"
 
 
 def test_partial_pair_is_completed_together(setup):

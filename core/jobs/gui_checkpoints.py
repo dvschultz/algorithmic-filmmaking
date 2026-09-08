@@ -213,10 +213,10 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["kind"] == "gui_boundary_embeddings":
             from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome
 
-            outcome = BoundaryEmbeddingOutcome.from_dict(payload)
+            boundary_outcome = BoundaryEmbeddingOutcome.from_dict(payload)
             if _saved_array_matches(clip, "boundary_embeddings", {
-                "first_frame_embedding": list(outcome.first), "last_frame_embedding": list(outcome.last), "embedding_model": outcome.model,
-            }):
+                "first_frame_embedding": list(boundary_outcome.first), "last_frame_embedding": list(boundary_outcome.last), "embedding_model": boundary_outcome.model,
+            }, boundary_outcome.record_json):
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_gaze":

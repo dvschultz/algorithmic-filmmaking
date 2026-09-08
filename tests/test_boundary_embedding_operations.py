@@ -36,6 +36,55 @@ def test_match_cut_does_not_mutate_project_clips(inputs):
     unload.assert_called_once()
 
 
+def test_boundary_reuse_and_failed_refresh_are_recorded(inputs):
+    from core.project import Project
+    from core.spine.analyze import boundary_embeddings
+
+    clips, compute, _ = inputs
+    project = Project(
+        sources=list({s.id: s for _, s in clips}.values()), clips=[c for c, _ in clips]
+    )
+    boundary_embeddings(project)
+    boundary_embeddings(project)
+    assert compute.call_count == 2
+    assert all(
+        c.analysis_records["boundary_embeddings"].state == "succeeded"
+        for c in project.clips
+    )
+    compute.side_effect = RuntimeError("provider unavailable")
+    boundary_embeddings(project, skip_existing=False)
+    assert all(
+        c.analysis_records["boundary_embeddings"].state == "failed"
+        for c in project.clips
+    )
+    assert all(c.first_frame_embedding == [0.1] * 768 for c in project.clips)
+    compute.side_effect = None
+    boundary_embeddings(project)
+    assert compute.call_count == 6
+
+
+@pytest.mark.parametrize("change", ["range", "source", "fps", "runtime", "projection"])
+def test_boundary_identity_invalidates_changed_inputs(inputs, monkeypatch, change):
+    from core.project import Project
+    from core.spine.analyze import boundary_embeddings
+
+    clips, compute, _ = inputs
+    project = Project(sources=list({s.id: s for _, s in clips}.values()), clips=[c for c, _ in clips])
+    boundary_embeddings(project)
+    if change == "range":
+        project.clips[0].end_frame += 1
+    elif change == "source":
+        project.sources[0].file_path.write_bytes(b"changed media")
+    elif change == "fps":
+        project.sources[0].fps += 1
+    elif change == "runtime":
+        monkeypatch.setattr("core.analysis_model_identity.DINOV2_REVISION", "a" * 40)
+    else:
+        project.clips[0].last_frame_embedding = [0.9] * 768
+    boundary_embeddings(project)
+    assert compute.call_count == (3 if change in ("range", "projection") else 4)
+
+
 @pytest.mark.parametrize("bad", [[0.0] * 768, [float("nan")] * 768, [1.0]])
 def test_invalid_second_vector_does_not_publish_either_boundary(inputs, bad):
     from core.remix import generate_sequence
@@ -133,17 +182,48 @@ def test_invalid_range_does_not_load_model(inputs, fps, start, end):
     unload.assert_not_called()
 
 
-def test_populated_boundaries_do_not_load_or_unload_model(inputs):
+def test_verified_boundaries_do_not_load_or_unload_model(inputs, monkeypatch):
     from core.remix import generate_sequence
 
     clips, compute, unload = inputs
-    for clip, _ in clips:
-        clip.first_frame_embedding = [0.1] * 768
-        clip.last_frame_embedding = [0.2] * 768
+    clips = generate_sequence("match_cut", clips, len(clips))
+    compute.reset_mock()
+    unload.reset_mock()
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature",
+        lambda _: (False, ["not needed for reuse"]),
+    )
     result = generate_sequence("match_cut", clips, len(clips))
     assert len(result) == len(clips)
     compute.assert_not_called()
     unload.assert_not_called()
+
+
+def test_failed_match_cut_refresh_does_not_use_stale_boundary_vectors(inputs):
+    from core.remix import generate_sequence
+
+    clips, compute, _ = inputs
+    for clip, _ in clips:
+        clip.first_frame_embedding = [0.7] * 768
+        clip.last_frame_embedding = [0.8] * 768
+    compute.side_effect = RuntimeError("provider unavailable")
+    result = generate_sequence("match_cut", clips, len(clips))
+    assert all(
+        c.first_frame_embedding is None and c.last_frame_embedding is None
+        for c, _ in result
+    )
+    assert all(c.first_frame_embedding == [0.7] * 768 for c, _ in clips)
+
+
+def test_match_cut_cannot_relabel_foreign_thumbnail_vectors(inputs):
+    from core.remix import generate_sequence
+
+    clips, _, _ = inputs
+    clips[0][0].embedding = [0.5] * 768
+    clips[0][0].embedding_model = "foreign-model"
+    with pytest.raises(ValueError, match="different or unknown model"):
+        generate_sequence("match_cut", clips, len(clips))
+    assert clips[0][0].embedding_model == "foreign-model"
 
 
 def test_boundary_and_thumbnail_inference_share_model_ownership(inputs, monkeypatch):

@@ -101,6 +101,20 @@ def embedding_runtime() -> dict:
     }
 
 
+def boundary_embedding_runtime() -> dict:
+    from pathlib import Path
+    from core.binary_resolver import find_binary
+    from core.jobs.media import media_stamp
+
+    binary = find_binary("ffmpeg")
+    return {
+        **embedding_runtime(),
+        "sampling": "boundary-start/end-minus-one-v1",
+        "ffmpeg": str(binary) if binary else None,
+        "ffmpeg_stamp": list(media_stamp(Path(binary)) or ()) if binary else None,
+    }
+
+
 # Shot type categories for zero-shot classification
 # Matches VideoMAE categories: LS, FS, MS, CS, ECS
 SHOT_TYPES = [

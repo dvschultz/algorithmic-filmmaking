@@ -176,7 +176,7 @@ def test_combined_controller_rechecks_requested_options(
         for kind in ("clip", "frame")
         for operation in ("classify", "detect_objects", "extract_text", "shots")
     ]
-    + [("clip", "gaze")],
+    + [("clip", "gaze"), ("clip", "boundary_embeddings")],
 )
 def test_combined_controller_retains_failed_attempt(
     tmp_path, monkeypatch, kind, operation
@@ -206,6 +206,10 @@ def test_combined_controller_retains_failed_attempt(
     target.gaze_yaw = 1.23
     target.gaze_pitch = 2.34
     target.gaze_category = "at_camera"
+    if operation == "boundary_embeddings":
+        target.first_frame_embedding = [0.4] * 768
+        target.last_frame_embedding = [0.5] * 768
+        target.embedding_model = "dinov2-vit-b-14"
     assert window.project.save(tmp_path / "project.json")
     provider = Mock(side_effect=RuntimeError("provider unavailable"))
     paths = {
@@ -214,11 +218,14 @@ def test_combined_controller_retains_failed_attempt(
         "extract_text": "core.analysis.ocr.extract_text_from_" + kind,
         "shots": "core.analysis.shots.classify_shot_type",
         "gaze": "core.analysis.gaze.extract_gaze_from_clip",
+        "boundary_embeddings": "core.analysis.embeddings.extract_boundary_embeddings",
     }
     monkeypatch.setattr(paths[operation], provider)
     if operation == "gaze":
         monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
         monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
+    if operation == "boundary_embeddings":
+        monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
     controller = (
         FrameAnalysisController(window, [target.id], [operation])
         if kind == "frame"
@@ -232,6 +239,7 @@ def test_combined_controller_retains_failed_attempt(
             time.sleep(0.002)
         assert controller.finished
         provider.assert_called_once()
+        assert operation in target.analysis_records, controller.errors
         assert target.analysis_records[operation].state == "failed"
         assert target.object_labels == ["old label"]
         assert target.detected_objects == [] and target.person_count == 0
@@ -243,6 +251,9 @@ def test_combined_controller_retains_failed_attempt(
             "at_camera",
         )
         assert not window.project.metadata.job_results
+        if operation == "boundary_embeddings":
+            assert target.first_frame_embedding == [0.4] * 768
+            assert target.last_frame_embedding == [0.5] * 768
     finally:
         controller.cancel()
         app.processEvents()

@@ -1,20 +1,25 @@
 """Durable first/last-frame embedding pairs for saved projects."""
 
 from hashlib import sha256
+from dataclasses import replace
 import json
 from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
-from core.jobs.embeddings import _runtime as embedding_runtime
+from core.jobs.commits import ResultSpec, StaleJobResult, result_batch, canonical_json
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.analysis_model_identity import boundary_embedding_runtime
+from models.analysis_record import AnalysisRecord
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
 from core.operations.boundary_embeddings import (
-    BoundaryEmbeddingTask,
+    BoundaryEmbeddingOutcome,
+    BoundaryEmbeddingApplication,
+    boundary_embedding_task,
+    boundary_embedding_identity,
     run_boundary_embeddings,
-    validate_boundary_model,
 )
 from core.operations.embeddings import EmbeddingOutcome, embedding_model_session
 from core.project import Project
@@ -22,15 +27,7 @@ from core.project_revision import ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    from core.binary_resolver import find_binary
-
-    binary = find_binary("ffmpeg")
-    return {
-        **embedding_runtime(),
-        "sampling": "boundary-start/end-minus-one-v1",
-        "ffmpeg": str(binary) if binary else None,
-        "ffmpeg_stamp": list(media_stamp(Path(binary)) or ()) if binary else None,
-    }
+    return boundary_embedding_runtime()
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -48,6 +45,7 @@ def _target(project: Project, cid: str) -> dict:
     clip = project.clips_by_id[cid]
     source = project.sources_by_id.get(clip.source_id)
     return {
+        "analysis_version": 2,
         "clip_id": cid,
         "source_id": clip.source_id,
         "source_path": str(source.file_path) if source else None,
@@ -59,10 +57,29 @@ def _target(project: Project, cid: str) -> dict:
 
 def _values(project: Project, cid: str) -> dict:
     clip = project.clips_by_id[cid]
+    record = clip.analysis_records.get("boundary_embeddings")
+    if isinstance(record, AnalysisRecord) and record.artifact is not None:
+        if record.state == "succeeded":
+            record = replace(
+                record,
+                artifact=None,
+                value_json=canonical_json(
+                    {
+                        "first_frame_embedding": clip.first_frame_embedding,
+                        "last_frame_embedding": clip.last_frame_embedding,
+                        "embedding_model": clip.embedding_model,
+                    }
+                ),
+            )
+        elif record.state == "failed":
+            record = replace(record, artifact=None, value_json=None)
     return {
         "first": clip.first_frame_embedding,
         "last": clip.last_frame_embedding,
         "model": clip.embedding_model,
+        "record_json": json.dumps(record.to_dict(), sort_keys=True)
+        if isinstance(record, AnalysisRecord)
+        else None,
     }
 
 
@@ -75,6 +92,7 @@ def _validated(cid: str, payload: dict) -> dict:
         "first": list(first.vector),
         "last": list(last.vector),
         "model": first.model,
+        "record_json": payload.get("record_json"),
     }
 
 
@@ -95,7 +113,7 @@ def boundary_embedding_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="boundary_embeddings",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={"targets": targets, "runtime": _runtime()},
         persistence="job_history",
@@ -105,8 +123,15 @@ def boundary_embedding_job_spec(
 
 
 class _OutcomeError(Exception):
-    def __init__(self, status: str, code: str | None, message: str | None = None):
+    def __init__(
+        self,
+        status: str,
+        code: str | None,
+        message: str | None = None,
+        record_json: str | None = None,
+    ):
         self.status, self.code, self.message = status, code, message
+        self.record_json = record_json
 
 
 def run_boundary_embedding_job(
@@ -124,7 +149,9 @@ def run_boundary_embedding_job(
     if operation is not None:
         force = bool(operation.arguments.get("force", False))
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with embedding_model_session() as model_session, result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -144,8 +171,10 @@ def run_boundary_embedding_job(
         known: dict[str, list[tuple[dict, dict, dict]]] = {}
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
-            if row is None or sha256(row["spec_json"].encode()).hexdigest() != rid:
-                raise StaleJobResult("Committed result identity is missing or corrupt")
+            if row is None:
+                continue  # Project records survive removal of old job payloads.
+            if sha256(row["spec_json"].encode()).hexdigest() != rid:
+                raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
             if identity["kind"] != "boundary_embeddings":
                 continue
@@ -175,6 +204,19 @@ def run_boundary_embedding_job(
             "unprocessed": [],
             "total_clips": len(ids),
         }
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "boundary_embeddings", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("boundary_embeddings")
+                == record,
+            )
+
         for index, cid in enumerate(ids):
             if cancel.is_set() or model_session.failed:
                 result["unprocessed"].extend(
@@ -186,17 +228,27 @@ def run_boundary_embedding_job(
                 )
                 break
             previous = _values(project, cid)
-            existing = previous["first"] is not None and previous["last"] is not None
-            if existing and not force and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
                 basis = inputs(project, cid)
                 if basis["runtime"] != runtime:
                     raise StaleJobResult("Boundary embedding runtime changed")
-                identity_inputs: dict = {"basis": basis}
+                clip = project.clips_by_id[cid]
+                task = boundary_embedding_task(
+                    clip, project.sources_by_id.get(clip.source_id), skip_existing=False
+                )
+                assert task.analysis_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                semantic = (
+                    boundary_embedding_identity(snapshot, fingerprints, runtime)
+                    if snapshot.inputs.unchanged()
+                    else None
+                )
+                reused = (
+                    snapshot.reusable_record(semantic)
+                    if semantic is not None and not force
+                    else None
+                )
+                identity_inputs: dict = {"basis": basis, "previous": previous}
                 if force:
                     identity_inputs.update(
                         generation=len(known.get(cid, [])), previous=previous
@@ -204,7 +256,7 @@ def run_boundary_embedding_job(
                 spec = ResultSpec.build(
                     path,
                     kind="boundary_embeddings",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments={},
                     inputs=identity_inputs,
@@ -220,53 +272,58 @@ def run_boundary_embedding_job(
                 ]
                 if matches:
                     specs = [ResultSpec(path, row["spec_json"]) for row in matches]
-                elif existing and cid in known and not force:
+                elif reused is not None:
+                    if previous["record_json"] != json.dumps(
+                        reused.to_dict(), sort_keys=True
+                    ):
+                        stage_record(cid, reused, basis)
                     result["skipped"].append(
-                        {"clip_id": cid, "reason": "already_populated"}
+                        {"clip_id": cid, "reason": "valid_analysis"}
                     )
                     continue
                 else:
                     specs = [spec]
 
-                def compute(cid=cid, target=basis["target"]):
-                    if target["source_path"] is None:
+                application = BoundaryEmbeddingApplication(project, (task,))
+
+                def compute(cid=cid, task=task):
+                    if task.source_path is None:
                         raise _OutcomeError("failed", "source_missing")
-                    task = BoundaryEmbeddingTask(
-                        cid,
-                        Path(target["source_path"]),
-                        target["start_frame"],
-                        target["end_frame"],
-                        target["fps"],
-                    )
                     outcome = run_boundary_embeddings(
-                        (task,), cancel_event=cancel, model_session=model_session
+                        (task,),
+                        cancel_event=cancel,
+                        model_session=model_session,
+                        fingerprints=fingerprints,
+                        runtime=runtime,
                     )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(
-                            outcome.status, outcome.code, outcome.message
+                            outcome.status,
+                            outcome.code,
+                            outcome.message,
+                            outcome.record_json,
                         )
                     return {
                         "first": list(outcome.first),
                         "last": list(outcome.last),
                         "model": outcome.model,
+                        "record_json": outcome.record_json,
                     }
 
-                def apply(current, payload, cid=cid, previous=previous):
+                def apply(current, payload, cid=cid, application=application):
                     checked = _validated(cid, payload)
-
-                    def publish():
-                        if _values(current, cid) != previous:
-                            raise StaleJobResult(
-                                "Boundary output changed before application"
-                            )
-                        clip = current.clips_by_id[cid]
-                        validate_boundary_model(clip, checked["model"])
-                        clip.first_frame_embedding = checked["first"]
-                        clip.last_frame_embedding = checked["last"]
-                        clip.embedding_model = checked["model"]
-                        current.update_clips([clip])
-
-                    current.session.apply_external(publish)
+                    outcome = BoundaryEmbeddingOutcome(
+                        cid,
+                        "succeeded",
+                        tuple(checked["first"]),
+                        tuple(checked["last"]),
+                        checked["model"],
+                        record_json=checked["record_json"],
+                    )
+                    if not application.apply(current, outcome):
+                        raise StaleJobResult(
+                            "Boundary output changed before application"
+                        )
 
                 def validate(current, cid=cid, basis=basis):
                     return inputs(current, cid) == basis
@@ -299,6 +356,14 @@ def run_boundary_embedding_job(
                 )
                 break
             except _OutcomeError as exc:
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult("Boundary inputs changed during computation")
+                if exc.record_json is not None:
+                    stage_record(
+                        cid,
+                        AnalysisRecord.from_dict(json.loads(exc.record_json)),
+                        basis,
+                    )
                 result[exc.status].append(
                     {"clip_id": cid, "code": exc.code, "message": exc.message}
                 )

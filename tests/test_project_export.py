@@ -45,6 +45,35 @@ def test_portable_analysis_revalidates_bundle_media_instead_of_originals(tmp_pat
         restored.close_writer()
 
 
+def test_portable_boundary_pair_reuses_in_a_fresh_artifact_store(tmp_path, monkeypatch):
+    from core.analysis_availability import operation_is_complete_for_clip
+    from core.spine.analyze import boundary_embeddings
+    from tests.test_description_operations import project_with_thumbnails
+
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: tmp_path / "first-cache")
+    provider = Mock(return_value=([0.1] * 768, [0.2] * 768))
+    monkeypatch.setattr("core.analysis.embeddings.extract_boundary_embeddings", provider)
+    monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
+    project = project_with_thumbnails(tmp_path, 1)
+    boundary_embeddings(project)
+    original = project.clips[0].analysis_records["boundary_embeddings"]
+    destination = tmp_path / "bundle"
+    export_project_bundle(project, destination, include_clips=False)
+    monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: tmp_path / "second-cache")
+    restored = Project.load(next(destination.glob("*.sceneripper")))
+    try:
+        assert not operation_is_complete_for_clip("boundary_embeddings", restored.clips[0])
+        provider.reset_mock()
+        result = boundary_embeddings(restored)
+        assert len(result["result"]["skipped"]) == 1
+        provider.assert_not_called()
+        record = restored.clips[0].analysis_records["boundary_embeddings"]
+        assert record.identity == original.identity and record.input_json != original.input_json
+        assert operation_is_complete_for_clip("boundary_embeddings", restored.clips[0])
+    finally:
+        restored.close_writer()
+
+
 def _make_source(tmp_path: Path, name: str = "video.mp4", size: int = 1024) -> Source:
     """Create a Source with a real file on disk."""
     video_file = tmp_path / name

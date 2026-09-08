@@ -7,8 +7,8 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
-def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False) -> None:
-    from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze
+def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False) -> None:
+    from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze, boundary_embeddings
 
     media = directory / f"{clip.id}.mp4"
     media.write_bytes(b"source fixture")
@@ -37,3 +37,6 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
     if gaze:
         with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=None), patch("core.analysis.gaze.load_face_mesh"), patch("core.analysis.gaze.unload_model"):
             analyze_gaze(project)
+    if boundary:
+        with patch("core.analysis.embeddings.extract_boundary_embeddings", return_value=([0.1] * 768, [0.2] * 768)), patch("core.analysis.embeddings.unload_model"):
+            boundary_embeddings(project)

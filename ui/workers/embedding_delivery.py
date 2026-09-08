@@ -45,6 +45,7 @@ class EmbeddingDelivery(RetiringQObject):
                 )
             )
             or outcome.clip_id in self.delivered
+            or not outcome.can_apply
         ):
             return
         self.delivered.add(outcome.clip_id)
@@ -59,15 +60,17 @@ class EmbeddingDelivery(RetiringQObject):
                     raise ValueError(
                         "Project save location changed during embedding analysis"
                     )
-                if outcome.status == "skipped" and outcome.record_json is not None:
-                    if getattr(cache, "reused_outcomes", {}).get(outcome.clip_id) != asdict(outcome):
-                        raise ValueError("Queued embedding differs from its verified reusable result")
-                else:
-                    receipt = cache.results[outcome.clip_id]
-                    if not receipt.matches(outcome):
-                        raise ValueError(
-                            "Queued embedding differs from its recorded result"
-                        )
+                receipt = cache.results.get(outcome.clip_id)
+                matches = (
+                    receipt.matches(outcome)
+                    if receipt is not None
+                    else getattr(cache, "transient_outcomes", {}).get(outcome.clip_id)
+                    == asdict(outcome)
+                )
+                if not matches:
+                    raise ValueError(
+                        "Queued embedding differs from its recorded result"
+                    )
             accepted = self.application.apply(window.project, outcome)
             if accepted and receipt is not None:
                 window.project.record_job_result(receipt.result_id, receipt.digest)
@@ -78,7 +81,7 @@ class EmbeddingDelivery(RetiringQObject):
             getattr(window, self.error_method)(
                 "Embedding discarded because the target changed. Run analysis again."
             )
-        else:
+        elif outcome.status != "failed":
             window._on_embedding_ready(outcome.clip_id)
 
 

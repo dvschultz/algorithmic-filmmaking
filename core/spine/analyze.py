@@ -795,21 +795,20 @@ def boundary_embeddings(
 ) -> dict:
     """Analyze first/last source frames and publish each validated pair together."""
     from core.operations.boundary_embeddings import (
-        BoundaryEmbeddingApplication, BoundaryEmbeddingTask, run_boundary_embeddings,
+        BoundaryEmbeddingApplication, boundary_embedding_task, run_boundary_embeddings,
     )
 
     clips = _resolve_clip_ids(project, clip_ids)
-    tasks = tuple(BoundaryEmbeddingTask(
-        clip.id, project.sources_by_id[clip.source_id].file_path if clip.source_id in project.sources_by_id else None,
-        clip.start_frame, clip.end_frame,
-        project.sources_by_id[clip.source_id].fps if clip.source_id in project.sources_by_id else 0.0,
-        skip_existing and clip.first_frame_embedding is not None and clip.last_frame_embedding is not None,
-    ) for clip in clips)
+    tasks = tuple(boundary_embedding_task(clip, project.sources_by_id.get(clip.source_id), skip_existing=skip_existing) for clip in clips)
     application = BoundaryEmbeddingApplication(project, tasks)
     result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
     for outcome in run_boundary_embeddings(tasks, cancel_event=cancel_event):
+        accepted = application.apply(project, outcome) if outcome.can_apply else False
+        if outcome.can_apply and not accepted:
+            result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+            continue
         if outcome.status == "succeeded":
-            if application.apply(project, outcome):
+            if accepted:
                 result["succeeded"].append({"clip_id": outcome.clip_id})
             else:
                 result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})

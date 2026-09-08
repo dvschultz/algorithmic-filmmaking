@@ -384,11 +384,11 @@ New paths below are proposed file ownership, not existing files. Large migration
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
-**Implementation checkpoint:** In progress. Colors, thumbnail embeddings, object
+**Implementation checkpoint:** In progress. Colors, thumbnail and boundary embeddings, object
 detection, OCR, ImageNet classification, shot classification, and gaze now use verified
 records across their shared operations and delivery surfaces. Thumbnail and boundary embedding
 artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
-work includes boundary embedding reuse and the other U7 analysis families, explicit legacy-reuse flows,
+work includes the other U7 analysis families, explicit legacy-reuse flows,
 preview/prerender artifacts, durable job array payloads and execution pins, and
 the complete retention/recovery audit. See
 [analysis provenance](../architecture/analysis-provenance.md) for the implemented

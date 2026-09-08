@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 # These operations verify complete input identities on the worker path.
-VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze"})
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze"})
 
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
@@ -63,6 +63,27 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "boundary_embeddings":
+        import json
+        from hashlib import sha256
+        from core.analysis_records import current_record
+        from core.analysis_model_identity import boundary_embedding_runtime, DINOV2_TAG
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None or clip.first_frame_embedding is None or clip.last_frame_embedding is None:
+            return False
+        data = record.identity.to_dict()
+        if (data["operation_version"] != 2 or data["schema_version"] != 1
+            or data["model"] != (runtime if runtime is not None else boundary_embedding_runtime())
+            or data["parameters"] != {} or data["prompt_sha256"] is not None
+            or data["sampling"] != {"policy": "boundary-start/end-minus-one-v1", "processor": "dinov2-default"}
+            or clip.embedding_model != DINOV2_TAG):
+            return False
+        value = {"first_frame_embedding": clip.first_frame_embedding, "last_frame_embedding": clip.last_frame_embedding, "embedding_model": clip.embedding_model}
+        if record.artifact is not None:
+            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            return record.artifact.media_type == "application/json" and record.artifact.digest == sha256(encoded).hexdigest()
+        return bool(record.value == value)
     if op_key == "gaze":
         from core.analysis_records import current_record
         from core.analysis_model_identity import gaze_runtime
@@ -196,7 +217,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "gaze":
+        if op_key == "boundary_embeddings":
+            from core.analysis_model_identity import boundary_embedding_runtime
+
+            runtime = boundary_embedding_runtime()
+        elif op_key == "gaze":
             from core.analysis_model_identity import gaze_runtime
 
             runtime = gaze_runtime()

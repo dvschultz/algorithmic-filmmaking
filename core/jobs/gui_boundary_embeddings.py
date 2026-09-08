@@ -1,8 +1,10 @@
 """Recover boundary pairs before explicit desktop project saves."""
 
 import json
+from dataclasses import asdict
 from threading import Event
 from typing import Callable
+from core.analysis_records import AnalysisFingerprints
 
 from core.jobs.boundary_embeddings import _runtime, _target, _values
 from core.jobs.commits import StaleJobResult
@@ -37,10 +39,11 @@ class GuiBoundaryEmbeddingCache(GuiResultJournal):
             media_stamps={
                 task.source_path: media_stamp(task.source_path)
                 for task in tasks
-                if task.source_path and not task.skip
+                if task.source_path
             },
         )
         self.runtime = _runtime()
+        self.transient_outcomes: dict[str, dict] = {}
         self.targets_json = json.dumps(
             {
                 task.clip_id: {
@@ -71,19 +74,26 @@ class GuiBoundaryEmbeddingCache(GuiResultJournal):
         targets = json.loads(self.targets_json)
         failed = False
         try:
-            self.start(cancel)
+            self.start(cancel, allow_missing_receipts=True)
+            fingerprints = AnalysisFingerprints(
+                cancel, media_fingerprints=self.fingerprints
+            )
             with embedding_model_session() as session:
                 for index, task in enumerate(tasks):
                     if cancel.is_set() or session.failed:
                         failed = session.failed
                         break
                     if (
-                        task.skip
+                        (task.skip and task.analysis_json is None)
                         or task.source_path is None
                         or not task.source_path.is_file()
                     ):
                         outcome = run_boundary_embeddings(
-                            (task,), cancel_event=cancel, model_session=session
+                            (task,),
+                            cancel_event=cancel,
+                            model_session=session,
+                            fingerprints=fingerprints,
+                            runtime=self.runtime,
                         )[0]
                     else:
                         request, payload = self.prepare(
@@ -96,12 +106,18 @@ class GuiBoundaryEmbeddingCache(GuiResultJournal):
                                 break
                             self.validate_media(request)
                             outcome = run_boundary_embeddings(
-                                (task,), cancel_event=cancel, model_session=session
+                                (task,),
+                                cancel_event=cancel,
+                                model_session=session,
+                                fingerprints=fingerprints,
+                                runtime=self.runtime,
                             )[0]
                         else:
                             outcome = BoundaryEmbeddingOutcome.from_dict(payload)
                         if outcome.status == "succeeded" and not cancel.is_set():
                             self.record(request, outcome)
+                    if outcome.can_apply and outcome.status != "succeeded":
+                        self.transient_outcomes[outcome.clip_id] = asdict(outcome)
                     if cancel.is_set():
                         break
                     outcomes[task.clip_id] = outcome
