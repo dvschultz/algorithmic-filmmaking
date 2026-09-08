@@ -7,13 +7,14 @@ from threading import Event
 from typing import Callable
 
 from core.jobs.commits import StaleJobResult
-from core.jobs.custom_query import _provenance
+from core.analysis_records import AnalysisFingerprints
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
 from core.operations.custom_query import (
     CustomQueryOptions,
     CustomQueryOutcome,
     CustomQueryTask,
+    custom_query_runtime,
     run_custom_query,
 )
 
@@ -37,7 +38,7 @@ class GuiCustomQueryCache(GuiResultJournal):
             source_ids,
             receipts,
             kind="gui_custom_query",
-            arguments=asdict(options),
+            arguments={"tier": options.tier, "model": options.model},
             media_stamps=media_stamps,
         )
         self.options = options
@@ -45,7 +46,7 @@ class GuiCustomQueryCache(GuiResultJournal):
             previous_queries, sort_keys=True, allow_nan=False
         )
         self.targets_json = json.dumps(targets, sort_keys=True, allow_nan=False)
-        self.runtime = _provenance(options)
+        self.transient_outcomes: dict[str, dict] = {}
 
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
@@ -53,7 +54,7 @@ class GuiCustomQueryCache(GuiResultJournal):
         path = data["target"]["source_path"]
         if (
             self.fingerprints.get(Path(path) if path else None) != data["source_media"]
-            or _provenance(self.options) != data["runtime"]
+            or custom_query_runtime(self.options) != data["runtime"]
         ):
             raise StaleJobResult("Custom-query source media or runtime changed")
 
@@ -67,7 +68,6 @@ class GuiCustomQueryCache(GuiResultJournal):
     ) -> tuple[CustomQueryOutcome, ...]:
         if not tasks:
             return ()
-        self.start(cancel)
         previous, targets = (
             json.loads(self.previous_json),
             json.loads(self.targets_json),
@@ -83,6 +83,7 @@ class GuiCustomQueryCache(GuiResultJournal):
             progress(len(outcomes), len(tasks))
 
         try:
+            self.start(cancel, allow_missing_receipts=True)
             for task in tasks:
                 if cancel.is_set():
                     break
@@ -100,7 +101,7 @@ class GuiCustomQueryCache(GuiResultJournal):
                     "target": target,
                     "previous_queries": previous[task.clip_id],
                     "source_media": self.fingerprints.get(source),
-                    "runtime": self.runtime,
+                    "runtime": custom_query_runtime(self.options),
                 }
                 request, payload = self.prepare(task.clip_id, data, task.thumbnail_path)
                 requests[task.clip_id] = request
@@ -116,6 +117,8 @@ class GuiCustomQueryCache(GuiResultJournal):
                     def record(outcome: CustomQueryOutcome) -> None:
                         if outcome.status == "succeeded":
                             self.record(requests[outcome.clip_id], outcome)
+                        elif outcome.can_apply:
+                            self.transient_outcomes[outcome.clip_id] = asdict(outcome)
                         publish(outcome)
 
                     computed = run_custom_query(
@@ -123,6 +126,9 @@ class GuiCustomQueryCache(GuiResultJournal):
                         self.options,
                         cancel_event=cancel,
                         on_outcome=record,
+                        fingerprints=AnalysisFingerprints(
+                            cancel, media_fingerprints=self.fingerprints
+                        ),
                     )
                     for outcome in computed:
                         outcomes.setdefault(outcome.clip_id, outcome)
@@ -130,6 +136,9 @@ class GuiCustomQueryCache(GuiResultJournal):
                     cancel.set()
         except FingerprintCancelled:
             cancel.set()
+        finally:
+            if hasattr(self, "store"):
+                self.store.close()
         return tuple(
             outcomes.get(
                 task.clip_id,

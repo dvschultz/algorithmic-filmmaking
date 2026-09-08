@@ -695,7 +695,7 @@ class TestObjectDetectionWorkerTaskBuilding:
 # --- DescriptionWorker ---
 
 class TestDescriptionWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_description(
+    def test_existing_descriptions_are_queued_for_verification(
         self, thumbnail_path, sources_by_id
     ):
         from ui.workers.description_worker import DescriptionWorker
@@ -708,8 +708,8 @@ class TestDescriptionWorkerTaskBuilding:
         worker = DescriptionWorker(
             [clip_with, clip_without], sources=sources_by_id
         )
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "c2"
+        assert [task.clip_id for task in worker.tasks] == ["c1", "c2"]
+        assert all(task.skip and task.analysis_json for task in worker.tasks)
 
     def test_skip_existing_false_includes_all(
         self, thumbnail_path, sources_by_id
@@ -807,7 +807,7 @@ class TestDescriptionWorkerLifecycle:
         worker.description_completed.connect(lambda: completed.append(True))
         worker.run()
         assert errors == [
-            (cid, "Failed to load local VLM: model unavailable")
+            (cid, "model unavailable")
             for cid in ("clip-1", "clip-2")
         ]
         assert worker.error_count == 2
@@ -897,6 +897,12 @@ class TestDescriptionWorkerLifecycle:
 
 
 class TestDescriptionWorkerRetries:
+    @pytest.fixture(autouse=True)
+    def readable_source(self, sources_by_id, tmp_path):
+        source = sources_by_id["src-1"]
+        source.file_path = tmp_path / "video.mp4"
+        source.file_path.write_bytes(b"source media")
+
     def test_retries_transient_provider_500(
         self,
         monkeypatch,

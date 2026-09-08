@@ -270,6 +270,17 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_custom_query":
+            from core.operations.custom_query import custom_query_record_key
+
+            # A newer answer can replace this query's record before saving.
+            # Keep superseded receipts recoverable instead of acknowledging a
+            # record that the project no longer stores.
+            if payload.get("record_json") is not None and clip.get(
+                "analysis_records", {}
+            ).get(custom_query_record_key(payload["query"])) != json.loads(
+                payload["record_json"]
+            ):
+                continue
             expected = [
                 *identity["inputs"]["task"]["previous_queries"],
                 {

@@ -31,6 +31,7 @@ from core.operations.custom_query import (
     CustomQueryOptions,
     CustomQueryOutcome,
     compute_custom_query,
+    custom_query_task,
     resolve_options,
     run_custom_query,
 )
@@ -62,6 +63,7 @@ class CustomQueryWorker(CancellableWorker):
         str, str, bool, float, str
     )  # clip_id, query, match, confidence, model
     analysis_completed = Signal()
+    outcome_ready = Signal(object)
 
     @staticmethod
     def _summarize_errors(errors: list[tuple[str, str]]) -> str:
@@ -94,16 +96,22 @@ class CustomQueryWorker(CancellableWorker):
         query = query.strip()
         self._query = query
         self._tier = options.tier if options is not None else self._resolve_tier(tier)
-        requested_parallelism = min(max(1, options.parallelism if options is not None else parallelism), 5)
+        requested_parallelism = min(
+            max(1, options.parallelism if options is not None else parallelism), 5
+        )
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
-        self.options = replace(options, parallelism=self._parallelism) if options is not None else resolve_options(self._tier, self._parallelism)
+        self.options = (
+            replace(options, parallelism=self._parallelism)
+            if options is not None
+            else resolve_options(self._tier, self._parallelism)
+        )
         self.result: tuple[CustomQueryOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
-                analysis_targets, query, skip_existing
+                analysis_targets, query, skip_existing, sources_by_id
             )
         else:
-            self._tasks = self._build_tasks(clips, query, skip_existing)
+            self._tasks = self._build_tasks(clips, query, skip_existing, sources_by_id)
         targets = {
             task.clip_id: _target(project, task.clip_id)
             for task in self.tasks
@@ -125,7 +133,7 @@ class CustomQueryWorker(CancellableWorker):
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="custom_query",
-                version=1,
+                version=2,
                 arguments={
                     "clip_ids": [task.clip_id for task in self.tasks],
                     "query": query,
@@ -172,61 +180,45 @@ class CustomQueryWorker(CancellableWorker):
         return resolved
 
     def _build_tasks(
-        self, clips: list, query: str, skip_existing: bool
+        self, clips: list, query: str, skip_existing: bool, sources_by_id: dict
     ) -> list[CustomQueryTask]:
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
-            if skip_existing and self._has_query_result(clip, query):
-                continue
             if not clip.thumbnail_path or not clip.thumbnail_path.exists():
                 logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
                 continue
             tasks.append(
-                CustomQueryTask(
-                    clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
-                    query=query,
+                custom_query_task(
+                    clip,
+                    sources_by_id.get(clip.source_id),
+                    query,
+                    skip_existing=skip_existing,
                 )
             )
         return tasks
 
     def _build_tasks_from_targets(
-        self, targets: list, query: str, skip_existing: bool
+        self, targets: list, query: str, skip_existing: bool, sources_by_id: dict
     ) -> list[CustomQueryTask]:
         """Build immutable task list from AnalysisTarget objects."""
         tasks = []
         for target in targets:
-            if skip_existing and self._has_query_result_target(target, query):
-                continue
+            if target.target_type != "clip":
+                raise ValueError("Frame custom-query storage is not supported")
             image_path = target.image_path
             if not image_path or not image_path.exists():
                 logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
-                CustomQueryTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
-                    query=query,
-                    target_type=target.target_type,
+                custom_query_task(
+                    target,
+                    sources_by_id.get(target.source_id),
+                    query,
+                    skip_existing=skip_existing,
                 )
             )
         return tasks
-
-    @staticmethod
-    def _has_query_result(clip, query: str) -> bool:
-        """Check if a clip already has a result for this exact query."""
-        if not clip.custom_queries:
-            return False
-        return any(q.get("query") == query for q in clip.custom_queries)
-
-    @staticmethod
-    def _has_query_result_target(target, query: str) -> bool:
-        """Check if an analysis target already has a result for this query."""
-        custom_queries = getattr(target, "custom_queries", None)
-        if not custom_queries:
-            return False
-        return any(q.get("query") == query for q in custom_queries)
 
     def _process_task(
         self, task: CustomQueryTask
@@ -267,20 +259,6 @@ class CustomQueryWorker(CancellableWorker):
             media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
         ):
             raise RuntimeError("Custom-query media changed while queued")
-        if self._tier == "local":
-            try:
-                from core.analysis.description import is_model_loaded, _load_local_model
-
-                if not is_model_loaded(self.options.model):
-                    _load_local_model(self.options.model)
-            except Exception as exc:
-                if self.is_cancelled():
-                    return False
-                raise RuntimeError(f"Failed to load local VLM: {exc}") from exc
-        if any(
-            media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
-        ):
-            raise RuntimeError("Custom-query media changed during preparation")
         return not self.is_cancelled()
 
     def run(self) -> None:
@@ -413,6 +391,8 @@ class CustomQueryWorker(CancellableWorker):
                 self._log_complete()
 
     def _on_outcome(self, outcome: CustomQueryOutcome) -> None:
+        if outcome.can_apply:
+            self.outcome_ready.emit(outcome)
         if outcome.status == "failed":
             message = outcome.message or outcome.code or "Custom query failed"
             self._log_error(message, outcome.clip_id)

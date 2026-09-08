@@ -394,6 +394,11 @@ the complete retention/recovery audit. See
 [analysis provenance](../architecture/analysis-provenance.md) for the implemented
 scope and its limitations. U10 is not complete.
 
+Custom queries now retain independent records through shared operations, direct
+headless calls, and GUI worker delivery/recovery. GUI reuse verifies saved records
+without duplicate history or local weight loading. Durable headless query jobs
+remain the next migration step.
+
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
 readable. Safe receipt pruning and abandoned-publication pin reconciliation remain.

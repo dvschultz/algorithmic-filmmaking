@@ -269,9 +269,23 @@ opt-in, preserving the existing query-request contract.
 
 Failures update only that query's record and preserve all history. Invalidated
 media or settings require recomputation. Per-query records survive project save/load,
-while old aggregate query projections remain provenance-unknown. GUI workers,
-durable job receipts, and recovery/delivery surfaces still need to carry these
-records; the custom-query family and U10 remain incomplete.
+while old aggregate query projections remain provenance-unknown.
+
+GUI custom-query workers now capture those records for clip and AnalysisTarget
+inputs, and queued delivery preserves successful, reused, and failed records on
+the project owner thread. Reuse is verified in the worker before local model
+loading; local loading and inference stay on the same worker thread. Frame
+custom-query storage remains unsupported.
+
+The GUI journal checks full runtime and media identity, carries records through
+failed-save recovery, and ignores scheduling parallelism when matching receipts.
+Missing old receipt rows do not prevent verification of saved project records;
+present corrupt rows still fail validation. Reused and failed outcomes use an
+exact delivery guard without creating successful computation receipts. Explicit
+save acknowledges a query receipt only when both its history prefix and its
+per-query record are present. A superseded record's receipt stays uncommitted and
+retained. Durable headless custom-query jobs still need this record migration;
+the custom-query family and U10 remain incomplete.
 
 ## Remaining U10 work
 

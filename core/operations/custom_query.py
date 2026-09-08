@@ -64,11 +64,18 @@ def custom_query_task(
     image_path: Path | None = None,
     skip_existing: bool = False,
 ) -> CustomQueryTask:
+    if getattr(target, "target_type", "clip") != "clip":
+        raise ValueError("Frame custom-query storage is not supported")
     query = query.strip()
-    image = image_path or target.thumbnail_path
+    image = (
+        image_path
+        or getattr(target, "image_path", None)
+        or getattr(target, "thumbnail_path", None)
+    )
+    video = source.file_path if source else getattr(target, "video_path", None)
     files = {"image": image} if image is not None else {}
-    if source is not None:
-        files["video"] = source.file_path
+    if video is not None:
+        files["video"] = video
     snapshot = AnalysisSnapshot.capture(
         target,
         custom_query_record_key(query),
@@ -76,7 +83,7 @@ def custom_query_task(
         {
             "start_frame": target.start_frame,
             "end_frame": target.end_frame,
-            "fps": source.fps if source else None,
+            "fps": source.fps if source else getattr(target, "fps", None),
         },
         {"result": latest_query_result(target, query)},
     )
@@ -235,6 +242,16 @@ def compute_custom_query(
         try:
             if snapshot is not None and not snapshot.inputs.unchanged():
                 raise ValueError("Custom-query input media changed")
+            if snapshot is not None and options.tier in ("local", "cpu"):
+                from core.analysis.description import _load_local_model
+
+                _load_local_model(options.model)
+                if cancel.is_set():
+                    return outcome("unprocessed", code="cancelled")
+                if not snapshot.inputs.unchanged():
+                    raise ValueError(
+                        "Custom-query input media changed during model loading"
+                    )
             match, confidence, model = evaluate_custom_query(
                 image_path=task.thumbnail_path,
                 query=task.query,

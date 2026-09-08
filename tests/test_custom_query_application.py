@@ -104,6 +104,7 @@ def test_headless_rejects_edit_during_inference(tmp_path, monkeypatch):
         return True, 0.9, "model"
 
     monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", provider)
+    monkeypatch.setattr("core.analysis.description._load_local_model", lambda *_: None)
     result = custom_query(project, query="person", tier="local")
     assert result["result"]["succeeded"] == []
     assert result["result"]["failed"] == [{"clip_id": "c-0", "code": "stale_result"}]

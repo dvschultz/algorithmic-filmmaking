@@ -1,6 +1,7 @@
 """Unified input for analysis operations on Clips or Frames."""
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 from models.analysis_record import StoredAnalysisRecord
@@ -43,6 +44,7 @@ class AnalysisTarget:
     frame_number: Optional[int] = None
     description_model: Optional[str] = None
     description_frames: Optional[int] = None
+    custom_queries: Optional[list[dict]] = None
 
     @classmethod
     def from_clip(cls, clip: "Clip", source: "Optional[Source]") -> "AnalysisTarget":
@@ -65,6 +67,7 @@ class AnalysisTarget:
             description=clip.description,
             description_model=clip.description_model,
             description_frames=clip.description_frames,
+            custom_queries=deepcopy(clip.custom_queries),
             detected_objects=clip.detected_objects,
             object_labels=clip.object_labels,
             extracted_texts=clip.extracted_texts,
