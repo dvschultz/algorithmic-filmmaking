@@ -16,9 +16,10 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words", "custom_query")
 
 if TYPE_CHECKING:
+    from core.operations.custom_query import CustomQueryTask, CustomQueryOutcome, CustomQueryOptions
     from core.operations.alignment import AlignmentTask, AlignmentOutcome
     from core.operations.transcription import TranscriptionOptions, TranscriptionOutcome, TranscriptionTask
     from core.settings import Settings
@@ -64,6 +65,45 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         input_json=json.dumps(inputs.to_dict(), sort_keys=True, separators=(",", ":")),
     )
     return json.dumps(accepted.to_dict(), sort_keys=True)
+
+
+def accept_legacy_queries(tasks: "tuple[CustomQueryTask, ...]", options: "CustomQueryOptions", *, cancel_event: Event | None = None) -> "tuple[CustomQueryOutcome, ...]":
+    """Accept the latest saved answer to one exact question without adding history."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.custom_query import CustomQueryOutcome, custom_query_identity, custom_query_runtime
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    runtime = custom_query_runtime(options)
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if not task.query.strip() or task.analysis_json is None or task.thumbnail_path is None or not task.thumbnail_path.is_file():
+                raise ValueError("Query reuse requires an exact question and readable thumbnail")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            answer = value["result"]
+            if not isinstance(answer, dict) or answer.get("query") != task.query or type(answer.get("match")) is not bool:
+                raise ValueError("No valid legacy answer is available for this question")
+            confidence = answer.get("confidence")
+            model = answer.get("model")
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError("Legacy answer confidence is missing or invalid")
+            if model is not None and (not isinstance(model, str) or not model.strip()):
+                raise ValueError("Invalid legacy answer model")
+            outcome = CustomQueryOutcome(task.clip_id, task.query, "skipped", answer["match"], confidence, model, code="legacy_accepted")
+            if outcome.value != answer:
+                raise ValueError("Legacy answer is not canonical; recompute this query")
+            identity = custom_query_identity(snapshot, task.query, options, fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(replace(outcome, record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(CustomQueryOutcome(task.clip_id, task.query, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(CustomQueryOutcome(task.clip_id, task.query, "failed", message=str(exc)))
+    return tuple(outcomes)
 
 
 def accept_legacy_alignment(tasks: "tuple[AlignmentTask, ...]", *, cancel_event: Event | None = None) -> "tuple[AlignmentOutcome, ...]":

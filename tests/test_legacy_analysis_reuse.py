@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words", "custom_query"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -59,6 +59,7 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
     project.clips[0].extracted_texts = []
+    project.clips[0].custom_queries = [{"query": "Person?", "match": False, "confidence": 0.0, "model": "legacy"}]
     project.clips[0].transcript = []
     project.clips[0].description = "A person walking"
     project.clips[0].shot_type = "wide shot"
@@ -73,10 +74,11 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].embedding_model = DINOV2_TAG
     path = tmp_path / "project.json"
     assert project.save(path)
-    result = CliRunner().invoke(analyze, ["accept-legacy", str(path), "--operation", operation])
+    result = CliRunner().invoke(analyze, ["accept-legacy", str(path), "--operation", operation, "--query", "Person?"])
     assert result.exit_code == 0, result.output
     loaded = Project.load(path)
-    record = loaded.clips[0].analysis_records[operation]
+    from core.operations.custom_query import custom_query_record_key
+    record = loaded.clips[0].analysis_records[custom_query_record_key("Person?") if operation == "custom_query" else operation]
     assert record.provenance == "unknown" and record.legacy_reuse
     loaded.close_writer()
 
@@ -612,3 +614,63 @@ def test_verified_alignment_cannot_reuse_unknown_execution(tmp_path):
     assert accept_legacy_analysis(project, "align_words")["accepted"] == [clip.id]
     clip.analysis_records["align_words"] = replace(clip.analysis_records["align_words"], provenance="verified", legacy_reuse=False)
     assert not operation_is_complete_for_clip("align_words", clip, source=project.sources[0])
+
+
+def test_query_acceptance_preserves_negative_answer_and_history(tmp_path):
+    from copy import deepcopy
+    from core.settings import Settings
+    from core.analysis_availability import custom_query_is_complete
+    from core.operations.custom_query import custom_query_record_key, custom_query_task, resolve_options, run_custom_query
+    from ui.workers.legacy_reuse_worker import LegacyReuseWorker
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.custom_queries = [
+        {"query": "Person?", "match": True, "confidence": 0.8, "model": "older"},
+        {"query": "Car?", "match": True, "confidence": 0.8, "model": "other"},
+        {"query": "Person?", "match": False, "confidence": 0.0, "model": "legacy"},
+    ]
+    history = deepcopy(clip.custom_queries)
+    settings = Settings(description_model_tier="cloud", description_model_cloud="original-model")
+    worker = LegacyReuseWorker(project, "custom_query", [clip.id], settings=settings, query=" Person? ")
+    settings.description_model_cloud = "changed-model"
+    results = []
+    worker.result_ready.connect(results.append)
+    worker.run()
+    assert worker.application.apply(project, results[0][0])
+    record = clip.analysis_records[custom_query_record_key("Person?")]
+    assert record.provenance == "unknown" and record.legacy_reuse
+    assert record.value["result"]["match"] is False
+    assert clip.custom_queries == history
+    assert not custom_query_is_complete(clip, project.sources[0], "Person?", settings=settings)
+    settings.description_model_cloud = "original-model"
+    assert custom_query_is_complete(clip, project.sources[0], "Person?", settings=settings)
+    assert not custom_query_is_complete(clip, project.sources[0], "Car?", settings=settings)
+    with patch("core.analysis.custom_query.evaluate_custom_query", side_effect=AssertionError("no inference")):
+        reused = run_custom_query((custom_query_task(clip, project.sources[0], "Person?", skip_existing=True),), resolve_options(settings=settings))
+    assert reused[0].status == "skipped"
+    clip.custom_queries[-1]["match"] = True
+    assert not custom_query_is_complete(clip, project.sources[0], "Person?", settings=settings)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "confidence", "match", "future"])
+def test_query_acceptance_rejects_invalid_or_future_answers(tmp_path, invalid):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.custom_query import CustomQueryOptions, custom_query_record_key
+    from models.analysis_record import UnreadableAnalysisRecord
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    answer = {"query": "Person?", "match": False, "confidence": 0.0, "model": "legacy"}
+    clip.custom_queries = [] if invalid == "missing" else [answer]
+    if invalid == "confidence":
+        answer["confidence"] = None
+    elif invalid == "match":
+        answer["match"] = "false"
+    key = custom_query_record_key("Person?")
+    future = UnreadableAnalysisRecord('{"version":999}')
+    if invalid == "future":
+        clip.analysis_records[key] = future
+    result = accept_legacy_analysis(project, "custom_query", query="Person?", query_options=CustomQueryOptions("cloud", "test"))
+    assert not result["accepted"] and len(result["failed"]) == 1
+    assert clip.analysis_records.get(key) is (future if invalid == "future" else None)

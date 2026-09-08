@@ -509,6 +509,13 @@ execution evidence. The 262-test legacy/alignment/MCP/native GUI/recovery/import
 group passes, with scoped typing and lint clean. Audio transcription, faces,
 custom-query acceptance, and final verification remain open.
 
+Custom-query legacy acceptance now reaches all four surfaces with an explicit
+question, captured provider settings, and independent per-query verification.
+It preserves history and accepts valid negative answers. The 219-test legacy/
+query/MCP/native GUI/import group passes, with scoped typing/lint clean and the
+desktop question field visually checked. Audio transcription, faces, and final
+verification remain open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

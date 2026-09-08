@@ -6657,7 +6657,7 @@ class MainWindow(QMainWindow):
         """
         if wait_type == "legacy_reuse":
             from ui.workers.legacy_reuse_delivery import AgentLegacyReuse
-            return AgentLegacyReuse(self, tool_result["operation"], tool_result["clip_ids"]).start()
+            return AgentLegacyReuse(self, tool_result["operation"], tool_result["clip_ids"], query=tool_result.get("query")).start()
 
         elif wait_type == "source_import":
             from ui.workers.source_import_delivery import AgentSourceImport

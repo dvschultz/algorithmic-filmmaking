@@ -8,7 +8,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words"])
+@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words", "custom_query"])
 def test_dialog_publication_and_cancellation(tmp_path, operation):
     code = r'''
 import sys
@@ -19,6 +19,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 from core.analysis_records import AnalysisFingerprints
 from core.analysis_model_identity import DINOV2_TAG
+from core.operations.custom_query import custom_query_record_key
 from tests.test_description_operations import project_with_thumbnails
 from ui.dialogs.legacy_reuse_dialog import LegacyReuseDialog
 
@@ -37,6 +38,7 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     clip.object_labels = clip.detected_objects = []
     clip.person_count = 0
     clip.extracted_texts = []
+    clip.custom_queries = [{"query": "Person?", "match": False, "confidence": 0.0, "model": "legacy"}]
     clip.transcript = []
     clip.description = "A person walking"
     clip.shot_type = "wide shot"
@@ -49,7 +51,9 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     clip.first_frame_embedding = [0.2] * 768
     clip.last_frame_embedding = [0.3] * 768
     operation = sys.argv[2]
+    record_key = custom_query_record_key("Person?") if operation == "custom_query" else operation
     dialog = LegacyReuseDialog(owner, [clip.id])
+    dialog.query.setText("Person?")
     dialog.operation.setCurrentIndex(dialog.operation.findData(operation))
     entered, release = threading.Event(), threading.Event()
     def identity(*args, **kwargs):
@@ -66,7 +70,7 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     with patch.object(AnalysisFingerprints, 'identity', identity), patch.object(project, 'record_analysis', record):
         dialog.start_reuse()
         assert entered.wait(5)
-        assert operation not in clip.analysis_records
+        assert record_key not in clip.analysis_records
         if mode == 'trim': clip.start_frame += 1
         if mode == 'project': owner.project = object()
         if mode == 'cancel':
@@ -81,12 +85,12 @@ for mode in ('current', 'trim', 'project', 'cancel'):
         app.processEvents()
     if mode == 'current':
         assert recorded == [owner_thread], recorded
-        assert clip.analysis_records[operation].legacy_reuse
-        assert clip.analysis_records[operation].provenance == 'unknown'
+        assert clip.analysis_records[record_key].legacy_reuse
+        assert clip.analysis_records[record_key].provenance == 'unknown'
         assert 'Accepted 1 of 1' in dialog.status.text()
     else:
         assert not recorded
-        assert operation not in clip.analysis_records
+        assert record_key not in clip.analysis_records
     dialog.close()
     owner.close()
 '''

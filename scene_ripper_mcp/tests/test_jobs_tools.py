@@ -58,7 +58,7 @@ def lifespan_ctx(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words", "custom_query"])
 async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path, operation):
     from core.project import Project
     from core.analysis_model_identity import DINOV2_TAG
@@ -71,6 +71,7 @@ async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, 
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
     project.clips[0].extracted_texts = []
+    project.clips[0].custom_queries = [{"query": "Person?", "match": False, "confidence": 0.0, "model": "legacy"}]
     project.clips[0].transcript = []
     project.clips[0].description = "A person walking"
     project.clips[0].shot_type = "wide shot"
@@ -86,13 +87,14 @@ async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, 
     project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     path = tmp_path / "legacy.sceneripper"
     assert project.save(path)
-    response = json.loads(await start_accept_legacy_analysis(str(path), operation, ctx=ctx))
+    response = json.loads(await start_accept_legacy_analysis(str(path), operation, ctx=ctx, query="Person?"))
     assert response["success"], response
     _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
     output = json.loads(await get_job_result(response["task_id"], ctx=ctx))
     assert output["result"]["result"]["accepted"] == ["c-0"]
     loaded = Project.load(path)
-    record = loaded.clips[0].analysis_records[operation]
+    from core.operations.custom_query import custom_query_record_key
+    record = loaded.clips[0].analysis_records[custom_query_record_key("Person?") if operation == "custom_query" else operation]
     assert record.legacy_reuse and record.provenance == "unknown"
     loaded.close_writer()
 

@@ -1,7 +1,7 @@
 """Explicit legacy reuse with asynchronous hashing and guarded publication."""
 
 from PySide6.QtCore import Slot
-from PySide6.QtWidgets import QComboBox, QDialog, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QComboBox, QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 from core.operations.colors import ColorApplication
 from ui.theme import Spacing, UISizes
@@ -33,6 +33,7 @@ class LegacyReuseDialog(QDialog):
         self.operation.addItem("Thumbnail embeddings (compatible DINO model)", "embeddings")
         self.operation.addItem("Brightness (default five samples)", "brightness")
         self.operation.addItem("Volume", "volume")
+        self.operation.addItem("Custom query (exact saved question)", "custom_query")
         self.operation.addItem("Word alignment (saved timings)", "align_words")
         self.operation.addItem("Transcription (current settings)", "transcribe")
         self.operation.addItem("Cinematography (current settings)", "cinematography")
@@ -46,6 +47,13 @@ class LegacyReuseDialog(QDialog):
         self.operation.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
         self.operation.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH_WIDE)
         layout.addWidget(self.operation)
+        self.query = QLineEdit()
+        self.query.setPlaceholderText("Exact saved question")
+        self.query.setAccessibleName("Exact saved question")
+        self.query.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.query.setVisible(False)
+        self.operation.currentIndexChanged.connect(lambda: self.query.setVisible(self.operation.currentData() == "custom_query"))
+        layout.addWidget(self.query)
         self.status = QLabel("Accepted decisions are included the next time you save the project.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -66,12 +74,13 @@ class LegacyReuseDialog(QDialog):
             self.status.setText("Project changed. Close this dialog and select clips again.")
             return
         try:
-            worker = LegacyReuseWorker(self.project, self.operation.currentData(), self.clip_ids, self, settings=getattr(self.owner, "settings", None))
+            worker = LegacyReuseWorker(self.project, self.operation.currentData(), self.clip_ids, self, settings=getattr(self.owner, "settings", None), query=self.query.text())
         except (ValueError, RuntimeError) as exc:
             self.status.setText(str(exc))
             return
         self.worker = worker
         self.operation.setEnabled(False)
+        self.query.setEnabled(False)
         self.reuse.setEnabled(False)
         self.close_button.setText("Cancel")
         self.status.setText("Checking current media…")

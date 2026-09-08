@@ -366,10 +366,11 @@ def _start_job(
 @mcp.tool()
 async def start_accept_legacy_analysis(
     project_path: Annotated[str, "Path to the project file"],
-    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, shots, extract_text, describe, cinematography, transcribe, or align_words"],
+    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, shots, extract_text, describe, cinematography, transcribe, align_words, or custom_query"],
     clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
     idempotency_key: Optional[str] = None,
     ctx: Context | None = None,
+    query: Annotated[Optional[str], "Exact saved question; required for custom_query"] = None,
 ) -> str:
     """Explicitly accept old analysis values for current inputs without inference.
 
@@ -386,6 +387,9 @@ async def start_accept_legacy_analysis(
 
     if operation not in LEGACY_REUSE_OPERATIONS:
         return json.dumps({"success": False, "error": "Unsupported legacy reuse operation"})
+    if operation == "custom_query" and (not query or not query.strip()):
+        return json.dumps({"success": False, "error": "Specify the exact saved query to reuse"})
+    query = query.strip() if query else None
     valid, error, path = validate_project_path(project_path)
     if not valid:
         return json.dumps({"success": False, "error": error})
@@ -406,7 +410,7 @@ async def start_accept_legacy_analysis(
                 source = project.sources_by_id.get(clip.source_id)
                 if source is not None:
                     media_paths.add(source.file_path)
-                if operation in ("embeddings", "classify", "detect_objects", "shots", "describe", "cinematography") and clip.thumbnail_path is not None:
+                if operation in ("embeddings", "classify", "detect_objects", "shots", "describe", "cinematography", "custom_query") and clip.thumbnail_path is not None:
                     media_paths.add(clip.thumbnail_path)
             if operation in ("volume", "extract_text", "describe", "cinematography", "transcribe", "align_words"):
                 from core.binary_resolver import find_binary
@@ -435,10 +439,12 @@ async def start_accept_legacy_analysis(
     cinematography_options = await asyncio.to_thread(resolve_cinematography_options) if operation == "cinematography" else None
     from core.operations.legacy_reuse import legacy_transcription_options
     transcription_options = await asyncio.to_thread(legacy_transcription_options) if operation == "transcribe" else None
-    arguments = {"operation": operation, "clip_ids": ids}
+    from core.operations.custom_query import resolve_options as resolve_query_options
+    query_options = await asyncio.to_thread(resolve_query_options) if operation == "custom_query" else None
+    arguments = {"operation": operation, "clip_ids": ids, "query": query}
     spec = OperationSpec.build(
         kind="accept_legacy_analysis", version=1, arguments=arguments,
-        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps, "shot_options": asdict(shot_options) if shot_options else None, "ocr_options": asdict(ocr_options) if ocr_options else None, "description_options": asdict(description_options) if description_options else None, "cinematography_options": asdict(cinematography_options) if cinematography_options else None, "transcription_options": asdict(transcription_options) if transcription_options else None},
+        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps, "shot_options": asdict(shot_options) if shot_options else None, "ocr_options": asdict(ocr_options) if ocr_options else None, "description_options": asdict(description_options) if description_options else None, "cinematography_options": asdict(cinematography_options) if cinematography_options else None, "transcription_options": asdict(transcription_options) if transcription_options else None, "query_options": asdict(query_options) if query_options else None},
         persistence="job_history", input_revision=revision.digest,
     )
 
@@ -454,7 +460,7 @@ async def start_accept_legacy_analysis(
         project, mtime = load_with_mtime(path)
         try:
             revision.verify()
-            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event, shot_options=shot_options, ocr_options=ocr_options, description_options=description_options, cinematography_options=cinematography_options, transcription_options=transcription_options)
+            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event, shot_options=shot_options, ocr_options=ocr_options, description_options=description_options, cinematography_options=cinematography_options, transcription_options=transcription_options, query=query, query_options=query_options)
             if result["accepted"]:
                 save_with_mtime_check(project, path, mtime)
             progress_callback(1.0, "Legacy reuse decisions saved")

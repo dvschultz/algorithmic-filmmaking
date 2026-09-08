@@ -444,19 +444,21 @@ def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
 
 
 @tools.register(
-    description="Explicitly reuse legacy colors, brightness, volume, classification, object detection, gaze, shot types, OCR text, descriptions, cinematography, transcription, word alignment, or compatible DINO thumbnail/boundary embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
+    description="Explicitly reuse legacy colors, brightness, volume, classification, object detection, gaze, shot types, OCR text, descriptions, cinematography, transcription, word alignment, an exact saved custom query, or compatible DINO thumbnail/boundary embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
     requires_project=True, modifies_gui_state=True, modifies_project_state=True,
 )
-def accept_legacy_analysis(main_window, operation: str, clip_ids: list[str]) -> dict:
+def accept_legacy_analysis(main_window, operation: str, clip_ids: list[str], query: str | None = None) -> dict:
     """Route an explicit decision to detached computation and owner publication."""
     from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS
 
     if operation not in LEGACY_REUSE_OPERATIONS:
         return {"success": False, "error": "Unsupported legacy reuse operation"}
+    if operation == "custom_query" and (not query or not query.strip()):
+        return {"success": False, "error": "Specify the exact saved query to reuse"}
     ids = list(dict.fromkeys(clip_ids))
     if not ids or any(cid not in main_window.project.clips_by_id for cid in ids):
         return {"success": False, "error": "Specify existing clip IDs to reuse"}
-    return {"_wait_for_worker": "legacy_reuse", "operation": operation, "clip_ids": ids}
+    return {"_wait_for_worker": "legacy_reuse", "operation": operation, "clip_ids": ids, "query": query}
 
 
 @tools.register(

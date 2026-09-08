@@ -1085,6 +1085,16 @@ tracked, inactive historical owners as described above.
   record. The 262-test legacy/native GUI/MCP/alignment/recovery/import group
   passes; eight scoped modules pass typing and scoped lint is clean. Audio
   transcription, faces, custom-query acceptance, and the final audit remain open.
+- Custom-query acceptance now reaches all four interfaces with an explicit
+  question and captured provider settings. It binds only that question's latest
+  valid saved answer, including false/zero-confidence results, and preserves
+  history and other query records. Per-query future records are rejected before
+  task capture. Desktop users enter the question in a conditionally shown field;
+  CLI and agent tools take a query argument. The 219-test legacy/native GUI/MCP/
+  custom-query/import group passes, including inference-free reuse, unchanged
+  history, settings capture, invalid answers, and stale publication. Five scoped
+  modules pass typing, scoped lint is clean, and the dialog was visually checked
+  with the new field. Audio transcription, faces, and final review remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

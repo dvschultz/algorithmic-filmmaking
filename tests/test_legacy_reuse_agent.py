@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from core.chat_tools import tools
 from core.analysis_model_identity import DINOV2_TAG
+from core.operations.custom_query import custom_query_record_key
 from ui.main_window import MainWindow
 from tests.test_description_operations import project_with_thumbnails
 
@@ -22,7 +23,8 @@ owners = []
 tool = tools.get('accept_legacy_analysis')
 assert tool.modifies_gui_state and tool.modifies_project_state
 with TemporaryDirectory() as directory:
-    for operation in ('colors', 'embeddings', 'brightness', 'volume', 'classify', 'detect_objects', 'boundary_embeddings', 'gaze', 'shots', 'extract_text', 'describe', 'cinematography', 'transcribe', 'align_words'):
+    for operation in ('colors', 'embeddings', 'brightness', 'volume', 'classify', 'detect_objects', 'boundary_embeddings', 'gaze', 'shots', 'extract_text', 'describe', 'cinematography', 'transcribe', 'align_words', 'custom_query'):
+        record_key = custom_query_record_key("Person?") if operation == "custom_query" else operation
         for mode in ('current', 'reply', 'project', 'edit', 'cancel'):
             window = QObject(); owners.append(window)
             window.project = project_with_thumbnails(Path(directory), 1)
@@ -33,6 +35,7 @@ with TemporaryDirectory() as directory:
             clip.object_labels = clip.detected_objects = []
             clip.person_count = 0
             clip.extracted_texts = []
+            clip.custom_queries = [{"query": "Person?", "match": False, "confidence": 0.0, "model": "legacy"}]
             clip.transcript = []
             clip.description = "A person walking"
             clip.shot_type = "wide shot"
@@ -51,11 +54,11 @@ with TemporaryDirectory() as directory:
             window._start_worker_for_tool = lambda kind, result: MainWindow._start_worker_for_tool(window, kind, result)
             with patch('ui.workers.legacy_reuse_worker.LegacyReuseWorker.start'):
                 MainWindow._on_gui_tool_requested(window, 'accept_legacy_analysis',
-                    {'operation': operation, 'clip_ids': [clip.id]}, 'request')
+                    {'operation': operation, 'clip_ids': [clip.id], 'query': 'Person?'}, 'request')
             requester.set_gui_tool_result.assert_not_called()
             worker = next(iter(window._active_legacy_reuses))
             worker.start(); assert worker.wait(10000)
-            assert operation not in clip.analysis_records
+            assert record_key not in clip.analysis_records
             if mode == 'reply': window._chat_worker = object()
             if mode == 'project': window.project = project_with_thumbnails(Path(directory), 1)
             if mode == 'edit': clip.start_frame += 1
@@ -71,12 +74,12 @@ with TemporaryDirectory() as directory:
                 assert result['name'] == 'accept_legacy_analysis'
                 assert result['success'] == (mode == 'current'), result
             if mode == 'current':
-                assert clip.analysis_records[operation].legacy_reuse
-                assert clip.analysis_records[operation].provenance == 'unknown'
+                assert clip.analysis_records[record_key].legacy_reuse
+                assert clip.analysis_records[record_key].provenance == 'unknown'
                 assert result['result']['accepted'] == [clip.id]
                 assert result['result']['saved'] is False
             else:
-                assert operation not in clip.analysis_records
+                assert record_key not in clip.analysis_records
 '''
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=40,

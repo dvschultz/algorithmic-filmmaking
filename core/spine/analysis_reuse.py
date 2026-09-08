@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, cast
 from threading import Event
 
 if TYPE_CHECKING:
+    from core.operations.custom_query import CustomQueryOptions
     from core.operations.ocr import OcrOptions
     from core.operations.transcription import TranscriptionOptions
     from core.operations.cinematography import CinematographyOptions
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
     from core.operations.shots import ShotTypeOptions
 
 
-def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None, ocr_options: "OcrOptions | None" = None, description_options: "DescriptionOptions | None" = None, cinematography_options: "CinematographyOptions | None" = None, transcription_options: "TranscriptionOptions | None" = None) -> dict:
+def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None, ocr_options: "OcrOptions | None" = None, description_options: "DescriptionOptions | None" = None, cinematography_options: "CinematographyOptions | None" = None, transcription_options: "TranscriptionOptions | None" = None, query: str | None = None, query_options: "CustomQueryOptions | None" = None) -> dict:
     """Bind selected legacy values to current inputs, retaining unknown provenance.
 
     Performs media hashing; desktop callers must use the detached operation
@@ -20,7 +21,7 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options, accept_legacy_alignment
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options, accept_legacy_alignment, accept_legacy_queries
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
@@ -42,6 +43,14 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     if operation == "extract_text":
         from core.operations.ocr import OcrOptions, resolve_ocr_options
         ocr_options = resolve_ocr_options(ocr_options or OcrOptions())
+    record_key = operation
+    if operation == "custom_query":
+        from core.operations.custom_query import custom_query_record_key, resolve_options as resolve_query_options
+        if not query or not query.strip():
+            raise ValueError("Specify the exact saved query to reuse")
+        query = query.strip()
+        record_key = custom_query_record_key(query)
+        query_options = query_options or resolve_query_options()
     ids = list(dict.fromkeys(clip_ids)) if clip_ids is not None else list(project.clips_by_id)
     result: dict = {"accepted": [], "failed": [], "unprocessed": [], "provenance": "unknown"}
     for index, cid in enumerate(ids):
@@ -52,9 +61,23 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         if clip is None:
             result["failed"].append({"clip_id": cid, "message": "Clip not found"})
             continue
-        previous = clip.analysis_records.get(operation)
+        previous = clip.analysis_records.get(record_key)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation == "custom_query":
+            from core.operations.custom_query import CustomQueryApplication, custom_query_task
+
+            assert query is not None and query_options is not None
+            query_tasks = (custom_query_task(clip, project.sources_by_id.get(clip.source_id), query),)
+            query_application = CustomQueryApplication(project, query_tasks, query_options)
+            query_result = accept_legacy_queries(query_tasks, query_options, cancel_event=cancel_event)[0]
+            if query_result.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif query_result.has_result and query_application.apply(project, query_result):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": query_result.message or "Target changed"})
             continue
         if operation == "align_words":
             from core.operations.alignment import AlignmentApplication, snapshot_alignment_tasks

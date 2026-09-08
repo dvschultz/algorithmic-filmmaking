@@ -8,7 +8,8 @@ from PySide6.QtCore import Signal
 
 from core.operations.colors import ColorApplication, color_request
 from core.operations.embeddings import EmbeddingApplication, embedding_task
-from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options, accept_legacy_alignment
+from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options, accept_legacy_alignment, accept_legacy_queries
+from core.operations.custom_query import CustomQueryApplication, custom_query_task, custom_query_record_key, resolve_options as resolve_query_options
 from core.operations.alignment import AlignmentApplication, snapshot_alignment_tasks
 from core.operations.transcription import TranscriptionApplication
 from core.operations.transcription_records import transcription_task
@@ -31,7 +32,7 @@ from ui.workers.gui_tool_reply import GuiToolReply
 class LegacyReuseWorker(CancellableWorker):
     result_ready = Signal(object)
 
-    def __init__(self, project: Project, operation: str, clip_ids: list[str], parent=None, *, settings: Settings | None = None) -> None:
+    def __init__(self, project: Project, operation: str, clip_ids: list[str], parent=None, *, settings: Settings | None = None, query: str | None = None) -> None:
         super().__init__(parent)
         self.gui_tool_reply: GuiToolReply | None = None
         project.session.assert_owner()
@@ -40,17 +41,20 @@ class LegacyReuseWorker(CancellableWorker):
         ids = list(dict.fromkeys(clip_ids))
         if not ids:
             raise ValueError("Select clips to reuse their legacy analysis")
+        if operation == "custom_query" and (not query or not query.strip()):
+            raise ValueError("Specify the exact saved query to reuse")
+        record_key = custom_query_record_key(query) if operation == "custom_query" and query is not None else operation
         for cid in ids:
             clip = project.clips_by_id.get(cid)
             if clip is None:
                 raise ValueError("Selected clip is no longer in the project")
-            record = clip.analysis_records.get(operation)
+            record = clip.analysis_records.get(record_key)
             if record is not None and not isinstance(record, AnalysisRecord):
                 raise ValueError("Unknown analysis record must be preserved; recompute analysis")
         self.operation = operation
         self.request = color_request(project, ids, skip_existing=False) if operation == "colors" else None
         self.tasks = tuple(embedding_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), skip_existing=False) for cid in ids) if operation == "embeddings" else ()
-        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | AlignmentApplication | TranscriptionApplication | CinematographyApplication | DescriptionApplication | OcrApplication | ShotTypeApplication | GazeApplication | BoundaryEmbeddingApplication | ClassificationApplication | ObjectDetectionApplication
+        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | CustomQueryApplication | AlignmentApplication | TranscriptionApplication | CinematographyApplication | DescriptionApplication | OcrApplication | ShotTypeApplication | GazeApplication | BoundaryEmbeddingApplication | ClassificationApplication | ObjectDetectionApplication
         self._compute: Callable[[], object]
         if self.request is not None:
             self.application = ColorApplication(project, self.request)
@@ -58,6 +62,12 @@ class LegacyReuseWorker(CancellableWorker):
         elif operation == "embeddings":
             self.application = EmbeddingApplication(project, self.tasks)
             self._compute = partial(accept_legacy_embeddings, self.tasks, cancel_event=self._cancel_event)
+        elif operation == "custom_query":
+            assert query is not None
+            query_tasks = tuple(custom_query_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), query) for cid in ids)
+            query_options = resolve_query_options(settings=settings)
+            self.application = CustomQueryApplication(project, query_tasks, query_options)
+            self._compute = partial(accept_legacy_queries, query_tasks, query_options, cancel_event=self._cancel_event)
         elif operation == "align_words":
             alignment_tasks = snapshot_alignment_tasks([project.clips_by_id[cid] for cid in ids], project.sources_by_id, verified=True)
             self.application = AlignmentApplication(project, alignment_tasks)

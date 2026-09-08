@@ -33,11 +33,12 @@ def analyze() -> None:
 
 
 @analyze.command("accept-legacy")
+@click.option("--query", default=None, help="Exact saved question; required for custom_query")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.option("--operation", type=click.Choice(LEGACY_REUSE_OPERATIONS), required=True)
 @click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Exact clip ID (default: all clips)")
 @click.pass_context
-def accept_legacy(ctx: click.Context, project_file: Path, operation: str, clip_ids: tuple[str, ...]) -> None:
+def accept_legacy(ctx: click.Context, project_file: Path, operation: str, clip_ids: tuple[str, ...], query: str | None = None) -> None:
     """Explicitly reuse old values for current inputs without recomputing them.
 
     Provenance stays unknown: this decision does not verify how the old values
@@ -51,7 +52,7 @@ def accept_legacy(ctx: click.Context, project_file: Path, operation: str, clip_i
     project = None
     try:
         project = Project.load(path)
-        result = accept_legacy_analysis(project, operation, list(clip_ids) or None)
+        result = accept_legacy_analysis(project, operation, list(clip_ids) or None, query=query)
         if result["accepted"] and not project.save():
             raise RuntimeError("Failed to save legacy reuse decisions")
     except Exception as exc:

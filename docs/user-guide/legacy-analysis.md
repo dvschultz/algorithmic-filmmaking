@@ -22,6 +22,7 @@ scene_ripper analyze accept-legacy project.json --operation describe --clip-id C
 scene_ripper analyze accept-legacy project.json --operation cinematography --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation transcribe --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation align_words --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation custom_query --query 'Is there a person?' --clip-id CLIP_ID
 ```
 
 Omit `--clip-id` to process all clips. The command reports accepted and failed
@@ -75,6 +76,12 @@ outside the clip or containing segment require recomputation. Accepted records
 make no claim about which alignment model or fallback produced the words.
 Changes to media, editorial text, segment boundaries, or the current alignment
 runtime invalidate the decision.
+Custom-query reuse requires the exact saved question (`--query` in the CLI or
+`query` in agent tools). It accepts the latest answer to that question, including
+a negative answer with zero confidence, while preserving the complete history.
+Other questions keep their own verification state. Missing answers, invalid
+confidence/match values, and unsupported record formats require recomputation.
+The desktop dialog shows a question field when Custom query is selected.
 
 An accepted value retains **unknown provenance**. Acceptance records your
 decision to use it with the current inputs; it does not establish how the old

@@ -10,12 +10,12 @@ from ui.workers.qt_lifetime import RetiringQObject
 
 
 class AgentLegacyReuse(RetiringQObject):
-    def __init__(self, window: Any, operation: str, clip_ids: list[str]) -> None:
+    def __init__(self, window: Any, operation: str, clip_ids: list[str], *, query: str | None = None) -> None:
         super().__init__(window)
         self.window = window
         self.project = window.project
         self.reply = getattr(window, "_dispatch_gui_reply", None)
-        self.worker = LegacyReuseWorker(self.project, operation, clip_ids, window, settings=getattr(window, "settings", None))
+        self.worker = LegacyReuseWorker(self.project, operation, clip_ids, window, settings=getattr(window, "settings", None), query=query)
         self.worker.gui_tool_reply = self.reply
         self.result: dict | None = None
         self.worker.result_ready.connect(self.apply_result)
