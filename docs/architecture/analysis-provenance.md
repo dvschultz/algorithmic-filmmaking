@@ -1113,6 +1113,17 @@ tracked, inactive historical owners as described above.
   is clean. A full-module MCP typing check is not clean (52 diagnostics outside
   the new function); no broad typing-clean claim is made. Desktop/agent audio
   acceptance, faces, and final review/full-suite verification remain open.
+- Desktop audio acceptance is now available from the Collect audio row context
+  menu, with an explicit explanation before dispatch. The built-in agent exposes
+  `accept_legacy_audio_transcript` for exact audio IDs. A detached worker captures
+  current window settings and publishes through the existing audio delivery
+  guard. Accepted replies report unknown provenance and unsaved state. Audio
+  workers now retain their captured GUI reply and participate in request-token
+  cancellation; native completion retires acceptance workers. The 71-test native
+  audio/agent/cancellation/ownership/recovery/Collect group passes. Three scoped
+  worker modules pass typing, scoped lint is clean, and the confirmation dialog
+  was visually checked. Faces and final review/full-suite verification remain
+  open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

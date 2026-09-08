@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QPushButton,
+    QMenu,
     QTableWidget,
     QTableWidgetItem,
     QWidget,
@@ -28,6 +29,7 @@ class AudioLibraryList(QWidget):
 
     audio_source_selected = Signal(object)  # AudioSource
     remove_requested = Signal(str)  # audio source id
+    legacy_reuse_requested = Signal(str)
     transcribe_requested = Signal(str)  # audio source id
 
     _COL_FILENAME = 0
@@ -59,8 +61,23 @@ class AudioLibraryList(QWidget):
         header.setSectionResizeMode(self._COL_TRANSCRIBE, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self._COL_REMOVE, QHeaderView.ResizeToContents)
 
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self._table)
+
+    def _show_context_menu(self, position) -> None:
+        from ui.project_access import is_read_only
+
+        row = self._table.rowAt(position.y())
+        if row < 0 or row >= len(self._sources) or is_read_only(self):
+            return
+        audio = self._sources[row]
+        menu = QMenu(self)
+        reuse = menu.addAction("Reuse Legacy Transcript…")
+        reuse.setEnabled(audio.transcript is not None)
+        if menu.exec(self._table.viewport().mapToGlobal(position)) is reuse:
+            self.legacy_reuse_requested.emit(audio.id)
 
     def set_sources(self, sources: list[AudioSource]) -> None:
         """Replace all rows with the given audio sources."""

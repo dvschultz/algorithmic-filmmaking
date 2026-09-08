@@ -49,6 +49,44 @@ def test_audio_library_list_renders_sources(qapp, make_audio):
     assert widget._table.item(1, 1).text() == "0:45"
 
 
+def test_audio_legacy_reuse_context_action_targets_clicked_row(qapp, make_audio, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from ui.widgets.audio_library_list import AudioLibraryList
+
+    widget = AudioLibraryList()
+    widget.set_sources([make_audio(id="first", transcript=[]), make_audio(id="second", transcript=[])])
+    chosen = []
+    widget.legacy_reuse_requested.connect(chosen.append)
+    class Menu:
+        def __init__(self, parent):
+            self.action = SimpleNamespace(setEnabled=lambda enabled: None)
+
+        def addAction(self, label):
+            return self.action
+
+        def exec(self, position):
+            return self.action
+
+    monkeypatch.setattr("ui.widgets.audio_library_list.QMenu", Menu)
+    widget._show_context_menu(QPoint(1, widget._table.rowViewportPosition(1) + 1))
+    assert chosen == ["second"]
+
+
+def test_audio_legacy_reuse_can_be_declined(qapp, make_audio, monkeypatch):
+    from PySide6.QtWidgets import QWidget, QMessageBox
+    from core.project import Project
+    from ui.main_window import MainWindow
+
+    owner = QWidget()
+    owner.project = Project.new()
+    owner.project.add_audio_source(make_audio(id="audio", transcript=[]))
+    owner._active_audio_transcribes = set()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Cancel)
+    assert not MainWindow._on_audio_legacy_reuse_requested(owner, "audio")
+    assert not owner._active_audio_transcribes
+    assert not owner.project.audio_sources[0].analysis_records
+
+
 def test_audio_library_list_emits_remove_request(qapp, make_audio):
     from ui.widgets.audio_library_list import AudioLibraryList
 

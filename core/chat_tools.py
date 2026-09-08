@@ -67,6 +67,7 @@ TOOL_TIMEOUTS = {
     "describe_content_live": 600,   # 10 minutes for descriptions
     "transcribe_clips": 1200,       # 20 minutes
     "transcribe_audio_source": 1200,
+    "accept_legacy_audio_transcript": 1200,
     "accept_legacy_analysis": 1200,
     "import_audio_source": 120,
     "import_frames": 1200,
@@ -441,6 +442,19 @@ def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
            for worker in main_window._active_audio_transcribes):
         return {"success": False, "error": "Audio transcription is already running"}
     return {"_wait_for_worker": "audio_transcription", "audio_source_id": audio_source_id}
+
+
+@tools.register(
+    description="Explicitly accept a saved audio transcript by exact audio source ID, without inference. Only call after the user chooses legacy reuse. Provenance remains unknown and saved text/timings remain unchanged. Save the project to persist the decision.",
+    requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+)
+def accept_legacy_audio_transcript(main_window, audio_source_id: str) -> dict:
+    """Wait for detached audio checks and guarded owner publication."""
+    if main_window.project.get_audio_source(audio_source_id) is None:
+        return {"success": False, "error": "Unknown audio source"}
+    if any(worker.session_id == main_window.project.session.session_id and worker.task.audio_source_id == audio_source_id for worker in main_window._active_audio_transcribes):
+        return {"success": False, "error": "Audio analysis is already running"}
+    return {"_wait_for_worker": "legacy_audio_reuse", "audio_source_id": audio_source_id}
 
 
 @tools.register(

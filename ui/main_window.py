@@ -1422,6 +1422,7 @@ class MainWindow(QMainWindow):
         self.collect_tab.audio_files_added.connect(self._on_audio_files_added)
         self.collect_tab.audio_remove_requested.connect(self._on_audio_remove_requested)
         self.collect_tab.audio_transcribe_requested.connect(self._on_audio_transcribe_requested)
+        self.collect_tab.audio_legacy_reuse_requested.connect(self._on_audio_legacy_reuse_requested)
         self.collect_tab.analyze_requested.connect(self._on_analyze_requested)
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
@@ -3137,6 +3138,41 @@ class MainWindow(QMainWindow):
     def _on_audio_sources_changed(self, audio_sources):
         """Refresh the Collect tab's audio library when project state changes."""
         self.collect_tab.set_audio_sources(audio_sources)
+
+    def _on_audio_legacy_reuse_requested(self, audio_source_id: str, *, confirmed: bool = False) -> bool:
+        """Offer an explicit saved-transcript decision and hash it off-thread."""
+        from ui.workers.legacy_audio_reuse_worker import LegacyAudioReuseWorker
+        from ui.workers.audio_transcription_delivery import AudioTranscriptionDelivery
+
+        audio = self.project.get_audio_source(audio_source_id)
+        if audio is None:
+            self.status_bar.showMessage("Audio source not found")
+            return False
+        if any(worker.session_id == self.project.session.session_id and worker.task.audio_source_id == audio_source_id for worker in self._active_audio_transcribes):
+            self.status_bar.showMessage("Audio analysis is already running")
+            return False
+        if not confirmed and QMessageBox.question(
+            self, "Reuse Legacy Audio Transcript",
+            f"Reuse the saved transcript for {audio.filename}? Its provenance will remain unknown. "
+            "This binds existing text and timings to the current audio and transcription settings without inference. Save the project to keep the decision.",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+        ) != QMessageBox.Yes:
+            return False
+        try:
+            worker = LegacyAudioReuseWorker(self.project, audio_source_id, settings=self.settings, parent=self)
+        except (ValueError, RuntimeError) as exc:
+            self.status_bar.showMessage(str(exc))
+            return False
+        self._active_audio_transcribes.add(worker)
+        delivery = AudioTranscriptionDelivery(self, worker)
+        self.status_bar.showMessage(f"Checking legacy transcript for {audio.filename}…")
+        try:
+            worker.start()
+        except Exception as exc:
+            delivery.error(str(exc))
+            delivery.finished()
+            return False
+        return True
 
     def _on_audio_transcribe_requested(self, audio_source_id: str) -> bool:
         """Run Whisper transcription on the selected audio source."""
@@ -6685,6 +6721,8 @@ class MainWindow(QMainWindow):
             clip_ids = tool_result.get("clip_ids", [])
             return self.start_agent_transcription(clip_ids)
 
+        elif wait_type == "legacy_audio_reuse":
+            return self._on_audio_legacy_reuse_requested(tool_result["audio_source_id"], confirmed=True)
         elif wait_type == "audio_transcription":
             return self._on_audio_transcribe_requested(tool_result["audio_source_id"])
 

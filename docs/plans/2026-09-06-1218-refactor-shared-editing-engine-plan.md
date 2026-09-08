@@ -528,6 +528,14 @@ lint is clean; full-module MCP typing still reports diagnostics outside the new
 function. Desktop/agent audio acceptance, faces, and final verification remain
 open.
 
+Desktop and built-in agent audio acceptance are now wired through detached
+computation and the existing audio delivery guard. The Collect context action
+explains unknown provenance; agent replies mark decisions unsaved. Captured
+request cancellation includes audio workers. The 71-test audio/native GUI/
+agent/ownership/recovery/Collect group passes, with scoped typing/lint clean and
+the confirmation dialog visually checked. Faces and final verification remain
+open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

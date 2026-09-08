@@ -22,6 +22,7 @@ class AudioTranscriptionDelivery(RetiringQObject):
             window.project, worker.task, getattr(worker, "options", None)
         )
         self.reply = getattr(window, "_dispatch_gui_reply", None)
+        worker.gui_tool_reply = self.reply
         self.applied = False
         self.failure: str | None = None
         if hasattr(worker, "outcome_ready"):
@@ -78,6 +79,9 @@ class AudioTranscriptionDelivery(RetiringQObject):
         if applied and outcome.has_result:
             self.applied = True
             self.window._on_audio_transcript_ready(audio_source_id, list(outcome.segments))
+            if getattr(self.worker, "is_legacy_reuse", False):
+                self.window.status_bar.showMessage("Legacy audio transcript accepted with unknown provenance. Save the project to keep this decision.")
+                self.window._update_window_title()
         elif not applied:
             self.error("Audio changed during transcription. Run transcription again.")
 
@@ -101,10 +105,14 @@ class AudioTranscriptionDelivery(RetiringQObject):
                     "status": "succeeded",
                     "segment_count": len(self.worker.result.segments),
                 }
+                if getattr(self.worker, "is_legacy_reuse", False):
+                    result["result"].update({"provenance": "unknown", "saved": False})
             else:
                 result["error"] = (
                     self.failure or "Audio transcription cancelled or discarded"
                 )
             self.reply.send(self.window, result)
         self.window._active_audio_transcribes.discard(self.worker)
+        if getattr(self.worker, "is_legacy_reuse", False):
+            self.worker.deleteLater()
         self.retire()

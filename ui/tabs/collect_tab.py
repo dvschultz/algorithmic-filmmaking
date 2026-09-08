@@ -40,6 +40,7 @@ class CollectTab(BaseTab):
     videos_added = Signal(list)  # list of Paths
     audio_files_added = Signal(list)  # list of Paths
     audio_remove_requested = Signal(str)  # audio source id
+    audio_legacy_reuse_requested = Signal(str)
     audio_transcribe_requested = Signal(str)  # audio source id
     analyze_requested = Signal(list)  # list of source IDs (empty = all unanalyzed)
     download_requested = Signal(str, str)  # URL, resolution tier
@@ -81,6 +82,7 @@ class CollectTab(BaseTab):
         self.audio_library.audio_source_selected.connect(self.audio_source_selected)
         self.audio_library.remove_requested.connect(self.audio_remove_requested)
         self.audio_library.transcribe_requested.connect(self.audio_transcribe_requested)
+        self.audio_library.legacy_reuse_requested.connect(self.audio_legacy_reuse_requested)
         layout.addWidget(self.audio_library)
 
     def _create_toolbar(self) -> QHBoxLayout:

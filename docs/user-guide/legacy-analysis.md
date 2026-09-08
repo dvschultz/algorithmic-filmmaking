@@ -123,7 +123,14 @@ MCP agents can call `start_accept_legacy_audio_transcripts` with `project_path`
 and optional `audio_source_ids`, then poll the usual job tools. Use it only after
 an explicit reuse choice. Settings are captured before queueing; changes to the
 project, audio, or transcription runtime while queued reject the request.
-Accepted decisions are saved. Desktop audio acceptance controls are still pending.
+Accepted decisions are saved.
+
+In Collect, right-click an imported audio row and choose **Reuse Legacy
+Transcript…**. Review the explanation and choose Yes to begin the media checks.
+The built-in agent can use `accept_legacy_audio_transcript` with an exact
+`audio_source_id` after you explicitly request reuse. Both paths use current
+desktop settings and discard cancelled or stale results. Save the project to
+persist an accepted desktop decision.
 
 Acceptance for other analysis operations is not available yet. Recompute those
 results through their usual analysis commands.
