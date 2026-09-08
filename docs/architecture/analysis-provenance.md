@@ -146,7 +146,18 @@ owners after committing the database change. Result replacement releases the old
 body, and rejected updates or duplicate inserts release their unpublished bodies.
 Computed receipts have separate owners and survive history pruning. Uncertain
 publication or deletion retains files conservatively; abandoned-pin reconciliation
-remains outstanding. Session-only histories remain entirely in memory.
+remains outstanding. Session-only histories keep their JSON entirely in memory.
+
+New job inputs, operation specifications, results, and computed receipts retain
+referenced artifacts as well as their serialized bodies. Reference discovery
+includes structured data inside embedded `*_json` documents, while ordinary user
+strings remain text. This applies to inline and external bodies alike. Queued and
+running jobs keep inputs available after the producing project retires; result
+replacement and history deletion release their own references. Session-only jobs
+hold temporary pins on existing managed files and release them when the session
+store closes, without persisting job arguments. The store retains its selected
+artifact root for those releases if settings subsequently change. Existing stored
+rows are not eagerly backfilled with the new reference ownership.
 
 Continuous sequence previews now use a registered media cache. Worker-side
 identity includes source/music/still content, timeline settings, and the FFmpeg
@@ -199,8 +210,7 @@ longer duplicates managed prerenders into the legacy transformed-clips folder.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Finish the cross-consumer reuse/projection audit, including legacy prerender playback.
-  Pin referenced artifacts consumed by
-  running jobs in addition to their serialized input bodies. Add safe computed-receipt pruning;
-  existing inline receipts are not migrated eagerly.
+  Add safe computed-receipt pruning and audit legacy job-row ownership;
+  existing rows are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional
   consumers. Abandoned save pins without a later replacement remain retained.

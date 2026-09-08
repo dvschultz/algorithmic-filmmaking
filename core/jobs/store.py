@@ -36,9 +36,13 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Sequence
+from typing import Iterator, Optional, Sequence, TYPE_CHECKING
 from core.jobs.spec import OperationSpec
 from core.jobs.errors import StaleJobResult
+from core.jobs.artifact_inputs import referenced_artifacts
+
+if TYPE_CHECKING:
+    from core.artifacts import ArtifactStore
 
 # Keep short job-store transactions serialized within this process. Concurrent
 # SQLite connection open/close deadlocked in the macOS runtime's native VFS.
@@ -192,6 +196,7 @@ class JobStore:
         self.persistence = "job_history"
         self._memory_connection: sqlite3.Connection | None = None
         self._memory_lock = threading.RLock()
+        self._artifact_root: Path | None = None
         self.db_path = Path(db_path)
         self._ensure_db_file()
         self._init_schema()
@@ -203,6 +208,7 @@ class JobStore:
         store.persistence = "session_only"
         store.db_path = Path(":memory:")
         store._memory_lock = threading.RLock()
+        store._artifact_root = None
         store._memory_connection = sqlite3.connect(
             ":memory:", isolation_level=None, check_same_thread=False
         )
@@ -213,10 +219,19 @@ class JobStore:
 
     def close(self) -> None:
         """Discard session history after its runtime workers have stopped."""
+        pins: list[str | None] = []
         with self._memory_lock:
             if self._memory_connection is not None:
+                for row in self._memory_connection.execute(
+                    "SELECT input_artifact_pin,result_artifact_pin FROM jobs"
+                ):
+                    pins.extend(row)
+                pins.extend(row[0] for row in self._memory_connection.execute(
+                    "SELECT artifact_pin FROM job_results"
+                ))
                 self._memory_connection.close()
                 self._memory_connection = None
+        self._release_job_pins(pins)
 
     def _ensure_db_file(self) -> None:
         """Touch the DB file with mode 0o600 if it does not exist (R29)."""
@@ -290,15 +305,27 @@ class JobStore:
 
     # --- Mutations ---
 
-    def _stage_job_body(self, fields: dict) -> tuple[dict, str | None, str | None]:
-        """Stage a group of logical JSON columns under one durable owner."""
+    def _artifact_store(self) -> ArtifactStore:
         from core.artifacts import ArtifactStore
 
+        if self._artifact_root is None:
+            store = ArtifactStore(self.db_path.parent / "artifacts"
+                                  if self.persistence == "job_history" else None)
+            self._artifact_root = store.root
+            return store
+        return ArtifactStore(self._artifact_root)
+
+    def _stage_job_body(self, fields: dict) -> tuple[dict, str | None, str | None]:
+        """Stage a group of logical JSON columns under one durable owner."""
         data = json.dumps(fields, separators=(",", ":")).encode("utf-8")
-        if self.persistence != "job_history" or len(data) <= _RESULT_INLINE_BYTES:
+        refs = referenced_artifacts(fields.values())
+        external = self.persistence == "job_history" and len(data) > _RESULT_INLINE_BYTES
+        if not external and not refs:
             return fields, None, None
-        artifacts = ArtifactStore(self.db_path.parent / "artifacts")
-        pin = artifacts.create_pin()
+        artifacts = self._artifact_store()
+        pin = artifacts.create_pin(refs)
+        if not external:
+            return fields, None, pin
         try:
             ref = artifacts.put_bytes(data, pin=pin, media_type="application/json")
         except BaseException:
@@ -307,11 +334,9 @@ class JobStore:
         return dict.fromkeys(fields, ""), json.dumps(ref.to_dict()), pin
 
     def _release_job_pins(self, pins: Sequence[str | None]) -> None:
-        from core.artifacts import ArtifactStore
-
         owners = {pin for pin in pins if pin is not None}
         if owners:
-            artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+            artifacts = self._artifact_store()
             for owner in owners:
                 artifacts.release_pin(owner)
 
@@ -521,7 +546,6 @@ class JobStore:
 
     def _hydrate_result(self, row: dict) -> dict:
         """Resolve payloads outside the job connection to avoid lock inversion."""
-        from core.artifacts import ArtifactStore
         from models.analysis_record import ArtifactRef
 
         for field in ("spec", "payload"):
@@ -532,7 +556,7 @@ class JobStore:
                 raise StaleJobResult("Conflicting job result storage metadata")
             try:
                 ref = ArtifactRef.from_dict(json.loads(reference))
-                artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+                artifacts = self._artifact_store()
                 row[f"{field}_json"] = artifacts.read_bytes(ref).decode("utf-8")
             except (KeyError, TypeError, ValueError, OSError) as exc:
                 raise StaleJobResult("Job result payload is unavailable or corrupt") from exc
@@ -583,23 +607,23 @@ class JobStore:
         self, result_id: str, spec_json: str, payload_json: str, digest: str
     ) -> dict:
         """Persist immutable computed output before publishing it to a project."""
-        from core.artifacts import ArtifactStore
-
         values = {"spec": spec_json, "payload": payload_json}
         references: dict[str, str | None] = {"spec": None, "payload": None}
         artifacts = None
         pin = None
-        if self.persistence == "job_history" and any(
+        refs = referenced_artifacts(values.values())
+        external = self.persistence == "job_history" and any(
             len(value.encode("utf-8")) > _RESULT_INLINE_BYTES for value in values.values()
-        ):
+        )
+        if external or refs:
             # The default jobs.db lives in the configured cache directory. Keep
             # custom databases self-contained too; session-only stores stay inline.
-            artifacts = ArtifactStore(self.db_path.parent / "artifacts")
-            pin = artifacts.create_pin()
+            artifacts = self._artifact_store()
+            pin = artifacts.create_pin(refs)
             try:
                 for field, value in values.items():
                     data = value.encode("utf-8")
-                    if len(data) > _RESULT_INLINE_BYTES:
+                    if external and len(data) > _RESULT_INLINE_BYTES:
                         ref = artifacts.put_bytes(data, pin=pin, media_type="application/json")
                         references[field] = json.dumps(ref.to_dict(), sort_keys=True)
                         values[field] = ""
@@ -654,7 +678,6 @@ class JobStore:
     # --- Reads ---
 
     def _read_jobs(self, sql: str, params: Sequence = ()) -> list[JobRow]:
-        from core.artifacts import ArtifactStore
         from models.analysis_record import ArtifactRef
 
         artifacts = None
@@ -677,7 +700,7 @@ class JobStore:
                     except (KeyError, TypeError, ValueError) as exc:
                         raise StaleJobResult("Job history reference is corrupt") from exc
                     if refs:
-                        artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+                        artifacts = self._artifact_store()
                         lease = artifacts.create_pin(refs)
         try:
             for row in rows:
