@@ -53,6 +53,23 @@ def decoded_ids(ffmpeg: str, path: Path, *, hflip=False, vflip=False) -> list[in
     return [sum((int(frame[8, bit * 5 + 2, 0]) > 128) << bit for bit in range(12)) for frame in frames]
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_managed_prerender_decodes_the_trimmed_and_transformed_frames(ffmpeg, tmp_path, reverse):
+    from core.remix.prerender import prerender_clip
+
+    source = make_numbered_video(ffmpeg, tmp_path / "source.mp4", count=48)
+    kwargs = dict(source_path=source.file_path, start_frame=12, end_frame=24,
+                  fps=24.0, hflip=True, vflip=True, reverse=reverse,
+                  output_dir=tmp_path / "cache", clip_id="clip")
+    output = prerender_clip(**kwargs)
+    assert output is not None
+    expected = list(range(12, 24))
+    if reverse:
+        expected.reverse()
+    assert decoded_ids(ffmpeg, output, hflip=True, vflip=True) == expected
+    assert prerender_clip(**kwargs) == output
+
+
 @pytest.mark.parametrize("reverse,hflip,vflip", [(False, False, False), (True, True, True)])
 def test_nonzero_offset_and_transforms_agree_in_preview_and_export(ffmpeg, tmp_path, reverse, hflip, vflip):
     from core.sequence_preview import render_sequence_preview, SequencePreviewSettings

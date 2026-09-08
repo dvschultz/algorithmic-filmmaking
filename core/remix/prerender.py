@@ -5,14 +5,21 @@ and export just work without runtime filter juggling.
 """
 
 import logging
+import hashlib
+import json
 import os
 import subprocess
 import concurrent.futures
+import tempfile
+from functools import partial
 from pathlib import Path
 from threading import Event, Lock
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary, get_subprocess_kwargs
+from core.media_cache import MediaCache, media_file_stamp
+from core.jobs.errors import StaleJobResult
+from models.media_time import frame_rate
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +28,28 @@ logger = logging.getLogger(__name__)
 _REVERSE_MAX_DURATION = 15.0
 
 
+class _PrerenderFingerprints:
+    """Share source reads across batch threads while preserving input checks."""
+
+    def __init__(self, cancel: Optional[Event] = None) -> None:
+        from core.jobs.media import MediaFingerprints
+
+        self.fingerprints = MediaFingerprints(cancel or Event())
+        self.lock = Lock()
+
+    def get(self, path: Path) -> dict:
+        with self.lock:
+            value = self.fingerprints.get(path)
+        if value is None:
+            raise ValueError("Prerender source is missing")
+        return value
+
+
 def get_transform_cache_dir() -> Path:
     """Get the directory for cached pre-rendered clips."""
     from core.settings import load_settings
     settings = load_settings()
-    return settings.thumbnail_cache_dir.parent / "transformed_clips"
+    return settings.cache_dir / "transformed_clips"
 
 
 def prerender_clip(
@@ -38,6 +62,7 @@ def prerender_clip(
     reverse: bool,
     output_dir: Path,
     clip_id: str,
+    _fingerprints: Optional[_PrerenderFingerprints] = None,
 ) -> Optional[Path]:
     """Pre-render a single clip with baked transforms.
 
@@ -58,24 +83,20 @@ def prerender_clip(
     if not (hflip or vflip or reverse):
         return None
 
-    h = "1" if hflip else "0"
-    v = "1" if vflip else "0"
-    r = "1" if reverse else "0"
-    output_path = output_dir / f"{clip_id}_{h}_{v}_{r}.mp4"
-
-    # Idempotent: skip if file already exists and is non-empty
-    if output_path.exists() and output_path.stat().st_size > 0:
-        return output_path
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     ffmpeg_path = find_binary("ffmpeg")
     if not ffmpeg_path:
         logger.error("FFmpeg not found, cannot pre-render clip")
         return None
 
-    start_seconds = start_frame / fps
-    duration_seconds = (end_frame - start_frame) / fps
+    try:
+        rate = frame_rate(fps)
+        if type(start_frame) is not int or type(end_frame) is not int or not 0 <= start_frame < end_frame:
+            raise ValueError("Invalid source frame range")
+    except ValueError:
+        logger.error("Invalid pre-render range or frame rate for clip %s", clip_id)
+        return None
+    start_seconds = float(start_frame / rate)
+    duration_seconds = float((end_frame - start_frame) / rate)
 
     # Check reverse safety limit
     apply_reverse = reverse
@@ -100,6 +121,38 @@ def prerender_clip(
     # But if literally nothing to apply, skip.
     if not vf_parts and not apply_reverse:
         return None
+
+    source_path = Path(source_path)
+    before = media_file_stamp(source_path)
+    runtime_stamp = media_file_stamp(Path(ffmpeg_path))
+    try:
+        fingerprint = (_fingerprints or _PrerenderFingerprints()).get(source_path)
+        if before is None or media_file_stamp(source_path) != before:
+            raise ValueError("Source changed during fingerprinting")
+        identity = {
+            "version": 1, "source_sha256": fingerprint["sha256"],
+            "range": [start_frame, end_frame], "fps": str(rate),
+            "requested": [hflip, vflip, reverse], "filters": vf_parts,
+            "reverse_limit": _REVERSE_MAX_DURATION,
+            "video_codec": "libx264", "preset": "fast", "crf": 18, "audio_codec": "aac",
+            "ffmpeg": [str(ffmpeg_path), runtime_stamp],
+        }
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        cache = MediaCache(output_dir, output_dir.parent / "artifacts")
+        cached = cache.get("transformed-clips", key)
+        if cached is not None:
+            if (media_file_stamp(source_path) != before
+                    or media_file_stamp(Path(ffmpeg_path)) != runtime_stamp):
+                raise ValueError("Inputs changed during cache verification")
+            # Cache ownership persists: sequence entries still carry paths. Do
+            # not evict these entries until model/undo owners can retain them.
+            return cached.path
+    except (OSError, ValueError, StaleJobResult):
+        logger.error("Cannot verify pre-render inputs for clip %s", clip_id, exc_info=True)
+        return None
+
+    staging = tempfile.TemporaryDirectory(prefix="render-", dir=output_dir)
+    output_path = Path(staging.name) / "clip.mp4"
 
     cmd = [
         ffmpeg_path,
@@ -134,13 +187,19 @@ def prerender_clip(
                 clip_id, result.stderr[-500:] if result.stderr else "unknown error",
             )
             return None
-        return output_path
+        if (media_file_stamp(source_path) != before
+                or media_file_stamp(Path(ffmpeg_path)) != runtime_stamp):
+            logger.error("Inputs changed during pre-render for clip %s", clip_id)
+            return None
+        return cache.publish("transformed-clips", key, output_path).path
     except subprocess.TimeoutExpired:
         logger.error("FFmpeg pre-render timed out for clip %s", clip_id)
         return None
     except Exception:
         logger.error("FFmpeg pre-render error for clip %s", clip_id, exc_info=True)
         return None
+    finally:
+        staging.cleanup()
 
 
 def _process_single_clip(
@@ -148,6 +207,7 @@ def _process_single_clip(
     source,
     transforms: dict,
     output_dir: Path,
+    fingerprints: _PrerenderFingerprints,
 ) -> Optional[Path]:
     """Process a single clip for use in the thread pool.
 
@@ -170,6 +230,7 @@ def _process_single_clip(
         reverse=reverse,
         output_dir=output_dir,
         clip_id=clip.id,
+        _fingerprints=fingerprints,
     )
 
 
@@ -210,6 +271,7 @@ def prerender_batch(
     max_workers = min(4, os.cpu_count() or 2)
     completed_count = 0
     counter_lock = Lock()
+    fingerprints = _PrerenderFingerprints(cancel_event)
 
     def _on_done(idx: int, future: concurrent.futures.Future) -> None:
         """Callback invoked when a future completes; updates progress."""
@@ -228,9 +290,9 @@ def prerender_batch(
                 break
 
             future = executor.submit(
-                _process_single_clip, clip, source, transforms, output_dir,
+                _process_single_clip, clip, source, transforms, output_dir, fingerprints,
             )
-            future.add_done_callback(lambda f, idx=i: _on_done(idx, f))
+            future.add_done_callback(partial(_on_done, i))
             futures[future] = i
 
         # Collect results as they complete, checking for cancellation

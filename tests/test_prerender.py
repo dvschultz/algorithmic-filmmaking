@@ -12,6 +12,8 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from core.remix.prerender import (
     _REVERSE_MAX_DURATION,
     prerender_clip,
@@ -22,13 +24,22 @@ from models.sequence import Sequence, SequenceClip
 
 # -- prerender_clip -----------------------------------------------------------
 
+
+def _render_success(cmd, **kwargs):
+    Path(cmd[-1]).write_bytes(b"rendered video")
+    return MagicMock(returncode=0)
+
 class TestPrerenderClip:
     """prerender_clip constructs correct FFmpeg commands."""
+
+    @pytest.fixture(autouse=True)
+    def source_media(self, tmp_path):
+        (tmp_path / "source.mp4").write_bytes(b"source video")
 
     def test_no_transforms_returns_none(self, tmp_path):
         """No transforms → no pre-render needed."""
         result = prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=False, vflip=False, reverse=False,
             output_dir=tmp_path, clip_id="c1",
@@ -38,15 +49,15 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_hflip_only(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         result = prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=True, vflip=False, reverse=False,
             output_dir=tmp_path, clip_id="c1",
         )
         assert result is not None
-        assert result.name == "c1_1_0_0.mp4"
+        assert result.is_file()
         cmd = mock_run.call_args[0][0]
         assert "-vf" in cmd
         vf_idx = cmd.index("-vf")
@@ -55,14 +66,14 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_vflip_only(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         result = prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=False, vflip=True, reverse=False,
             output_dir=tmp_path, clip_id="c1",
         )
-        assert result.name == "c1_0_1_0.mp4"
+        assert result.is_file()
         cmd = mock_run.call_args[0][0]
         vf_idx = cmd.index("-vf")
         assert cmd[vf_idx + 1] == "vflip"
@@ -70,14 +81,14 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_reverse_only(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         result = prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=False, vflip=False, reverse=True,
             output_dir=tmp_path, clip_id="c1",
         )
-        assert result.name == "c1_0_0_1.mp4"
+        assert result.is_file()
         cmd = mock_run.call_args[0][0]
         vf_idx = cmd.index("-vf")
         assert cmd[vf_idx + 1] == "reverse"
@@ -88,14 +99,14 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_all_transforms(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         result = prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=True, vflip=True, reverse=True,
             output_dir=tmp_path, clip_id="c1",
         )
-        assert result.name == "c1_1_1_1.mp4"
+        assert result.is_file()
         cmd = mock_run.call_args[0][0]
         vf_idx = cmd.index("-vf")
         assert cmd[vf_idx + 1] == "hflip,vflip,reverse"
@@ -103,14 +114,14 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_hflip_vflip(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         result = prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=True, vflip=True, reverse=False,
             output_dir=tmp_path, clip_id="c1",
         )
-        assert result.name == "c1_1_1_0.mp4"
+        assert result.is_file()
         cmd = mock_run.call_args[0][0]
         vf_idx = cmd.index("-vf")
         assert cmd[vf_idx + 1] == "hflip,vflip"
@@ -120,9 +131,9 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_hflip_reverse(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=True, vflip=False, reverse=True,
             output_dir=tmp_path, clip_id="c1",
@@ -134,9 +145,9 @@ class TestPrerenderClip:
     @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
     @patch("core.remix.prerender.subprocess.run")
     def test_vflip_reverse(self, mock_run, mock_find, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = _render_success
         prerender_clip(
-            source_path=Path("/video.mp4"),
+            source_path=tmp_path / "source.mp4",
             start_frame=0, end_frame=150, fps=30.0,
             hflip=False, vflip=True, reverse=True,
             output_dir=tmp_path, clip_id="c1",
@@ -145,29 +156,27 @@ class TestPrerenderClip:
         vf_idx = cmd.index("-vf")
         assert cmd[vf_idx + 1] == "vflip,reverse"
 
-    def test_idempotent_skips_existing(self, tmp_path):
-        """If output file already exists, skip FFmpeg and return path."""
-        output = tmp_path / "c1_1_0_0.mp4"
-        output.write_text("fake")  # Create existing file
-
-        result = prerender_clip(
-            source_path=Path("/video.mp4"),
-            start_frame=0, end_frame=150, fps=30.0,
-            hflip=True, vflip=False, reverse=False,
-            output_dir=tmp_path, clip_id="c1",
-        )
-        assert result == output
+    @patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg")
+    @patch("core.remix.prerender.subprocess.run", side_effect=_render_success)
+    def test_idempotent_skips_existing(self, mock_run, mock_find, tmp_path):
+        """A verified successful render is reused without another FFmpeg call."""
+        kwargs = dict(source_path=tmp_path / "source.mp4", start_frame=0,
+                      end_frame=150, fps=30.0, hflip=True, vflip=False, reverse=False,
+                      output_dir=tmp_path, clip_id="c1")
+        result = prerender_clip(**kwargs)
+        assert result is not None and prerender_clip(**kwargs) == result
+        assert mock_run.call_count == 1
 
     def test_reverse_safety_limit(self, tmp_path):
         """Clips over 15s skip reverse transform."""
         # 20 seconds at 30fps = 600 frames
         with patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg"), \
              patch("core.remix.prerender.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+            mock_run.side_effect = _render_success
 
             # reverse-only on a long clip: no transforms to apply → returns None
             result = prerender_clip(
-                source_path=Path("/video.mp4"),
+                source_path=tmp_path / "source.mp4",
                 start_frame=0, end_frame=600, fps=30.0,
                 hflip=False, vflip=False, reverse=True,
                 output_dir=tmp_path, clip_id="long",
@@ -178,10 +187,10 @@ class TestPrerenderClip:
         """Long clip with hflip + reverse: reverse skipped, hflip still applied."""
         with patch("core.remix.prerender.find_binary", return_value="/usr/bin/ffmpeg"), \
              patch("core.remix.prerender.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+            mock_run.side_effect = _render_success
 
             result = prerender_clip(
-                source_path=Path("/video.mp4"),
+                source_path=tmp_path / "source.mp4",
                 start_frame=0, end_frame=600, fps=30.0,
                 hflip=True, vflip=False, reverse=True,
                 output_dir=tmp_path, clip_id="long2",

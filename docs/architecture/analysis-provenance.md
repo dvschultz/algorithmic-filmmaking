@@ -164,6 +164,21 @@ retains its last preview lease until another preview replaces it or the player i
 destroyed, so invalidating the timeline does not remove a file still loaded by
 MPV. Uncertain cache publication remains conservatively retained.
 
+Transformed-clip prerender production also uses verified managed media. Its key
+includes source content, exclusive source-frame range and exact rate, requested
+and applied transforms, reverse safety policy, encoder settings, and FFmpeg runtime
+stamp. Editor clip IDs are not content identity. Batches share a thread-safe
+fingerprint cache, so each unchanged source is read once per batch. Rendering
+stages output privately and rejects failed, empty, source-changed, or runtime-changed
+results. Legacy filename-only outputs are preserved without automatic reuse.
+Project saves copy managed prerenders instead of hard-linking them, preventing
+project-local edits from changing shared cache bytes.
+
+Prerender cache entries currently retain their own durable owners indefinitely.
+Sequence entries still serialize paths, so automatic eviction must wait for
+explicit sequence, undo, and export ownership and portable-reference integration.
+This is a production/reuse migration, not completion of prerender retention.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
@@ -171,8 +186,8 @@ MPV. Uncertain cache publication remains conservatively retained.
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
-- Move transformed-clip prerenders into managed storage, with pins spanning
-  execution, playback, export, and recovery. Pin referenced artifacts consumed by
+- Finish sequence-model references and lifetime ownership for managed transformed-clip
+  prerenders, including undo, export, recovery, and safe eviction. Pin referenced artifacts consumed by
   running jobs in addition to their serialized input bodies. Add safe computed-receipt pruning;
   existing inline receipts are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional

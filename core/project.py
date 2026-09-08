@@ -108,8 +108,9 @@ def _prepare_prerendered_clips(
     Does **not** mutate any SequenceClip objects — the caller applies the mapping
     only during serialization so in-memory state is never changed by save.
 
-    Hard links are preferred (near-instant, no extra disk space).  Falls back to
-    an exclusive byte copy when a hard link fails (e.g. cross-device).
+    Hard links are preferred for legacy files. Managed object files are copied
+    so edits to a project-local file cannot mutate a shared cache payload.
+    An exclusive byte copy also handles cross-device publication.
 
     If a destination filename already exists with different content, a numeric
     suffix is appended to avoid silent overwrites (e.g. ``name_2.mp4``).
@@ -151,21 +152,28 @@ def _prepare_prerendered_clips(
             dest = _unique_dest(src, dest)
             if dest.exists():
                 break  # Existing content was verified by _unique_dest.
-            try:
-                os.link(src, dest)
-            except FileExistsError:
-                continue  # A competing publication won; choose again.
-            except OSError:
+            # Conservatively copy object-store paths, including unknown .blob
+            # files in such directories. This grants no trust or deletion rights.
+            if not (src.parent.name == "objects" and src.suffix == ".blob"):
                 try:
-                    output = dest.open("xb")
+                    os.link(src, dest)
+                    break
                 except FileExistsError:
-                    continue
-                try:
-                    with output, src.open("rb") as input_stream:
-                        shutil.copyfileobj(input_stream, output)
-                except BaseException:
-                    dest.unlink(missing_ok=True)
-                    raise
+                    continue  # A competing publication won; choose again.
+                except OSError:
+                    pass
+            try:
+                output = dest.open("xb")
+            except FileExistsError:
+                continue
+            try:
+                with output, src.open("rb") as input_stream:
+                    shutil.copyfileobj(input_stream, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except BaseException:
+                dest.unlink(missing_ok=True)
+                raise
             break
 
         mapping[clip.prerendered_path] = str(dest)
