@@ -339,6 +339,11 @@ async def get_analysis_status(
         has_custom_queries = sum(1 for c in clips if c.custom_queries)
         has_tags = sum(1 for c in clips if c.tags)
         has_notes = sum(1 for c in clips if c.notes)
+        from core.analysis_availability import compute_operation_need_counts
+
+        scalar_pending = compute_operation_need_counts(
+            clips, ("brightness", "volume"), sources_by_id=project.sources_by_id,
+        )
 
         # Shot type distribution
         shot_types: dict = {}
@@ -351,6 +356,14 @@ async def get_analysis_status(
                 "success": True,
                 "total_clips": len(clips),
                 "analysis": {
+                    **{
+                        operation: {
+                            "analyzed": len(clips) - pending,
+                            "pending": pending,
+                            "percentage": ((len(clips) - pending) / len(clips) * 100) if clips else 0,
+                        }
+                        for operation, pending in scalar_pending.items()
+                    },
                     "colors": {
                         "analyzed": has_colors,
                         "pending": len(clips) - has_colors,

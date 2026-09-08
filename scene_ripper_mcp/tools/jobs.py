@@ -623,6 +623,24 @@ async def _start_spine_analyze_job(
 
         def run(progress_callback, cancel_event):
             return run_embedding_job(store, path, operation.arguments["clip_ids"], progress_callback, cancel_event, operation=operation)
+    elif spine_fn_name == "analyze_scalars":
+        from core.jobs.scalars import scalar_job_spec, run_scalar_job
+
+        scalar_kind = "brightness" if payload["operation"] == "brightness" else "volume"
+        try:
+            operation = scalar_job_spec(
+                _project, clip_ids, scalar_kind,
+                num_samples=payload["num_samples"], arguments=payload,
+            )
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_scalar_job(
+                store, path, operation.arguments["clip_ids"], progress_callback,
+                cancel_event, kind=scalar_kind, operation=operation,
+            )
     elif spine_fn_name == "face_embeddings":
         from core.jobs.faces import face_job_spec, run_face_job
         from core.operations.faces import FaceOptions
@@ -1394,6 +1412,30 @@ async def start_analyze_cinematography(
         idempotency_key=idempotency_key,
         args={"mode": mode, "model": model},
         op_kwargs={"mode": mode, "model": model},
+    )
+
+
+@mcp.tool()
+async def start_analyze_scalars(
+    project_path: Annotated[str, "Absolute path to saved project file"],
+    operation: Annotated[str, "Scalar measurement: brightness or volume"],
+    clip_ids: Annotated[Optional[list[str]], "Exact clip IDs (default: all)"] = None,
+    num_samples: Annotated[int, "Positive brightness sample count; volume uses the full clip"] = 5,
+    force: Annotated[bool, "Recompute existing results"] = False,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Measure brightness or volume with verified reuse and durable recovery.
+
+    Poll and cancel through the standard job tools. Does not install dependencies.
+    """
+    if operation not in ("brightness", "volume") or type(num_samples) is not int or num_samples < 1:
+        return json.dumps({"success": False, "error": {"code": "validation_error", "message": "Choose brightness or volume and a positive integer sample count"}})
+    return await _start_spine_analyze_job(
+        ctx=ctx, project_path=project_path, kind="analyze_scalars",
+        spine_fn_name="analyze_scalars", clip_ids=list(clip_ids) if clip_ids is not None else None,
+        idempotency_key=idempotency_key,
+        args={"operation": operation, "num_samples": num_samples, "force": force},
     )
 
 

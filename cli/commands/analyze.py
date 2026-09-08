@@ -26,8 +26,41 @@ def analyze() -> None:
         extract-text Extract visible text with resumable results
         embeddings Extract thumbnail embeddings with resumable results
         boundary-embeddings Extract first/last-frame embeddings with resumable results
+        scalars   Measure brightness or volume with resumable results
     """
     pass
+
+
+@analyze.command("scalars")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--operation", "scalar_kind", type=click.Choice(["brightness", "volume"]), required=True)
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Exact clip ID (default: all clips)")
+@click.option("--num-samples", type=click.IntRange(min=1), default=5, show_default=True, help="Brightness sample count; volume analyzes the full clip")
+@click.option("--force", "-f", is_flag=True, help="Recompute existing scalar results")
+@click.pass_context
+def scalars(ctx: click.Context, project_file: Path, scalar_kind: str, clip_ids: tuple[str, ...], num_samples: int, force: bool) -> None:
+    """Measure brightness or volume and recover interrupted computations."""
+    from threading import Event
+    from core.jobs.scalars import run_scalar_job
+    from core.jobs.store import JobStore
+
+    project_file = own_project(ctx, project_file)
+    try:
+        store = JobStore(CLIConfig.load().cache_dir / "jobs.db")
+        try:
+            with ProgressContext(f"Measuring {scalar_kind}") as progress:
+                result = run_scalar_job(
+                    store, project_file, list(clip_ids) if clip_ids else None,
+                    progress.update, Event(), kind="brightness" if scalar_kind == "brightness" else "volume",
+                    num_samples=num_samples, force=force,
+                )
+        finally:
+            store.close()
+    except ValueError as exc:
+        exit_with(ExitCode.VALIDATION_ERROR, str(exc))
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Scalar analysis failed: {exc}")
+    output_result(result, as_json=ctx.obj.get("json", False))
 
 
 @analyze.command("extract-text")

@@ -594,7 +594,13 @@ results are discarded. Valid records already published before cancellation remai
 The regression run passed 258 tests, with a final 72-test GUI/recovery follow-up;
 scoped publication helper typing and changed-file Ruff pass. Two old generation
 test mocks were updated for the existing sources_by_id estimate argument.
-Standalone durable scalar jobs and registered CLI/MCP/agent surfaces remain pending.
+Standalone scalar jobs now provide verified result-batch recovery, owned failures,
+force-refresh generations, and cancellation that saves completed prefixes while
+retaining uncommitted computations for retry. `analyze scalars` CLI and
+`start_analyze_scalars` MCP routes are registered, with verified scalar status
+counts. The regression run passed 237 tests and the final scalar job/status run
+passed 28 tests; scoped job typing and changed-file Ruff pass. Caller documentation
+is updated. GUI agent scalar analysis registration remains pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

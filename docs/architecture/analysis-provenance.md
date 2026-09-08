@@ -754,8 +754,15 @@ Cancelled queued results never create a sequence. Already published valid record
 remain available if cancellation interrupts a batch. The regression run passed
 258 tests; the final focused GUI/recovery run passed 72 tests. Scoped publication
 helper typing and changed-file Ruff pass. Two old generation test mocks were
-updated for the existing sources_by_id estimate argument. Standalone durable
-scalar jobs and registered CLI/MCP/agent scalar routes remain pending.
+updated for the existing sources_by_id estimate argument. Standalone scalar jobs
+now use result batches and verified identities for save/checkpoint recovery, forced
+refresh generations, owned failures, and cancellation that preserves completed
+prefixes. Recovery checks recorded source content identity against verified current
+inputs. Registered `analyze scalars` CLI and `start_analyze_scalars` MCP routes use
+these jobs; MCP status counts verified scalar completion. The regression run passed
+237 tests and the final scalar job/status run passed 28 tests. The new job module
+passes scoped typing and changed-file Ruff is clean. GUI agent scalar analysis
+registration remains pending.
 
 ## Remaining U10 work
 

@@ -551,3 +551,35 @@ after the project file is safely written. If that acknowledgement fails, your
 project is still saved; saving again retries it without rerunning inference.
 The log identifies pending checkpoint errors. Keep the shared job cache for
 recovery; saving does not rebuild a missing cache.
+
+
+## Brightness and volume
+
+Use the CLI to measure either scalar across a saved project:
+
+```bash
+scene_ripper --json analyze scalars project.sceneripper --operation brightness
+scene_ripper --json analyze scalars project.sceneripper --operation volume
+```
+
+Repeat `--clip-id ID` to select exact clips. Brightness defaults to five sampled
+frames; `--num-samples N` changes that count. Volume analyzes the full clip audio.
+Use `--force` to refresh existing results. Missing dependencies are not installed
+automatically. Failures preserve previous scalar values with a failed record.
+
+MCP clients call `start_analyze_scalars(project_path, operation="brightness")`
+or choose `operation="volume"`, then use the standard job status, result, and
+cancellation tools. Optional parameters are `clip_ids`, `num_samples`, `force`,
+and `idempotency_key`. `get_analysis_status` reports verified brightness and volume
+completion, including black frames and clips without audio.
+
+Headless commands save accepted results. If a save or checkpoint fails, retry the
+same request to recover completed computation. A completed forced refresh can be
+retried after a checkpoint failure without recomputing; a new force request after
+successful checkpointing computes again. Keep the job cache for recovery.
+
+GUI brightness and volume sequencing uses the same verified operations and caches
+computations for saved projects. Accepted records enter the project before the
+sequence commits. Save normally to persist those records and acknowledge their
+receipts. GUI and headless computation journals have separate identities, while
+saved verified analysis records can be reused by either surface.

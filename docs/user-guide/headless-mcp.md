@@ -157,6 +157,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_align_words` | Add word timestamps to existing transcripts; requires installed alignment runtime |
 | `start_describe` | Generate VLM descriptions |
 | `start_analyze_cinematography` | Generate rich film-language analysis |
+| `start_analyze_scalars` | Measure brightness or volume with verified reuse and durable recovery; optional `force` refresh |
 | `start_detect_faces` | Extract face embeddings |
 | `start_analyze_gaze` | Estimate gaze direction |
 | `start_generate_embeddings` | Extract DINOv2 visual embeddings |
