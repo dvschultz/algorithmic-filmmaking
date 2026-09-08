@@ -7,8 +7,8 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
-def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False) -> None:
-    from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots
+def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False) -> None:
+    from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze
 
     media = directory / f"{clip.id}.mp4"
     media.write_bytes(b"source fixture")
@@ -34,3 +34,6 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
     if shots:
         with patch("core.analysis.shots.classify_shot_type", return_value=("wide shot", 0.9)):
             analyze_shots(project)
+    if gaze:
+        with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=None), patch("core.analysis.gaze.load_face_mesh"), patch("core.analysis.gaze.unload_model"):
+            analyze_gaze(project)

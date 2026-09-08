@@ -214,6 +214,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.operations.gaze import GazeOutcome
 
             outcome = GazeOutcome.from_dict(payload)
+            if outcome.record_json is not None and clip.get("analysis_records", {}).get("gaze") != json.loads(outcome.record_json):
+                continue
             expected = _saved_gaze(
                 {
                     "gaze_yaw": outcome.yaw,

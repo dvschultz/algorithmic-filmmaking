@@ -385,7 +385,7 @@ New paths below are proposed file ownership, not existing files. Large migration
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
 **Implementation checkpoint:** In progress. Colors, thumbnail embeddings, object
-detection, OCR, ImageNet classification, and shot classification now use verified
+detection, OCR, ImageNet classification, shot classification, and gaze now use verified
 records across their shared operations and delivery surfaces. Thumbnail embedding
 artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
 work includes the other U7 analysis families, explicit legacy-reuse flows,

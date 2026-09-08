@@ -7,6 +7,10 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.analysis_model_identity import gaze_runtime
+from models.analysis_record import AnalysisRecord
+
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
@@ -18,25 +22,16 @@ from core.operations.gaze import (
     GazeTask,
     run_gaze,
     gaze_model_session,
+    gaze_task,
+    gaze_identity,
+    gaze_values,
 )
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    from importlib.metadata import PackageNotFoundError, version
-
-    packages: dict[str, str | None] = {}
-    for package in ("mediapipe", "opencv-python", "numpy"):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    return {
-        "model": "face_landmarker/float16/1",
-        "algorithm": "iris-ratios/v1",
-        "packages": packages,
-    }
+    return gaze_runtime()
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -53,18 +48,14 @@ def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
 def _task(project: Project, cid: str) -> GazeTask:
     clip = project.clips_by_id[cid]
     source = project.sources_by_id.get(clip.source_id)
-    return GazeTask(
-        cid,
-        clip.source_id,
-        source.file_path if source else None,
-        clip.start_frame,
-        clip.end_frame,
-        source.fps if source else 0.0,
-    )
+    return gaze_task(clip, source, skip_existing=False)
 
 
 def _task_data(task: GazeTask) -> dict:
     data = asdict(task)
+    data.pop("analysis_json", None)
+    data["analysis_version"] = 2 if task.analysis_json is not None else 1
+    data["skip"] = False
     data["source_path"] = str(task.source_path) if task.source_path else None
     return data
 
@@ -83,13 +74,20 @@ def _saved_gaze(payload: dict) -> dict:
     return {
         key: round(value, 2) if key != "gaze_category" and value is not None else value
         for key, value in payload.items()
+        if key in ("gaze_yaw", "gaze_pitch", "gaze_category")
     }
 
 
 def _outcome(cid: str, payload: dict) -> GazeOutcome:
-    if payload == {"gaze_yaw": None, "gaze_pitch": None, "gaze_category": None}:
-        return GazeOutcome(cid, "succeeded")
-    return GazeOutcome.from_result(cid, payload)
+    from dataclasses import replace
+
+    values = {key: payload[key] for key in ("gaze_yaw", "gaze_pitch", "gaze_category")}
+    outcome = (
+        GazeOutcome(cid, "succeeded", code="no_gaze_detected")
+        if all(value is None for value in values.values())
+        else GazeOutcome.from_result(cid, values)
+    )
+    return replace(outcome, record_json=payload.get("record_json"))
 
 
 def gaze_job_spec(
@@ -113,7 +111,7 @@ def gaze_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="gaze",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={
             "targets": targets,
@@ -151,7 +149,9 @@ def run_gaze_job(
     if operation is not None:
         force = bool(operation.arguments.get("force", False))
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with gaze_model_session() as model_session, result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -172,7 +172,7 @@ def run_gaze_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue  # Project records survive job-cache removal.
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -197,8 +197,24 @@ def run_gaze_job(
             }
 
         def is_output(current: Project, cid: str, payload: dict) -> bool:
-            existing = _values(current, cid)
-            return existing == payload or existing == _saved_gaze(payload)
+            record = current.clips_by_id[cid].analysis_records.get("gaze")
+            return (
+                isinstance(record, AnalysisRecord)
+                and record.to_dict() == json.loads(payload.get("record_json") or "null")
+                and gaze_values(current.clips_by_id[cid]) == _saved_gaze(payload)
+            )
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "gaze", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("gaze")
+                == record,
+            )
 
         result: dict = {
             "succeeded": [],
@@ -213,20 +229,29 @@ def run_gaze_job(
                     {"clip_id": rest, "code": "cancelled"} for rest in ids[index:]
                 )
                 break
-            existing = any(
-                value is not None for value in _values(project, cid).values()
-            )
-            if existing and not force and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
                 basis = inputs(project, cid)
                 if basis["runtime"] != runtime:
                     raise StaleJobResult("Gaze analysis runtime changed")
                 task = _task(project, cid)
-                identity_inputs: dict = {"basis": basis}
+                assert task.analysis_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                semantic = (
+                    gaze_identity(snapshot, options, fingerprints, runtime)
+                    if snapshot.inputs.unchanged()
+                    else None
+                )
+                reused = (
+                    snapshot.reusable_record(semantic)
+                    if semantic is not None and not force
+                    else None
+                )
+                prior_record = project.clips_by_id[cid].analysis_records.get("gaze")
+                identity_inputs: dict = {
+                    "basis": basis,
+                    "previous_gaze": _values(project, cid),
+                    "previous_record": prior_record.to_dict() if prior_record else None,
+                }
                 if force:
                     identity_inputs["generation"] = len(known.get(cid, []))
                     identity_inputs["previous_gaze"] = _values(project, cid)
@@ -234,7 +259,7 @@ def run_gaze_job(
                 spec = ResultSpec.build(
                     path,
                     kind="gaze",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs=identity_inputs,
@@ -251,24 +276,33 @@ def run_gaze_job(
                         ):
                             specs = [ResultSpec(path, row["spec_json"])]
                             break
-                if cid in known and not force:
+                if not force:
                     matches = [
                         row
-                        for row, identity, payload in known[cid]
+                        for row, identity, payload in known.get(cid, [])
                         if identity["project_path"] == str(path)
                         and identity["inputs"]["basis"] == basis
                         and identity["arguments"] == arguments
                         and is_output(project, cid, payload)
                     ]
-                    if not matches and existing:
-                        result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
+                    if not matches and reused is not None:
+                        if reused != prior_record:
+                            stage_record(cid, reused, basis)
+                        category = (
+                            "failed"
+                            if reused.value["gaze_category"] is None
+                            else "skipped"
+                        )
+                        result[category].append(
+                            {"clip_id": cid, "code": "no_gaze_detected"}
+                            if category == "failed"
+                            else {"clip_id": cid, "reason": "valid_analysis"}
                         )
                         continue
                     if matches:
                         specs = [ResultSpec(path, row["spec_json"]) for row in matches]
 
-                application = GazeApplication(project, (task,))
+                application = GazeApplication(project, (task,), options)
 
                 def compute(task=task):
                     outcome = run_gaze(
@@ -276,6 +310,8 @@ def run_gaze_job(
                         options,
                         cancel_event=cancel,
                         model_session=model_session,
+                        fingerprints=fingerprints,
+                        runtime=runtime,
                     )[0]
                     if (
                         outcome.status != "succeeded"
@@ -286,6 +322,7 @@ def run_gaze_job(
                         "gaze_yaw": outcome.yaw,
                         "gaze_pitch": outcome.pitch,
                         "gaze_category": outcome.category,
+                        "record_json": outcome.record_json,
                     }
 
                 def apply(current, payload, cid=cid, application=application):
@@ -333,6 +370,14 @@ def run_gaze_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult("Gaze inputs changed during computation")
+                if outcome.can_apply and outcome.record_json is not None:
+                    stage_record(
+                        cid,
+                        AnalysisRecord.from_dict(json.loads(outcome.record_json)),
+                        basis,
+                    )
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )

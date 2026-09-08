@@ -112,7 +112,7 @@ def create_clip_analysis_worker(
         from core.operations.gaze import GazeApplication
 
         worker = GazeAnalysisWorker(**common, sources_by_id=sources)
-        return worker, GazeApplication(project, worker.tasks)
+        return worker, GazeApplication(project, worker.tasks, worker.options)
     if operation == "embeddings":
         from ui.workers.embedding_worker import EmbeddingAnalysisWorker
         from core.operations.embeddings import EmbeddingApplication

@@ -13,6 +13,11 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from core.analysis_model_identity import (
+    GAZE_YAW_THRESHOLD, GAZE_PITCH_THRESHOLD, MAX_YAW_ANGLE, MAX_PITCH_ANGLE,
+    GAZE_DETECTOR_OPTIONS,
+)
+
 try:
     import mediapipe as mp
 except ImportError:
@@ -29,14 +34,6 @@ _model_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-# Angle thresholds for categorization (degrees from center)
-GAZE_YAW_THRESHOLD = 10.0   # degrees from center for left/right
-GAZE_PITCH_THRESHOLD = 8.0  # degrees for up/down (tighter: vertical is noisier)
-
-# Scaling factors for iris ratio -> angle conversion
-MAX_YAW_ANGLE = 30.0   # reliable yaw estimation range
-MAX_PITCH_ANGLE = 20.0  # reliable pitch estimation range
 
 # Canonical gaze category values and display names (single source of truth)
 GAZE_CATEGORIES = ("at_camera", "looking_left", "looking_right", "looking_up", "looking_down")
@@ -162,10 +159,7 @@ def load_face_mesh():
             )
             options = mp.tasks.vision.FaceLandmarkerOptions(
                 base_options=base_options,
-                num_faces=5,
-                min_face_detection_confidence=0.5,
-                output_face_blendshapes=False,
-                output_facial_transformation_matrixes=False,
+                **GAZE_DETECTOR_OPTIONS,
             )
             _model = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 

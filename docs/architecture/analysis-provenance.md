@@ -1,7 +1,7 @@
 # Analysis provenance and derived artifacts
 
 The U10 implementation covers color palettes, thumbnail DINOv2 embeddings,
-object detection, OCR, ImageNet and shot classification across the desktop, shared spine, CLI, MCP jobs, and embedding
+object detection, OCR, ImageNet and shot classification, and gaze across the desktop, shared spine, CLI, MCP jobs, and embedding
 prerequisites used by sequencing. This document describes that bounded scope.
 The complete U10 contract remains in the shared editing engine plan.
 
@@ -74,6 +74,16 @@ jobs retain their all-or-nothing publication behavior; failed non-atomic jobs an
 GUI runs publish failure records without successful receipts. Frame inference
 uses its image even when the original source video is offline.
 
+Gaze records source content, frame range and FPS, sampling interval, the
+FaceLandmarker version and detector settings, and the angle-classification
+constants. Reuse compares angles at the existing two-decimal project precision.
+An empty observation is a successful record and can be reused without loading
+the model, including after job-cache removal. The legacy headless response still
+reports `no_gaze_detected` for an empty computed observation. Failed refreshes
+preserve displayed angles and record the failed attempt; unprocessed items after
+a model-load failure remain distinct. GUI failure and reuse delivery uses the
+same owner and journal guards as successful results.
+
 ## Storage and ownership
 
 The configured cache directory contains `artifacts/`, with a SQLite reference
@@ -106,7 +116,7 @@ without stopping analysis of valid neighboring clips.
 
 - Migrate the other U7 analysis families, including boundary embeddings, to
   semantic reuse. Extend operation-owned failure records beyond object detection,
-  OCR, ImageNet and shot classification.
+  OCR, ImageNet and shot classification, and gaze.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Move preview/prerender media and durable job array payloads into managed

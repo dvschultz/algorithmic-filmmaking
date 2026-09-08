@@ -75,15 +75,43 @@ def test_checkpoint_failure_recognizes_saved_angle_precision(setup, force):
     )
 
 
-def test_manual_angle_edit_is_preserved(setup):
+def test_manual_angle_edit_requires_recomputation(setup):
     path, _, compute = setup
     run(setup)
     project = Project.load(path)
     project.clips[0].gaze_yaw = 9.99
     assert project.save()
     run(setup)
-    assert compute.call_count == 2
-    assert Project.load(path).clips[0].gaze_yaw == 9.99
+    assert compute.call_count == 3
+    assert Project.load(path).clips[0].gaze_yaw != 9.99
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_verified_observation_outlives_job_cache(setup, empty):
+    path, _, provider = setup
+    if empty:
+        provider.return_value = None
+    run(setup)
+    fresh = JobStore(path.parent / "fresh.db")
+    try:
+        result = run((path, fresh, provider))
+    finally:
+        fresh.close()
+    assert len(result["failed" if empty else "skipped"]) == 2
+    assert provider.call_count == 2
+
+
+def test_failed_refresh_is_persisted_and_can_retry(setup):
+    path, _, provider = setup
+    run(setup)
+    provider.side_effect = RuntimeError("provider unavailable")
+    assert len(run(setup, force=True)["failed"]) == 2
+    saved = Project.load(path)
+    assert all(c.analysis_records["gaze"].state == "failed" for c in saved.clips)
+    assert all(c.gaze_yaw == 2.12 for c in saved.clips)
+    provider.side_effect = None
+    assert len(run(setup)["succeeded"]) == 2
+    assert provider.call_count == 6
 
 
 def test_no_gaze_is_durable_but_decode_error_is_not(setup):

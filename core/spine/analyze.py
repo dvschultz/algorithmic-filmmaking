@@ -639,27 +639,28 @@ def gaze(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Estimate gaze direction for clips."""
-    from core.operations.gaze import GazeTask, GazeOptions, GazeApplication, run_gaze
+    from core.operations.gaze import gaze_task, GazeOptions, GazeApplication, run_gaze
 
     clips = _resolve_clip_ids(project, clip_ids)
     sources = project.sources_by_id
     tasks = tuple(
-        GazeTask(c.id, c.source_id,
-                 sources[c.source_id].file_path if c.source_id in sources else None,
-                 c.start_frame, c.end_frame,
-                 sources[c.source_id].fps if c.source_id in sources else 0.0,
-                 skip=skip_existing and c.gaze_category is not None)
+        gaze_task(c, sources.get(c.source_id), skip_existing=skip_existing)
         for c in clips
     )
-    application = GazeApplication(project, tasks)
+    options = GazeOptions(sample_interval)
+    application = GazeApplication(project, tasks, options)
     result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
 
     def deliver(outcome):
+        accepted = application.apply(project, outcome) if outcome.can_apply else False
+        if outcome.can_apply and not accepted:
+            result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_input"})
+            return
         if outcome.status == "succeeded" and outcome.category is None:
             # Preserve the legacy wire response for an empty observation.
             result["failed"].append({"clip_id": outcome.clip_id, "code": "no_gaze_detected"})
         elif outcome.status == "succeeded":
-            if application.apply(project, outcome):
+            if accepted:
                 result["succeeded"].append({"clip_id": outcome.clip_id, "gaze_category": outcome.category})
             else:
                 result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_input"})
@@ -669,7 +670,7 @@ def gaze(
             result["failed"].append({"clip_id": outcome.clip_id, "code": outcome.code, "message": outcome.message})
 
     outcomes = run_gaze(
-        tasks, GazeOptions(sample_interval), cancel_event=cancel_event,
+        tasks, options, cancel_event=cancel_event,
         on_outcome=deliver,
         progress=(lambda current, total: progress_callback(current / total if total else 1.0, f"Gaze analysis ({current}/{total})")) if progress_callback else None,
     )

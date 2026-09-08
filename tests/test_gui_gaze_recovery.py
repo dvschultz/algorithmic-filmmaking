@@ -80,11 +80,11 @@ def test_restart_recovers_full_precision_then_checkpoints_saved_precision(setup)
         store.close()
 
 
-def test_skipped_offline_source_does_not_block_other_results(setup):
+def test_unverified_offline_source_fails_without_blocking_other_results(setup):
     project, compute = setup
     project.clips[0].gaze_category = "at_camera"
     project.clips[0].source_id = "missing"
-    assert [o.status for o in run(project)] == ["skipped", "succeeded"]
+    assert [o.status for o in run(project)] == ["failed", "succeeded"]
     compute.assert_called_once()
 
 
@@ -268,17 +268,14 @@ def test_changed_inputs_do_not_reuse_saved_empty_observation(
     assert all(o.status == "succeeded" for o in worker.result)
 
 
-def test_missing_saved_receipt_fails_without_recomputation(setup):
-    from core.jobs.commits import StaleJobResult
-
+def test_empty_observation_survives_job_cache_removal(setup):
     project, compute = setup
     compute.return_value = None
     run(project, apply=True)
     assert project.save()
     # Preserve project receipt references while simulating a lost cache.
     (project.path.parent / "jobs.db").unlink()
-    with pytest.raises(StaleJobResult, match="payload is missing"):
-        run(Project.load(project.path))
+    assert all(outcome.status == "skipped" for outcome in run(Project.load(project.path)))
     assert compute.call_count == 2
 
 

@@ -52,6 +52,35 @@ def classification_runtime() -> dict:
     }
 
 
+GAZE_YAW_THRESHOLD = 10.0
+GAZE_PITCH_THRESHOLD = 8.0
+MAX_YAW_ANGLE = 30.0
+MAX_PITCH_ANGLE = 20.0
+GAZE_DETECTOR_OPTIONS = {
+    "num_faces": 5,
+    "min_face_detection_confidence": 0.5,
+    "output_face_blendshapes": False,
+    "output_facial_transformation_matrixes": False,
+}
+
+
+def gaze_runtime() -> dict:
+    return {
+        "model": "face_landmarker/float16/1",
+        "algorithm": "iris-ratios/v1",
+        "angles": {
+            "yaw_threshold": GAZE_YAW_THRESHOLD,
+            "pitch_threshold": GAZE_PITCH_THRESHOLD,
+            "max_yaw": MAX_YAW_ANGLE,
+            "max_pitch": MAX_PITCH_ANGLE,
+        },
+        "detector": dict(GAZE_DETECTOR_OPTIONS),
+        "packages": model_runtime("gaze", ("mediapipe", "opencv-python", "numpy"))[
+            "packages"
+        ],
+    }
+
+
 DINOV2_NAME = "facebook/dinov2-base"
 # https://huggingface.co/facebook/dinov2-base/commits/main
 DINOV2_REVISION = "f9e44c814b77203eaa57a6bdbbd535f21ede1415"

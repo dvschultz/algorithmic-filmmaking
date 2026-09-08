@@ -27,7 +27,9 @@ class GazeDelivery(RetiringQObject):
         self.window = window
         self.worker = worker
         self.worker_attribute = worker_attribute
-        self.application = GazeApplication(window.project, worker.tasks)
+        self.application = GazeApplication(
+            window.project, worker.tasks, getattr(worker, "options", None)
+        )
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         self.reply = getattr(window, "_dispatch_gui_reply", None)
@@ -49,7 +51,7 @@ class GazeDelivery(RetiringQObject):
             return
         target_id = outcome.clip_id
         if (
-            outcome.status != "succeeded"
+            not outcome.can_apply
             or getattr(window, self.worker_attribute, None) is not self.worker
             or window.project is not self.application.project
             or window.project.session.session_id != self.application.session_id
@@ -78,8 +80,14 @@ class GazeDelivery(RetiringQObject):
                     raise ValueError(
                         "Project save location changed during gaze analysis"
                     )
-                receipt = cache.results[target_id]
-                if not receipt.matches(outcome):
+                receipt = cache.results.get(target_id)
+                matches = (
+                    receipt.matches(outcome)
+                    if receipt is not None
+                    else getattr(cache, "transient_outcomes", {}).get(target_id)
+                    == asdict(outcome)
+                )
+                if not matches:
                     raise ValueError(
                         "Queued gaze observation differs from its recorded result"
                     )
@@ -93,7 +101,7 @@ class GazeDelivery(RetiringQObject):
             window._on_gaze_error(
                 "Gaze detection discarded because the target changed. Run analysis again."
             )
-        elif hasattr(window, "_on_gaze_ready"):
+        elif outcome.status == "succeeded" and hasattr(window, "_on_gaze_ready"):
             window._on_gaze_ready(
                 target_id, outcome.yaw, outcome.pitch, outcome.category
             )

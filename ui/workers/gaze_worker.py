@@ -14,7 +14,7 @@ from ui.workers.job_adapter import (
     close_gui_job_runtime,
 )
 from PySide6.QtCore import Signal
-from core.operations.gaze import GazeOptions, GazeTask, GazeOutcome, run_gaze
+from core.operations.gaze import GazeOptions, GazeOutcome, gaze_task, run_gaze
 from ui.workers.base import CancellableWorker, summarize_clip_errors
 
 if TYPE_CHECKING:
@@ -43,17 +43,7 @@ class GazeAnalysisWorker(CancellableWorker):
         super().__init__(parent)
         self.options = GazeOptions(sample_interval)
         self.tasks = tuple(
-            GazeTask(
-                c.id,
-                c.source_id,
-                sources_by_id[c.source_id].file_path
-                if c.source_id in sources_by_id
-                else None,
-                c.start_frame,
-                c.end_frame,
-                sources_by_id[c.source_id].fps if c.source_id in sources_by_id else 0.0,
-                skip=skip_existing and c.gaze_category is not None,
-            )
+            gaze_task(c, sources_by_id.get(c.source_id), skip_existing=skip_existing)
             for c in clips
         )
         self.result: tuple[GazeOutcome, ...] = ()
@@ -69,12 +59,12 @@ class GazeAnalysisWorker(CancellableWorker):
         self._media_stamps = {
             task.source_path: media_stamp(task.source_path)
             for task in self.tasks
-            if task.source_path is not None and not task.skip
+            if task.source_path is not None
         }
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="gaze",
-                version=1,
+                version=2,
                 arguments={"clip_ids": [task.clip_id for task in self.tasks]},
                 inputs={
                     "tasks": [_task_data(task) for task in self.tasks],
@@ -130,16 +120,20 @@ class GazeAnalysisWorker(CancellableWorker):
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
-                self.observation_ready.emit(value)
-                if value.category is not None:
+            else:
+                if value.can_apply:
+                    self.observation_ready.emit(value)
+                if value.status == "succeeded" and value.category is not None:
                     self.gaze_ready.emit(
                         value.clip_id, value.yaw, value.pitch, value.category
                     )
-            elif value.status == "failed":
-                errors.append(
-                    (value.clip_id, value.message or value.code or "Analysis failed")
-                )
+                elif value.status == "failed":
+                    errors.append(
+                        (
+                            value.clip_id,
+                            value.message or value.code or "Analysis failed",
+                        )
+                    )
 
         def compute(progress, cancel):
             collected = {}

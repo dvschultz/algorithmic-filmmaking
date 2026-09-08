@@ -48,6 +48,50 @@ def test_worker_keeps_project_detached(setup):
     assert all(c.gaze_category is None for c in project.clips)
 
 
+@pytest.mark.parametrize("empty", [False, True])
+def test_verified_gaze_reuses_and_failed_refresh_preserves_projection(setup, empty):
+    from core.spine.analyze import gaze
+
+    project, load, provider = setup
+    if empty:
+        provider.return_value = None
+    gaze(project)
+    gaze(project)
+    assert provider.call_count == 2
+    assert load.call_count == 1
+    previous = [(c.gaze_yaw, c.gaze_pitch, c.gaze_category) for c in project.clips]
+    provider.side_effect = RuntimeError("provider unavailable")
+    gaze(project, skip_existing=False)
+    assert all(c.analysis_records["gaze"].state == "failed" for c in project.clips)
+    assert [
+        (c.gaze_yaw, c.gaze_pitch, c.gaze_category) for c in project.clips
+    ] == previous
+    provider.side_effect = None
+    gaze(project)
+    assert provider.call_count == 6
+
+
+@pytest.mark.parametrize("change", ["range", "source", "fps", "options", "projection"])
+def test_verified_gaze_revalidates_inputs_and_options(setup, change):
+    from core.spine.analyze import gaze
+
+    project, _, provider = setup
+    gaze(project)
+    kwargs = {}
+    if change == "range":
+        project.clips[0].end_frame += 1
+    elif change == "source":
+        project.sources[0].file_path.write_bytes(b"changed source")
+    elif change == "fps":
+        project.sources[0].fps += 1
+    elif change == "options":
+        kwargs["sample_interval"] = 2.0
+    else:
+        project.clips[0].gaze_yaw = 12
+    gaze(project, **kwargs)
+    assert provider.call_count == (3 if change in ("range", "projection") else 4)
+
+
 def test_precancelled_worker_does_not_load_model(setup):
     project, load, provider = setup
     worker = GazeAnalysisWorker(project.clips, project.sources_by_id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 # These operations verify complete input identities on the worker path.
-VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "detect_objects", "extract_text", "classify", "shots"})
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze"})
 
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
@@ -63,6 +63,22 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "gaze":
+        from core.analysis_records import current_record
+        from core.analysis_model_identity import gaze_runtime
+        from core.operations.gaze import gaze_values
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None:
+            return False
+        data = record.identity.to_dict()
+        return bool(
+            data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == (runtime if runtime is not None else gaze_runtime())
+            and data["parameters"] == {"sample_interval": 1.0}
+            and data["sampling"] == {"policy": "half-open-uniform-frames/v1", "short_clip": "midpoint", "angle_precision": 2}
+            and record.value == gaze_values(clip)
+        )
     if op_key == "shots":
         from dataclasses import asdict
         from hashlib import sha256
@@ -180,7 +196,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "shots":
+        if op_key == "gaze":
+            from core.analysis_model_identity import gaze_runtime
+
+            runtime = gaze_runtime()
+        elif op_key == "shots":
             from core.analysis_model_identity import shot_runtime
 
             runtime = shot_runtime()

@@ -169,9 +169,14 @@ def test_combined_controller_rechecks_requested_options(
         window.project.close_writer()
 
 
-@pytest.mark.parametrize("kind", ["clip", "frame"])
 @pytest.mark.parametrize(
-    "operation", ["classify", "detect_objects", "extract_text", "shots"]
+    "kind,operation",
+    [
+        (kind, operation)
+        for kind in ("clip", "frame")
+        for operation in ("classify", "detect_objects", "extract_text", "shots")
+    ]
+    + [("clip", "gaze")],
 )
 def test_combined_controller_retains_failed_attempt(
     tmp_path, monkeypatch, kind, operation
@@ -198,6 +203,9 @@ def test_combined_controller_retains_failed_attempt(
     target.person_count = 0
     target.extracted_texts = []
     target.shot_type = "old shot"
+    target.gaze_yaw = 1.23
+    target.gaze_pitch = 2.34
+    target.gaze_category = "at_camera"
     assert window.project.save(tmp_path / "project.json")
     provider = Mock(side_effect=RuntimeError("provider unavailable"))
     paths = {
@@ -205,8 +213,12 @@ def test_combined_controller_retains_failed_attempt(
         "detect_objects": "core.analysis.detection.detect_objects",
         "extract_text": "core.analysis.ocr.extract_text_from_" + kind,
         "shots": "core.analysis.shots.classify_shot_type",
+        "gaze": "core.analysis.gaze.extract_gaze_from_clip",
     }
     monkeypatch.setattr(paths[operation], provider)
+    if operation == "gaze":
+        monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
+        monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
     controller = (
         FrameAnalysisController(window, [target.id], [operation])
         if kind == "frame"
@@ -225,6 +237,11 @@ def test_combined_controller_retains_failed_attempt(
         assert target.detected_objects == [] and target.person_count == 0
         assert target.extracted_texts == []
         assert target.shot_type == "old shot"
+        assert (target.gaze_yaw, target.gaze_pitch, target.gaze_category) == (
+            1.23,
+            2.34,
+            "at_camera",
+        )
         assert not window.project.metadata.job_results
     finally:
         controller.cancel()

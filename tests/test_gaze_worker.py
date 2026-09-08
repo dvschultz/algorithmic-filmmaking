@@ -45,11 +45,14 @@ class TestGazeWorkerProcessing:
             "gaze_category": "at_camera",
         }
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result), \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch(
+                "core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result
+            ),
+            patch("core.analysis.gaze.unload_model"),
+        ):
             gaze_results = []
             completed = []
 
@@ -80,11 +83,12 @@ class TestGazeWorkerProcessing:
 
         clip = make_test_clip("c1", start_frame=0, end_frame=90)
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", return_value=None), \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch("core.analysis.gaze.extract_gaze_from_clip", return_value=None),
+            patch("core.analysis.gaze.unload_model"),
+        ):
             gaze_results = []
             completed = []
 
@@ -124,11 +128,14 @@ class TestGazeWorkerProgress:
             "gaze_category": "at_camera",
         }
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result), \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch(
+                "core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result
+            ),
+            patch("core.analysis.gaze.unload_model"),
+        ):
             progress_updates = []
             worker = GazeAnalysisWorker(clips, sources_by_id)
             worker.progress.connect(
@@ -143,7 +150,7 @@ class TestGazeWorkerProgress:
 class TestGazeWorkerSkipExisting:
     """Test skip_existing behavior."""
 
-    def test_skip_existing_true_skips_clips_with_gaze_category(
+    def test_skip_existing_true_recomputes_unverified_gaze_category(
         self, source, sources_by_id
     ):
         from ui.workers.gaze_worker import GazeAnalysisWorker
@@ -161,18 +168,21 @@ class TestGazeWorkerSkipExisting:
             "gaze_category": "looking_right",
         }
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result) as mock_extract, \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch(
+                "core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result
+            ) as mock_extract,
+            patch("core.analysis.gaze.unload_model"),
+        ):
             worker = GazeAnalysisWorker(
                 [clip_with, clip_without], sources_by_id, skip_existing=True
             )
             worker.run()
 
-        # Only called once (for clip_without)
-        assert mock_extract.call_count == 1
+        # Field presence alone does not prove either clip has reusable analysis.
+        assert mock_extract.call_count == 2
 
     def test_skip_existing_false_processes_all(self, source, sources_by_id):
         from ui.workers.gaze_worker import GazeAnalysisWorker
@@ -188,11 +198,14 @@ class TestGazeWorkerSkipExisting:
             "gaze_category": "at_camera",
         }
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result) as mock_extract, \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch(
+                "core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result
+            ) as mock_extract,
+            patch("core.analysis.gaze.unload_model"),
+        ):
             worker = GazeAnalysisWorker(
                 [clip_with, clip_without], sources_by_id, skip_existing=False
             )
@@ -216,13 +229,9 @@ class TestGazeWorkerAllAlreadyAnalyzed:
         completed = []
         progress_updates = []
 
-        worker = GazeAnalysisWorker(
-            [clip1, clip2], sources_by_id, skip_existing=True
-        )
+        worker = GazeAnalysisWorker([clip1, clip2], sources_by_id, skip_existing=True)
         worker.detection_completed.connect(lambda: completed.append(True))
-        worker.progress.connect(
-            lambda c, t: progress_updates.append((c, t))
-        )
+        worker.progress.connect(lambda c, t: progress_updates.append((c, t)))
 
         worker.run()
 
@@ -248,11 +257,14 @@ class TestGazeWorkerMissingSource:
             "gaze_category": "at_camera",
         }
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result) as mock_extract, \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch(
+                "core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result
+            ) as mock_extract,
+            patch("core.analysis.gaze.unload_model"),
+        ):
             gaze_results = []
             completed = []
 
@@ -319,11 +331,15 @@ class TestGazeWorkerExceptionHandling:
                 raise RuntimeError("decode error")
             return mock_result
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze.load_face_mesh"), \
-             patch("core.analysis.gaze.extract_gaze_from_clip", side_effect=extract_side_effect), \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=True),
+            patch("core.analysis.gaze.load_face_mesh"),
+            patch(
+                "core.analysis.gaze.extract_gaze_from_clip",
+                side_effect=extract_side_effect,
+            ),
+            patch("core.analysis.gaze.unload_model"),
+        ):
             gaze_results = []
             progress_updates = []
 
@@ -331,9 +347,7 @@ class TestGazeWorkerExceptionHandling:
             worker.gaze_ready.connect(
                 lambda cid, yaw, pitch, cat: gaze_results.append(cid)
             )
-            worker.progress.connect(
-                lambda c, t: progress_updates.append((c, t))
-            )
+            worker.progress.connect(lambda c, t: progress_updates.append((c, t)))
 
             worker.run()
 
@@ -351,10 +365,14 @@ class TestGazeWorkerExceptionHandling:
 
         clip = make_test_clip("c1")
 
-        with patch("core.analysis.gaze.is_model_loaded", return_value=False), \
-             patch("core.analysis.gaze.load_face_mesh", side_effect=RuntimeError("mediapipe not installed")), \
-             patch("core.analysis.gaze.unload_model"):
-
+        with (
+            patch("core.analysis.gaze.is_model_loaded", return_value=False),
+            patch(
+                "core.analysis.gaze.load_face_mesh",
+                side_effect=RuntimeError("mediapipe not installed"),
+            ),
+            patch("core.analysis.gaze.unload_model"),
+        ):
             errors = []
             completed = []
 
