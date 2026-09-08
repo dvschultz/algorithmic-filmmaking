@@ -25,6 +25,7 @@ class ThumbnailDelivery(QObject):
         super().__init__(window)
         self.window = window
         self.worker = worker
+        self._cleaned = False
         self.ready = ready
         self.completed = completed
         self.progress_callback = progress
@@ -94,16 +95,25 @@ class ThumbnailDelivery(QObject):
 
     @Slot()
     def finished(self) -> None:
-        if self.sender() is not self.worker or self.worker.isRunning():
+        if self._cleaned or self.sender() is not self.worker or self.worker.isRunning():
             return
         try:
             if self._current():
                 self.completed()
         finally:
-            self.window._active_thumbnail_workers.discard(self.worker)
-            if self.window.thumbnail_worker is self.worker:
-                self.window.thumbnail_worker = None
-            if getattr(self.window, "_thumbnail_delivery", None) is self:
-                self.window._thumbnail_delivery = None
-            self.worker.deleteLater()
-            self.deleteLater()
+            self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Release a natively finished worker, or an unstarted failed dispatch."""
+        if self._cleaned:
+            return
+        if self.worker.isRunning():
+            raise RuntimeError("Cannot release a running thumbnail worker")
+        self._cleaned = True
+        self.window._active_thumbnail_workers.discard(self.worker)
+        if self.window.thumbnail_worker is self.worker:
+            self.window.thumbnail_worker = None
+        if getattr(self.window, "_thumbnail_delivery", None) is self:
+            self.window._thumbnail_delivery = None
+        self.worker.deleteLater()
+        self.deleteLater()

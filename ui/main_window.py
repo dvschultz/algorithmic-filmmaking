@@ -6,6 +6,7 @@ import re
 import sys
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
@@ -842,6 +843,9 @@ class MainWindow(QMainWindow):
 
         for controller in tuple(getattr(self, "_active_intention_analyses", ())):
             controller.cancel()
+
+        for delivery in tuple(getattr(self, "_active_intention_thumbnails", ())):
+            delivery.cancel()
 
         for worker in tuple(getattr(self, "_active_thumbnail_workers", ())):
             worker.cancel()
@@ -8245,14 +8249,6 @@ class MainWindow(QMainWindow):
         if self.intention_workflow and self.intention_workflow.is_running:
             self.intention_workflow.cancel()
 
-        # Detection's run-bound adapter observes workflow cancellation directly.
-        if hasattr(self, 'thumbnail_worker') and self.thumbnail_worker is not None:
-            if self.thumbnail_worker.isRunning():
-                logger.info("Cancelling thumbnail worker due to workflow cancellation")
-                # ThumbnailWorker may not have cancel() method, but we'll try
-                if hasattr(self.thumbnail_worker, 'cancel'):
-                    self.thumbnail_worker.cancel()
-
     def _connect_intention_workflow_signals(self):
         """Connect all signals from the intention workflow coordinator."""
         if not self.intention_workflow:
@@ -8583,51 +8579,31 @@ class MainWindow(QMainWindow):
         worker.deleteLater()
 
     def _start_intention_thumbnails(self):
-        """Start thumbnail generation for the intention workflow."""
+        """Dispatch shared thumbnails under their original intention plan."""
+        from ui.workers.intention_run import IntentionRun
+        from ui.workers.intention_thumbnails import IntentionThumbnailDelivery
+
         if not self.intention_workflow:
             return
-
-        all_clips = self.intention_workflow.get_all_clips()
-        all_sources = self.intention_workflow.get_all_sources()
-
-        if not all_clips:
-            # No clips - skip to next step
-            if self.intention_workflow:
-                self.intention_workflow.on_thumbnails_finished()
+        run = IntentionRun.capture(self)
+        if not run.is_current(self, WorkflowState.THUMBNAILS):
             return
+        previous = getattr(self, "_intention_thumbnails", None)
+        if (
+            previous is not None and not previous.cancelled
+            and previous.run_identity.workflow is run.workflow
+            and previous.run_identity.plan is run.plan
+        ):
+            return
+        try:
+            IntentionThumbnailDelivery(self, run).start()
+        except Exception as exc:
+            if run.is_current(self, WorkflowState.THUMBNAILS):
+                run.workflow.fail(str(exc))
 
-        # Increment generation ID - signals from old workers will be ignored
-        self._thumbnail_generation += 1
-        current_gen = self._thumbnail_generation
-
-        # Build sources_by_id dict
-        sources_by_id = {s.id: s for s in all_sources}
-        default_source = all_sources[0] if all_sources else None
-
-        self.thumbnail_worker = ThumbnailWorker(
-            source=default_source,
-            clips=all_clips,
-            cache_dir=self.settings.thumbnail_cache_dir,
-            project=self.project, sources_by_id=sources_by_id,
-        )
-
-        # Capture generation for lambda closures
-        gen = current_gen
-
-        workflow = self.intention_workflow
-        plan = workflow.plan
-        ThumbnailDelivery(
-            self, self.thumbnail_worker, ready=self._on_thumbnail_ready,
-            completed=lambda g=gen: self._on_intention_thumbnails_finished(g),
-            progress=workflow.on_thumbnail_progress,
-            valid=lambda: self.intention_workflow is workflow and workflow.plan is plan
-                and workflow.state == WorkflowState.THUMBNAILS,
-        )
-
-        self._thumbnails_finished_handled = False
-        self.thumbnail_worker.start()
-
-    def _sync_intention_workflow_ui(self, sources: list = None):
+    def _sync_intention_workflow_ui(
+        self, sources: list[Source] | None = None, *, valid: Callable[[], bool] | None = None
+    ) -> None:
         """Synchronize UI state for intention workflow (Cut/Analyze tabs).
 
         This helper consolidates state synchronization that's needed after
@@ -8635,7 +8611,10 @@ class MainWindow(QMainWindow):
 
         Args:
             sources: Optional list of sources. If not provided, gets from intention_workflow.
+            valid: Recheck the original run between UI callbacks that may replace it.
         """
+        if valid is not None and not valid():
+            return
         # Get sources from intention workflow if not provided
         if sources is None and self.intention_workflow:
             sources = self.intention_workflow.get_all_sources()
@@ -8643,40 +8622,16 @@ class MainWindow(QMainWindow):
         # Sync lookups for Analyze tab (same as normal flow)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
+        if valid is not None and not valid():
+            return
         # Ensure Cut tab has source set
         if sources:
             self.cut_tab.set_source(sources[0])
 
+        if valid is not None and not valid():
+            return
         # Sync all clips to Cut tab
         self._sync_cut_tab_clip_browser()
-
-    def _on_intention_thumbnails_finished(self, generation: int = 0):
-        """Handle thumbnail generation completion during intention workflow.
-
-        Args:
-            generation: Worker generation ID - used to ignore stale signals from old workers
-        """
-        # Check generation ID - ignore signals from old/cancelled workers
-        if generation != 0 and generation != self._thumbnail_generation:
-            logger.info(f"Ignoring thumbnails_finished from old worker (gen {generation} != {self._thumbnail_generation})")
-            return
-
-        if self._thumbnails_finished_handled:
-            return
-        self._thumbnails_finished_handled = True
-
-        # Clean up worker reference
-        if self.thumbnail_worker:
-            self.thumbnail_worker.deleteLater()
-            self.thumbnail_worker = None
-
-        logger.info("Intention thumbnails finished")
-
-        # Sync UI state for intention workflow
-        self._sync_intention_workflow_ui()
-
-        if self.intention_workflow:
-            self.intention_workflow.on_thumbnails_finished()
 
     def _start_intention_analysis(self):
         """Gate analysis in the UI, then transfer execution to its run owner."""
@@ -10056,6 +10011,8 @@ class MainWindow(QMainWindow):
         frame_analyses = tuple(getattr(self, "_active_frame_analyses", ()))
         intention_detections = tuple(getattr(self, "_active_intention_detections", ()))
         intention_downloads = tuple(getattr(self, "_active_intention_downloads", ()))
+        for delivery in tuple(getattr(self, "_active_intention_thumbnails", ())):
+            delivery.cancel()
         intention_analyses = tuple(getattr(self, "_active_intention_analyses", ()))
         for controller in intention_analyses:
             controller.cancel()
