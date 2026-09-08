@@ -830,7 +830,19 @@ Busy, missing, malformed, future-version, or concurrently changed documents keep
 all protection. Reconciliation updates saved and historical references atomically
 and removes pending owners; it never checkpoints or deletes a computation. The
 reconciliation/save/artifact group passes 79 tests; scoped typing and Ruff pass.
-Legacy ownership classification and receipt deletion remain to be implemented.
+Receipt deletion is now explicit through `JobStore.purge_old_results(days=30)`
+and MCP `purge_old_jobs(include_results=True)`. Only old committed rows created
+with ownership tracking qualify. Legacy rows are classified conservatively and
+never backfilled into eligibility. All saved/pending references must be absent;
+every historical project writer must be independently acquired, and supported
+disk documents must confirm release. The deletion transaction rechecks historical
+owners, file bytes, pending references, and active jobs, including unowned legacy
+jobs. Uncommitted recovery receipts remain retained. Durable row deletion precedes
+artifact-pin release, so concurrent receipt readers retain their own payload
+leases. Pruning walks bounded batches and never deletes sources or project files.
+691 ownership/job/history/recovery/MCP tests pass, including migration, closed
+copies, live undo, new-owner/job races, concurrent readers, and multiple batches.
+Scoped retention/store typing and changed-file Ruff pass. Full review remains open.
 
 The next full-suite recheck finished with 5,851 passed, 1 failed, and 2 skipped in
 746 seconds. The remaining failure was an audio-agent test settings stub missing
@@ -889,7 +901,7 @@ place, not evidence that receipt pruning is implemented.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Finish the remaining cross-consumer reuse/projection audit.
-  Add safe computed-receipt pruning and audit legacy job-row ownership;
+  Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional
   consumers. Save pins for missing, unreadable, unsupported, or actively owned project files remain conservatively retained.

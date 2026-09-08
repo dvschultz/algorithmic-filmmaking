@@ -178,3 +178,103 @@ def reconcile_receipt_manifests(store: "JobStore") -> int:
         except (ProjectBusyError, OSError, ValueError, TypeError, KeyError, AttributeError):
             continue
     return reconciled
+
+
+# An absent legacy owner is uncertainty, not evidence of release. Uncommitted
+# receipts remain the recovery journal, irrespective of age or visible output.
+_RECLAIMABLE = """
+    committed=1 AND retention_managed=1 AND created_at < ?
+    AND EXISTS (SELECT 1 FROM receipt_project_history h WHERE h.result_id=job_results.result_id)
+    AND NOT EXISTS (SELECT 1 FROM receipt_manifests m WHERE m.result_id=job_results.result_id)
+    AND NOT EXISTS (SELECT 1 FROM receipt_pending_refs p WHERE p.result_id=job_results.result_id)
+    AND NOT EXISTS (SELECT 1 FROM jobs WHERE status IN ('queued','running','cancelling'))
+"""
+
+
+def purge_receipts(store: "JobStore", *, days: int = 30) -> int:
+    """Explicitly reclaim obsolete receipts, preserving saved and live owners.
+
+    Every historical project must be readable, supported, unchanged, and free
+    of an independent writer. This protects closed copies and live undo state.
+    Active jobs (including unowned legacy jobs) inhibit deletion. SQLite removal
+    is durable before artifact pins are released; concurrent body readers retain
+    their separate leases. No source files or project documents are deleted.
+    """
+    from contextlib import ExitStack
+    import time
+    from core.project import _validate_project_structure
+    from core.project_lock import ProjectBusyError, ProjectWriter
+    from core.project_migrations import is_future_schema
+
+    if type(days) is not int or days < 0:
+        raise ValueError("days must be a nonnegative integer")
+    if store.persistence != "job_history":
+        return 0
+    reconcile_receipt_manifests(store)
+    cutoff = time.time() - days * 86400
+    last_id = ""
+    deleted = 0
+    while True:
+        with store._connect() as db:
+            candidates = [row[0] for row in db.execute(
+                f"SELECT result_id FROM job_results WHERE {_RECLAIMABLE} AND result_id > ? ORDER BY result_id LIMIT 100",
+                (cutoff, last_id),
+            )]
+        if not candidates:
+            return deleted
+        for rid in candidates:
+            last_id = rid
+            with store._connect() as db:
+                paths = tuple(row[0] for row in db.execute(
+                    "SELECT project_path FROM receipt_project_history WHERE result_id=? ORDER BY project_path", (rid,),
+                ))
+            if not paths:
+                continue
+            pin = None
+            removed = False
+            try:
+                with ExitStack() as writers:
+                    snapshots: dict[Path, bytes] = {}
+                    for value in paths:
+                        path = Path(value)
+                        if str(path.resolve()) != value:
+                            raise ValueError("Project path was retargeted")
+                        writers.enter_context(ProjectWriter(path))
+                        encoded = path.read_bytes()
+                        document = json.loads(encoded)
+                        if (
+                            not isinstance(document, dict)
+                            or not isinstance(document.get("id"), str)
+                            or not document["id"]
+                            or _validate_project_structure(document)
+                            or is_future_schema(document["version"])
+                            or rid in document_receipts(document)
+                        ):
+                            raise ValueError("Project has not verifiably released the receipt")
+                        snapshots[path] = encoded
+                    with store._connect() as db:
+                        db.execute("PRAGMA synchronous=FULL")
+                        with db:
+                            db.execute("BEGIN IMMEDIATE")
+                            # Save As/load may have registered another owner
+                            # while these writers were acquired.
+                            current_paths = tuple(row[0] for row in db.execute(
+                                "SELECT project_path FROM receipt_project_history WHERE result_id=? ORDER BY project_path", (rid,),
+                            ))
+                            if current_paths != paths or any(path.read_bytes() != data for path, data in snapshots.items()):
+                                continue
+                            row = db.execute(
+                                f"SELECT artifact_pin FROM job_results WHERE {_RECLAIMABLE} AND result_id=?", (cutoff, rid),
+                            ).fetchone()
+                            if row is None:
+                                continue
+                            pin = row[0]
+                            db.execute("DELETE FROM job_results WHERE result_id=?", (rid,))
+                            db.execute("DELETE FROM receipt_project_history WHERE result_id=?", (rid,))
+                            removed = True
+            except (ProjectBusyError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                continue
+            if removed:
+                # Never hold the job transaction while retiring artifact owners.
+                store._release_job_pins([pin])
+                deleted += 1

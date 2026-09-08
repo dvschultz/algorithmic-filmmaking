@@ -389,7 +389,7 @@ detection, OCR, ImageNet classification, shot classification, gaze, descriptions
 records across their shared operations and delivery surfaces. Thumbnail and boundary embedding
 artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
 work includes the other U7 analysis families, explicit legacy-reuse flows,
-cross-consumer reuse/projection checks, legacy job ownership and receipt pruning, and
+cross-consumer reuse/projection checks and
 the complete retention/recovery audit. See
 [analysis provenance](../architecture/analysis-provenance.md) for the implemented
 scope and its limitations. U10 is not complete.
@@ -660,8 +660,7 @@ boundary, and cost regression tests pass. Scoped availability typing and changed
 Ruff are clean. Receipt readers now lease managed payloads before concurrent
 cleanup can retire their persisted pins. Both single/batched read races reproduced;
 141 receipt/history/scalar regression tests pass, including lease release after
-failed reads. Scoped store typing and changed-file Ruff pass. Receipt pruning
-policy remains pending. Receipt ownership now surrounds atomic saves with pending
+failed reads. Scoped store typing and changed-file Ruff pass. Receipt ownership now surrounds atomic saves with pending
 references and records Save As/loaded-copy owners plus historical owner paths.
 Failed publication retains old and incoming references. Ordinary saves do not
 initialize job storage. The save/ownership group passes 90 tests and the job/recovery
@@ -669,8 +668,14 @@ group passes 577; scoped retention/store typing and changed-file Ruff pass. Rece
 reconciliation now checks supported saved documents under independent writer locks
 and rechecks exact bytes before replacing ownership and releasing pending saves.
 Unknown or active documents remain protected; computations are neither acknowledged
-nor deleted. Its 79-test regression group, scoped typing, and Ruff pass. Legacy
-classification and receipt deletion remain open.
+nor deleted. Its 79-test regression group, scoped typing, and Ruff pass. Explicit
+receipt pruning now deletes only old committed rows created with tracked ownership,
+after all saved/pending references are released and every historical project is
+readable and independently writer-owned. It rechecks owners, bytes, and active jobs
+inside the deletion transaction, then releases artifact pins after durable deletion.
+Legacy rows and uncommitted recovery results remain retained. The MCP purge tool
+exposes this through `include_results=True` without changing its default response.
+691 ownership/job/recovery/MCP tests pass; scoped typing and changed-file Ruff pass.
 Collection now reconciles abandoned save pins against
 readable supported projects under an independent writer lock, with strict reference
 validation and a final document-content check. Manifest replacement and pin release

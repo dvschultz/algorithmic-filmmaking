@@ -304,6 +304,10 @@ class JobStore:
                 for column in ("spec_artifact_json", "payload_artifact_json", "artifact_pin"):
                     if column not in result_columns:
                         conn.execute(f"ALTER TABLE job_results ADD COLUMN {column} TEXT")
+                if "retention_managed" not in result_columns:
+                    # Existing rows predate complete Save As/load ownership
+                    # tracking. Never infer that their absent owners released them.
+                    conn.execute("ALTER TABLE job_results ADD COLUMN retention_managed INTEGER NOT NULL DEFAULT 0")
 
     # --- Mutations ---
 
@@ -592,6 +596,7 @@ class JobStore:
             except (KeyError, TypeError, ValueError, OSError) as exc:
                 raise StaleJobResult("Job result payload is unavailable or corrupt") from exc
         row.pop("artifact_pin", None)
+        row.pop("retention_managed", None)
         return row
 
     def get_pending_results(self, result_ids: Sequence[str]) -> list[dict]:
@@ -663,7 +668,7 @@ class JobStore:
             inserted = conn.execute(
                 "INSERT OR IGNORE INTO job_results "
                 "(result_id,spec_json,payload_json,payload_digest,created_at,"
-                "spec_artifact_json,payload_artifact_json,artifact_pin) VALUES (?,?,?,?,?,?,?,?)",
+                "spec_artifact_json,payload_artifact_json,artifact_pin,retention_managed) VALUES (?,?,?,?,?,?,?,?,1)",
                 (result_id, values["spec"], values["payload"], digest, time.time(),
                  references["spec"], references["payload"], pin),
             ).rowcount
@@ -866,3 +871,9 @@ class JobStore:
             "status IN ('completed', 'failed', 'cancelled', 'crashed') "
             "AND finished_at IS NOT NULL AND finished_at < ?", [cutoff]
         )
+
+    def purge_old_results(self, days: int = 30) -> int:
+        """Remove unreferenced committed receipts with proven owner history."""
+        from core.jobs.retention import purge_receipts
+
+        return purge_receipts(self, days=days)

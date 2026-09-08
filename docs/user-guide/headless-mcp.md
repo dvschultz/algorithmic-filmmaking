@@ -295,7 +295,7 @@ included — you must poll `get_job_status` until terminal, then call
 | `get_job_result(task_id)` | Final result on completed; sanitized error plus any available `result` on failed/cancelled/crashed. Errors `not_terminal` while still running. |
 | `cancel_job(task_id)` | Signals cancellation. Job transitions running → cancelling → cancelled. |
 | `list_jobs(status_filter, kind_filter, project_filter)` | Safe-projection list. Use to discover in-flight work at session start. |
-| `purge_old_jobs(days=30)` | Delete terminal-status rows older than `days`. Running and queued rows are never purged. |
+| `purge_old_jobs(days=30, include_results=False)` | Delete terminal-status rows older than `days`. Optionally remove old committed receipts released by all tracked projects. Running and queued rows are never purged. |
 
 A terminal `success: false` describes the overall job. If the response also
 contains `result`, inspect its per-item outcomes: some items may have succeeded
@@ -384,6 +384,16 @@ composite scope is `(kind, project_path, idempotency_key)`:
 
 There is **no automatic TTL** on terminal rows. Call `purge_old_jobs()`
 explicitly when you want to prune history.
+
+Set `include_results=True` to also prune obsolete computation receipts. The
+response then includes `deleted_result_count` separately from deleted job rows.
+Saved project copies, active project writers (including undo state), pending saves,
+and active jobs protect receipts. Uncommitted recovery receipts and legacy rows
+whose complete ownership history is unknown remain retained. Missing, invalid,
+unsupported, or changed project files also prevent receipt deletion. Removing a
+receipt releases its managed payload ownership; normal artifact collection can
+then reclaim files that have no other owners. Source media and project documents
+are never deleted by this operation.
 
 ## Project-modification guard
 

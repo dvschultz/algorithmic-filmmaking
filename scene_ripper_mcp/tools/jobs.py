@@ -275,30 +275,40 @@ async def list_jobs(
 async def purge_old_jobs(
     days: Annotated[int, "Delete terminal jobs older than this many days"] = 30,
     ctx: Context = None,
+    include_results: Annotated[
+        bool, "Also delete old committed computation receipts released by all tracked projects. Legacy and recoverable receipts are retained."
+    ] = False,
 ) -> str:
     """Delete terminal-status job rows older than ``days``.
 
     Running and queued rows are never purged. There is no automatic TTL on
     ``start_*`` calls (R22) — pruning is explicit.
+    ``include_results`` additionally releases eligible receipt payload owners;
+    managed-artifact collection can then reclaim their unreferenced files.
     """
     try:
-        if days < 0:
+        if type(days) is not int or days < 0:
             return json.dumps(
                 {
                     "success": False,
                     "error": {
                         "code": "invalid_days",
-                        "message": "days must be >= 0",
+                        "message": "days must be a nonnegative integer",
                     },
                 }
             )
         store = _lifespan(ctx)["job_store"]
+        deleted_results = (
+            await asyncio.to_thread(store.purge_old_results, days=days)
+            if include_results else None
+        )
         deleted = store.purge_old_jobs(days=days)
         return json.dumps(
             {
                 "success": True,
                 "deleted_count": deleted,
                 "days": days,
+                **({"deleted_result_count": deleted_results} if include_results else {}),
             }
         )
     except BaseException as exc:  # noqa: BLE001
