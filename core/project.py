@@ -402,10 +402,11 @@ def _save_project_owned(
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         from core.artifacts import manifest_write
+        from core.jobs.retention import receipt_manifest_write
         from core.project_lock import replace_project_file
 
         artifact_root = (extra_data or {}).get("_artifact_store_root")
-        with manifest_write(
+        with receipt_manifest_write(filepath, project_data), manifest_write(
             filepath, project_data, Path(artifact_root) if artifact_root else None,
             portable=bool((extra_data or {}).get("_portable")),
             cancel_check=(extra_data or {}).get("_cancel_check"),
@@ -584,6 +585,9 @@ def load_project(
 
     # Load metadata
     metadata = ProjectMetadata.from_dict(data)
+    from core.jobs.retention import retain_loaded_receipts
+
+    retain_loaded_receipts(filepath, metadata.job_results)
 
     if progress_callback:
         progress_callback(0.2, "Loading sources...")

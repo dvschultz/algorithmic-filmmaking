@@ -279,12 +279,14 @@ class JobStore:
 
     def _init_schema(self) -> None:
         from core.jobs.schema import INITIAL_SCHEMA, RESULT_SCHEMA, DOWNLOAD_SCHEMA
+        from core.jobs.retention import SCHEMA as RETENTION_SCHEMA
 
         sql = INITIAL_SCHEMA
         with self._connect() as conn:
             conn.executescript(sql)
             conn.executescript(RESULT_SCHEMA)
             conn.executescript(DOWNLOAD_SCHEMA)
+            conn.executescript(RETENTION_SCHEMA)
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}

@@ -661,7 +661,13 @@ Ruff are clean. Receipt readers now lease managed payloads before concurrent
 cleanup can retire their persisted pins. Both single/batched read races reproduced;
 141 receipt/history/scalar regression tests pass, including lease release after
 failed reads. Scoped store typing and changed-file Ruff pass. Receipt pruning
-policy remains pending. Collection now reconciles abandoned save pins against
+policy remains pending. Receipt ownership now surrounds atomic saves with pending
+references and records Save As/loaded-copy owners plus historical owner paths.
+Failed publication retains old and incoming references. Ordinary saves do not
+initialize job storage. The save/ownership group passes 90 tests and the job/recovery
+group passes 577; scoped retention/store typing and changed-file Ruff pass. Receipt
+reconciliation, legacy classification, and deletion remain open.
+Collection now reconciles abandoned save pins against
 readable supported projects under an independent writer lock, with strict reference
 validation and a final document-content check. Manifest replacement and pin release
 are atomic. Busy/missing/unreadable/unsupported projects and concurrent changes

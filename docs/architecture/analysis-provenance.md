@@ -814,6 +814,24 @@ typing and changed-file Ruff pass.
 
 ## Remaining U10 work
 
+Receipt ownership is now recorded in the job database around atomic project
+saves. Incoming references receive a durable pending-save owner before file
+publication; successful publication replaces that path's saved references.
+Interrupted writes retain both old and pending references. Save As and loaded
+external copies register independent paths, and loading an older snapshot only
+adds references. Historical path associations remain for future cleanup to check
+active project writers and their undo state. Ordinary saves and imported receipts
+without a local job cache do not create job storage. The ownership and save group
+passes 90 tests; job/history/recovery coverage passes 577 tests. Scoped retention
+and store typing and changed-file Ruff are clean. Pending-save reconciliation,
+legacy ownership classification, and receipt deletion are still to be implemented.
+
+The next full-suite recheck finished with 5,851 passed, 1 failed, and 2 skipped in
+746 seconds. The remaining failure was an audio-agent test settings stub missing
+the cloud-model field used by completion checks; it now uses the real settings
+object, and its 25-test regression group passes. This run predates the receipt
+ownership changes and does not establish a green final tree.
+
 Legacy direct playback no longer treats an existing prerender path as verified
 output. Untransformed entries resolve the original source and explicit range;
 transformed entries pause playback and request the shared sequence preview,
