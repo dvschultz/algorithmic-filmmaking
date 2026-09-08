@@ -9,8 +9,15 @@ from tests.test_face_records import setup as face_setup, run  # noqa: F401
 
 
 @pytest.fixture
-def analyzed_project(request):
-    return request.getfixturevalue("face_setup")
+def analyzed_project(request, monkeypatch):
+    setup = request.getfixturevalue("face_setup")
+    provider = setup[1]
+
+    def reference(path, *, on_execution):
+        return provider.side_effect(on_execution=on_execution, start_frame=0)
+
+    monkeypatch.setattr("core.analysis.faces.extract_faces_from_image", reference)
+    return setup
 
 
 def test_worker_does_not_mutate_project_faces(analyzed_project, monkeypatch):
@@ -19,17 +26,6 @@ def test_worker_does_not_mutate_project_faces(analyzed_project, monkeypatch):
     project, provider, _ = analyzed_project
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready", lambda _: (True, [])
-    )
-    monkeypatch.setattr(
-        "core.analysis.faces.extract_faces_from_image",
-        Mock(
-            return_value=[
-                {
-                    "embedding": [0.12346] * 512,
-                    "confidence": 0.9,
-                }
-            ]
-        ),
     )
     clip, source = project.clips[0], project.sources[0]
     original = deepcopy(clip.to_dict())
@@ -123,17 +119,6 @@ def test_worker_verifies_reuse(analyzed_project, monkeypatch, change):
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready", lambda _: (True, [])
     )
-    monkeypatch.setattr(
-        "core.analysis.faces.extract_faces_from_image",
-        Mock(
-            return_value=[
-                {
-                    "embedding": [0.12346] * 512,
-                    "confidence": 0.9,
-                }
-            ]
-        ),
-    )
     worker = RoseHobartWorker(
         [source.file_path],
         [(clip, source)],
@@ -189,3 +174,81 @@ def test_reference_worker_is_retained_until_native_exit(
     assert dialog._ref_extract_worker is None
     assert len(dialog._ref_widgets) == (0 if cancel else 1)
     dialog.reject()
+
+
+def test_reference_faces_require_execution_identity(analyzed_project, monkeypatch):
+    from ui.dialogs.rose_hobart_dialog import RoseHobartWorker
+
+    project, _, _ = analyzed_project
+    clip, source = project.clips[0], project.sources[0]
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready", lambda _: (True, [])
+    )
+    monkeypatch.setattr(
+        "core.analysis.faces.extract_faces_from_image",
+        Mock(
+            return_value=[
+                {
+                    "embedding": [0.12346] * 512,
+                    "confidence": 0.9,
+                }
+            ]
+        ),
+    )
+    worker = RoseHobartWorker(
+        [source.file_path], [(clip, source)], "Balanced", "Original Order", 1.0
+    )
+    worker.run()
+    assert worker.result is None
+    assert worker.failure is not None
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ["during_reference", "between_references", "during_clips", "after_completion"],
+)
+def test_model_changes_do_not_publish_mixed_embeddings(
+    analyzed_project, monkeypatch, stage
+):
+    from ui.dialogs.rose_hobart_dialog import RoseHobartWorker
+
+    project, provider, directory = analyzed_project
+    clip, source = project.clips[0], project.sources[0]
+    original = provider.side_effect
+    calls = []
+
+    def change():
+        (directory / "recognition.onnx").write_bytes(b"new recognition model")
+
+    def reference(path, *, on_execution):
+        calls.append(path)
+        if stage == "between_references" and len(calls) == 2:
+            change()
+        faces = original(on_execution=on_execution, start_frame=0)
+        if stage == "during_reference":
+            change()
+        return faces
+
+    monkeypatch.setattr("core.analysis.faces.extract_faces_from_image", reference)
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready", lambda _: (True, [])
+    )
+    if stage == "during_clips":
+
+        def execute(**kwargs):
+            change()
+            return original(**kwargs)
+
+        provider.side_effect = execute
+    refs = [source.file_path] * (2 if stage == "between_references" else 1)
+    worker = RoseHobartWorker(refs, [(clip, source)], "Balanced", "Original Order", 1.0)
+    worker.run()
+    assert clip.face_embeddings is None
+    if stage == "after_completion":
+        assert worker.result is not None, worker.failure
+        assert worker.references_current()
+        change()
+        assert not worker.references_current()
+    else:
+        assert worker.result is None
+        assert worker.failure is not None

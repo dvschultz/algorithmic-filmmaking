@@ -651,8 +651,14 @@ face tasks and uses shared analysis before matching. The dialog publishes record
 on the owner thread after native exit, rejects changed project/reference inputs,
 and retains generation and reference-image workers through cancellation. Its
 regression run passed 103 tests with scoped dialog typing and changed-file Ruff.
-Rose Hobart still needs computed-receipt recovery, reference-model execution
-identity checks, agent-path migration, and a source-aware cost gate. Managed face
+Reference images now require reported execution metadata; worker-side full-content
+verification checks model files and requires matching runtime identities across
+references and clip results. Owner delivery checks reference model stamps and
+package versions without hashing. Missing execution reports and model changes
+during extraction, between references, during clip analysis, or before publication
+reject matching. The regression run passed 124 tests with scoped typing for two
+modules and changed-file Ruff clean.
+Rose Hobart still needs computed-receipt recovery, agent-path migration, and a source-aware cost gate. Managed face
 embedding storage also remains pending.
 
 ## Remaining U10 work

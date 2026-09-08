@@ -36,7 +36,12 @@ from core.operations.faces import (
     face_task,
     run_faces,
 )
-from core.jobs.media import media_stamp
+from core.jobs.media import media_stamp, MediaFingerprints
+from core.operations.face_records import (
+    verified_face_execution,
+    face_environment,
+    saved_execution,
+)
 from models.analysis_record import AnalysisRecord
 from ui.theme import theme, UISizes
 from ui.workers.base import CancellableWorker
@@ -91,6 +96,8 @@ class RoseHobartWorker(CancellableWorker):
         self.outcomes: tuple[FaceOutcome, ...] = ()
         self.result: list[tuple["Clip", "Source"]] | None = None
         self.failure: str | None = None
+        self._reference_execution: dict | None = None
+        self._reference_packages: dict | None = None
         self._sensitivity = sensitivity_preset
         self._ordering = ordering
         self._sample_interval = sample_interval
@@ -123,11 +130,34 @@ class RoseHobartWorker(CancellableWorker):
                 raise ValueError("Reference images changed while queued")
             self.progress_message.emit("Extracting reference face embeddings...")
             ref_embeddings = []
+            fingerprints = MediaFingerprints(self._cancel_event)
+            reference_identity = None
             for path in self._reference_paths:
                 if self.is_cancelled():
                     return
-                faces = extract_faces_from_image(path)
+                executions = []
+                faces = extract_faces_from_image(
+                    path, on_execution=lambda value: executions.append(deepcopy(value))
+                )
                 if faces:
+                    if len(executions) != 1:
+                        raise ValueError(
+                            "Reference faces require one verified execution"
+                        )
+                    execution = executions[0]
+                    identity = verified_face_execution(
+                        execution, fingerprints, face_environment()
+                    )
+                    if (
+                        reference_identity is not None
+                        and identity != reference_identity
+                    ):
+                        raise ValueError(
+                            "Reference faces used different model executions"
+                        )
+                    reference_identity = identity
+                    self._reference_execution = execution
+                    self._reference_packages = identity["runtime"]["packages"]
                     best = max(faces, key=lambda f: f["confidence"])
                     ref_embeddings.append(best["embedding"])
 
@@ -177,6 +207,18 @@ class RoseHobartWorker(CancellableWorker):
                         )
                     return
                 clip_faces = outcome.face_dicts()
+                if outcome.record_json is None:
+                    raise ValueError("Clip faces require verified execution")
+                record = AnalysisRecord.from_dict(json.loads(outcome.record_json))
+                if (
+                    verified_face_execution(
+                        saved_execution(record), fingerprints, face_environment()
+                    )
+                    != reference_identity
+                ):
+                    raise ValueError(
+                        "Reference and clip faces used different model executions"
+                    )
 
                 is_match, confidence = compare_faces(
                     ref_embeddings, clip_faces, threshold
@@ -215,6 +257,20 @@ class RoseHobartWorker(CancellableWorker):
                 self.error.emit(self.failure)
 
     def references_current(self) -> bool:
+        if self._reference_execution is not None:
+            from core.analysis.face_weights import FaceWeights
+            from core.operations.face_records import face_packages
+
+            if face_packages() != self._reference_packages:
+                return False
+            files = tuple(
+                sorted(
+                    (Path(item["path"]).resolve(), tuple(item["stamp"]), item["sha256"])
+                    for item in self._reference_execution["weight_files"]
+                )
+            )
+            if not files or not FaceWeights(files[0][0].parent, files).unchanged():
+                return False
         return all(
             stamp is not None and media_stamp(path) == stamp
             for path, stamp in self._reference_stamps.items()

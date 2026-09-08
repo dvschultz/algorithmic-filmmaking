@@ -13,6 +13,7 @@ from core.analysis_records import (
     model_runtime,
 )
 from models.analysis_record import AnalysisRecord
+from core.jobs.media import MediaFingerprints
 
 FACE_SAMPLING = {
     "policy": "half-open-uniform-frames/v1",
@@ -189,6 +190,36 @@ def face_runtime(execution: dict, environment: dict) -> dict:
         "model": "buffalo_l",
         "detection_size": [640, 640],
         "components": sorted(components, key=lambda c: c["task"]),
+    }
+
+
+def verified_face_execution(
+    execution: dict, fingerprints: MediaFingerprints, environment: dict
+) -> dict:
+    """Verify reported model content before comparing reference and clip vectors."""
+    from core.analysis.face_weights import FaceWeights
+
+    runtime = face_runtime(execution, environment)
+    files = tuple(
+        sorted(
+            (Path(item["path"]).resolve(), tuple(item["stamp"]), item["sha256"])
+            for item in execution["weight_files"]
+        )
+    )
+    if not files or len({path.parent for path, _, _ in files}) != 1:
+        raise ValueError("Invalid reference face model pack")
+    weights = FaceWeights(files[0][0].parent, files)
+    if not weights.unchanged():
+        raise ValueError("Reference face model pack changed")
+    for path, stamp, digest in files:
+        value = fingerprints.get(path)
+        if value is None or tuple(value["stamp"]) != stamp or value["sha256"] != digest:
+            raise ValueError("Reference face model content changed")
+    if not weights.unchanged():
+        raise ValueError("Reference face model pack changed")
+    return {
+        "runtime": runtime,
+        "weights": [(path.name, digest) for path, _, digest in files],
     }
 
 

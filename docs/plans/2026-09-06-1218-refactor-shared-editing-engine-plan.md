@@ -514,8 +514,12 @@ tests. Rose Hobart's GUI worker now uses detached verified face tasks and the
 dialog publishes records only after native exit. Cancellation retains both
 generation and reference-image workers until they stop; stale input and observer
 cancellation checks prevent sequence publication. The regression run passed 103
-tests with scoped dialog typing and changed-file Ruff. Its computed-receipt
-recovery, reference-model execution identity, agent path, and source-aware cost
+tests with scoped dialog typing and changed-file Ruff. Reference execution now
+requires verified model content matching all contributing reference images and
+clip results; owner delivery rechecks model stamps and packages without hashing.
+The follow-up regression run passed 124 tests with two modules passing scoped
+typing and changed-file Ruff clean. Its computed-receipt
+recovery, agent path, and source-aware cost
 gate remain pending, along with managed face embedding storage.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
