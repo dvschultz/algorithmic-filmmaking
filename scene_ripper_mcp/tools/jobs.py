@@ -476,6 +476,89 @@ async def start_accept_legacy_analysis(
 
 
 @mcp.tool()
+async def start_accept_legacy_audio_transcripts(
+    project_path: Annotated[str, "Path to the project file"],
+    audio_source_ids: Annotated[Optional[list[str]], "Exact audio source IDs; omitted means all imported audio"] = None,
+    idempotency_key: Optional[str] = None,
+    ctx: Context | None = None,
+) -> str:
+    """Explicitly accept saved audio transcripts without inference.
+
+    Only invoke after the user chooses legacy reuse. Saved text and word timings
+    remain unchanged and provenance stays unknown. Poll job status/result for
+    accepted, failed, and unprocessed audio source IDs. Accepted decisions save
+    under the project writer lock; queued input changes reject the request.
+    """
+    from dataclasses import asdict
+    from core.project_revision import ProjectFileRevision
+    from core.operations.audio_transcription import AudioTranscriptionTask, audio_transcription_runtime
+    from core.operations.legacy_reuse import legacy_transcription_options
+    from scene_ripper_mcp.security import validate_project_path
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    if ctx is None:
+        return json.dumps({"success": False, "error": "Job context is required"})
+    ids = list(dict.fromkeys(audio_source_ids)) if audio_source_ids is not None else None
+
+    def capture_inputs():
+        from core.project import Project
+        from core.jobs.media import media_stamp
+
+        revision = ProjectFileRevision.capture(path)
+        project = Project.load(path)
+        try:
+            options = legacy_transcription_options()
+            selected = project.audio_sources if ids is None else [audio for aid in ids if (audio := project.get_audio_source(aid)) is not None]
+            tasks = tuple(AudioTranscriptionTask.from_audio(audio, verified=True) for audio in selected)
+            stamps = {str(task.path): media_stamp(task.path) for task in tasks}
+            runtimes = {task.audio_source_id: audio_transcription_runtime(task, options) for task in tasks}
+            revision.verify()
+            return revision, options, tasks, stamps, runtimes
+        finally:
+            project.close_writer()
+
+    try:
+        revision, options, tasks, stamps, runtimes = await asyncio.to_thread(capture_inputs)
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))
+    arguments = {"audio_source_ids": ids}
+    spec = OperationSpec.build(
+        kind="accept_legacy_audio_transcripts", version=1, arguments=arguments,
+        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps, "options": asdict(options), "runtimes": runtimes},
+        persistence="job_history", input_revision=revision.digest,
+    )
+
+    def run(progress_callback, cancel_event):
+        from core.spine.analysis_reuse import accept_legacy_audio_transcripts
+        from core.spine.project_io import load_with_mtime, save_with_mtime_check
+        from core.jobs.media import media_stamp
+
+        revision.verify()
+        if any(media_stamp(Path(item)) != stamp for item, stamp in stamps.items()):
+            raise ValueError("Audio changed while queued; request reuse again")
+        if any(audio_transcription_runtime(task, options) != runtimes[task.audio_source_id] for task in tasks):
+            raise ValueError("Audio transcription runtime changed while queued")
+        project, mtime = load_with_mtime(path)
+        try:
+            revision.verify()
+            result = accept_legacy_audio_transcripts(project, ids, options=options, cancel_event=cancel_event)
+            if result["accepted"]:
+                save_with_mtime_check(project, path, mtime)
+            progress_callback(1.0, "Legacy audio reuse decisions saved")
+            return {"success": True, "result": result}
+        finally:
+            project.close_writer()
+
+    return _start_job(
+        ctx, kind=spec.kind, args=arguments, project_path=str(path),
+        project_mtime_at_start=None, idempotency_key=idempotency_key,
+        run=run, operation=spec,
+    )
+
+
+@mcp.tool()
 async def start_detect_scenes_bulk(
     project_path: Annotated[str, "Absolute path to .sceneripper project file"],
     source_ids: Annotated[

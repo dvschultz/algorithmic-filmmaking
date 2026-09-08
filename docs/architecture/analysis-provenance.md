@@ -1104,6 +1104,15 @@ tracked, inactive historical owners as described above.
   including save/load and inference-free reuse; scoped typing/lint are clean.
   MCP and desktop/agent audio acceptance still need wiring. Faces and final
   review/full-suite verification remain open.
+- MCP now exposes `start_accept_legacy_audio_transcripts` with exact audio IDs,
+  captured transcription options/runtime, cancellable execution, and writer-owned
+  save. Capture runs off the event loop. Queued project/media/runtime changes
+  reject publication; later settings edits do not relabel the submitted decision.
+  The 147-test MCP/audio/record/import group passes, including queued cancellation,
+  settings capture, missing IDs, and saved unknown provenance. Changed-file lint
+  is clean. A full-module MCP typing check is not clean (52 diagnostics outside
+  the new function); no broad typing-clean claim is made. Desktop/agent audio
+  acceptance, faces, and final review/full-suite verification remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

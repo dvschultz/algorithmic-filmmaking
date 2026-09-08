@@ -99,6 +99,101 @@ async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, 
     loaded.close_writer()
 
 
+def _legacy_audio_project(tmp_path):
+    from core.project import Project
+    from models.audio_source import AudioSource
+
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
+    project = Project.new()
+    project.add_audio_source(AudioSource(id="audio", file_path=audio_path, duration_seconds=2, sample_rate=48000, channels=2, transcript=[]))
+    path = tmp_path / "legacy-audio.sceneripper"
+    assert project.save(path)
+    return project, path
+
+
+@pytest.mark.asyncio
+async def test_legacy_audio_tool_schema_exposes_audio_ids_without_context():
+    from scene_ripper_mcp.server import mcp
+
+    registered = {tool.name: tool for tool in await mcp.list_tools()}
+    schema = registered["start_accept_legacy_audio_transcripts"].inputSchema
+    assert schema["required"] == ["project_path"]
+    assert "audio_source_ids" in schema["properties"]
+    assert "ctx" not in schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_audio_job_saves_unknown_provenance(lifespan_ctx, tmp_path):
+    from core.project import Project
+    from scene_ripper_mcp.tools.jobs import start_accept_legacy_audio_transcripts
+
+    ctx, store, _ = lifespan_ctx
+    _, path = _legacy_audio_project(tmp_path)
+    response = json.loads(await start_accept_legacy_audio_transcripts(str(path), ["audio", "audio", "missing"], ctx=ctx))
+    assert response["success"], response
+    _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+    output = json.loads(await get_job_result(response["task_id"], ctx=ctx))
+    result = output["result"]["result"]
+    assert result["accepted"] == ["audio"]
+    assert result["failed"] == [{"audio_source_id": "missing", "message": "Audio source not found"}]
+    loaded = Project.load(path)
+    record = loaded.audio_sources[0].analysis_records["transcribe"]
+    assert record.legacy_reuse and record.provenance == "unknown"
+    assert loaded.audio_sources[0].transcript == []
+    loaded.close_writer()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["project", "media", "runtime", "settings", "cancel"])
+async def test_legacy_audio_queue_guards_and_settings_capture(lifespan_ctx, tmp_path, monkeypatch, change):
+    from core.project import Project
+    from core.settings import Settings
+    from scene_ripper_mcp.tools.jobs import start_accept_legacy_audio_transcripts
+
+    ctx, store, runtime = lifespan_ctx
+    settings = Settings(transcription_backend="groq", transcription_cloud_model="original", cache_dir=tmp_path)
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    project, path = _legacy_audio_project(tmp_path)
+    release = threading.Event()
+    entered = [threading.Event() for _ in range(4)]
+    try:
+        for event in entered:
+            def block(progress, cancel, event=event):
+                event.set()
+                assert release.wait(10)
+                return {}
+            runtime.submit(kind="blocker", args={}, run=block)
+        assert all(event.wait(5) for event in entered)
+        response = json.loads(await start_accept_legacy_audio_transcripts(str(path), ctx=ctx))
+        assert response["success"], response
+        if change == "project":
+            project.audio_sources[0].duration_seconds = 3
+            assert project.save()
+        elif change == "media":
+            project.audio_sources[0].file_path.write_bytes(b"changed")
+        elif change == "runtime":
+            from core.operations.audio_transcription import transcription_runtime
+            monkeypatch.setattr("core.operations.audio_transcription.transcription_runtime", lambda *args, **kwargs: {**transcription_runtime(*args, **kwargs), "changed": True})
+        elif change == "settings":
+            settings.transcription_cloud_model = "changed"
+        else:
+            assert json.loads(await cancel_job(response["task_id"], ctx=ctx))["success"]
+        expected = path.read_bytes()
+        release.set()
+        status = STATUS_COMPLETED if change == "settings" else STATUS_CANCELLED if change == "cancel" else STATUS_FAILED
+        _wait_for_status(store, response["task_id"], status)
+        if change == "settings":
+            loaded = Project.load(path)
+            record = loaded.audio_sources[0].analysis_records["transcribe"]
+            assert record.identity.to_dict()["parameters"]["model"] == "original"
+            loaded.close_writer()
+        else:
+            assert path.read_bytes() == expected
+    finally:
+        release.set()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["project", "media"])
 async def test_legacy_reuse_rejects_changes_while_queued(lifespan_ctx, tmp_path, change):

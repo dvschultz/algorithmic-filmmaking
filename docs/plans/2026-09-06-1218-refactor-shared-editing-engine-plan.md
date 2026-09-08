@@ -521,6 +521,13 @@ guarded spine publication, and an explicit CLI command. Its 138-test audio/
 legacy/record/import group passes with scoped typing/lint clean. Desktop/agent
 and MCP audio acceptance, faces, and final verification remain open.
 
+MCP audio acceptance now captures settings/runtime before queueing and saves
+under the project writer. Its 147-test MCP/audio/record/import group passes,
+covering queued edits, cancellation, missing IDs, and frozen settings. Scoped
+lint is clean; full-module MCP typing still reports diagnostics outside the new
+function. Desktop/agent audio acceptance, faces, and final verification remain
+open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

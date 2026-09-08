@@ -117,8 +117,13 @@ Omit `--audio-source-id` to process all imported audio sources. This accepts
 stored whole-file transcripts, including explicitly stored silence, using current
 transcription settings. Missing transcripts, invalid durations, and timestamps
 outside the audio or containing segment require recomputation. Saved text and
-word timings remain unchanged, and provenance remains unknown. Audio acceptance
-is currently available through the CLI; desktop and MCP controls are still pending.
+word timings remain unchanged, and provenance remains unknown.
+
+MCP agents can call `start_accept_legacy_audio_transcripts` with `project_path`
+and optional `audio_source_ids`, then poll the usual job tools. Use it only after
+an explicit reuse choice. Settings are captured before queueing; changes to the
+project, audio, or transcription runtime while queued reject the request.
+Accepted decisions are saved. Desktop audio acceptance controls are still pending.
 
 Acceptance for other analysis operations is not available yet. Recompute those
 results through their usual analysis commands.
