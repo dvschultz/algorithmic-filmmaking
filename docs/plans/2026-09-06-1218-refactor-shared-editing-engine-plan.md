@@ -394,6 +394,13 @@ the complete retention/recovery audit. See
 [analysis provenance](../architecture/analysis-provenance.md) for the implemented
 scope and its limitations. U10 is not complete.
 
+Color failed-attempt publication now preserves the prior visible palette while
+replacing its completion record with a verified-input failure. Shared owner
+application, queued GUI delivery, and durable job saves are covered, including
+late-result rejection and no new success receipt for a failed attempt. The 91
+focused color/provenance/recovery tests pass; thumbnail embedding failures are
+the next outstanding publication audit.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

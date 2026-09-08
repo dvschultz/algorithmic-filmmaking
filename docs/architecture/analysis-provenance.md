@@ -920,6 +920,16 @@ place. The implemented policy addresses these constraints by retaining every
 named receipt and uncommitted result, and deleting only released receipts with
 tracked, inactive historical owners as described above.
 
+- Color extraction now publishes an owned failed record after a verified-input
+  attempt returns no palette or raises. The previous palette remains visible,
+  but the failed record prevents reuse. Owner publication rejects late failures
+  after input or record changes; durable jobs save failure records without
+  issuing success receipts. Queued GUI delivery also updates the dirty marker.
+  Validation: 91 focused color, job batching/recovery, provenance, spine, and
+  native GUI delivery tests passed; scoped color operation/job typing and lint
+  checks passed. Failures before an input identity can be verified remain
+  unowned. Thumbnail embedding failure publication remains under audit.
+
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.

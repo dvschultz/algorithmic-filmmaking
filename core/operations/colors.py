@@ -193,6 +193,18 @@ def _compute_target(
     if target.missing:
         return ColorOutcome(target.target_id, "failed", code="target_not_found")
     path = target.video_path or target.image_path
+    identity = None
+
+    def failure(code: str, message: str | None = None) -> ColorOutcome:
+        record_json = None
+        if identity is not None and target.inputs is not None and target.inputs.unchanged():
+            record = replace(
+                AnalysisRecord.failure(identity, message or code),
+                input_json=json.dumps(target.inputs.to_dict(), sort_keys=True),
+            )
+            record_json = json.dumps(record.to_dict(), sort_keys=True)
+        return ColorOutcome(target.target_id, "failed", code=code, message=message, record_json=record_json)
+
     try:
         if path is None or not path.is_file():
             return ColorOutcome(target.target_id, "failed", code="source_file_missing")
@@ -218,7 +230,7 @@ def _compute_target(
             image_path=target.image_path,
         )
         if not colors:
-            return ColorOutcome(target.target_id, "failed", code="no_colors_extracted")
+            return failure("no_colors_extracted")
         if target.inputs is None or not target.inputs.unchanged():
             return ColorOutcome(target.target_id, "failed", code="stale_input")
         record = AnalysisRecord.success(
@@ -237,9 +249,7 @@ def _compute_target(
 
         if isinstance(exc, FingerprintCancelled):
             return ColorOutcome(target.target_id, "unprocessed", code="cancelled")
-        return ColorOutcome(
-            target.target_id, "failed", code="extraction_failed", message=str(exc)
-        )
+        return failure("extraction_failed", str(exc))
 
 
 def compute_colors(
@@ -324,7 +334,7 @@ class ColorApplication:
         updated = []
         outcomes = []
         for target, outcome in zip(self.request.targets, result.outcomes):
-            if outcome.status == "succeeded" or (outcome.status == "skipped" and outcome.record_json is not None):
+            if outcome.status == "succeeded" or (outcome.status in ("skipped", "failed") and outcome.record_json is not None):
                 current = _project_target(
                     self.project,
                     target.target_id,
@@ -345,13 +355,17 @@ class ColorApplication:
                     )
                     if outcome.record_json and (
                         record.identity is None or record.identity.operation != "colors"
-                        or record.value != {"dominant_colors": [list(c) for c in outcome.colors]}
+                        or record.state != ("failed" if outcome.status == "failed" else "succeeded")
+                        or (outcome.status != "failed" and record.value != {"dominant_colors": [list(c) for c in outcome.colors]})
                         or target.inputs is None
                         or json.loads(record.input_json or "null") != target.inputs.to_dict()
                     ):
                         outcome = replace(outcome, status="failed", code="invalid_analysis_record")
                     else:
                         self.project.record_analysis(target.target_type, target.target_id, "colors", record)
+                        if outcome.status == "failed":
+                            outcomes.append(outcome)
+                            continue
                         if target.target_type == "frame":
                             self.project.update_frame(target.target_id, dominant_colors=list(outcome.colors))
                         else:

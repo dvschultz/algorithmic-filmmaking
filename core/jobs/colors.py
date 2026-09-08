@@ -23,6 +23,7 @@ from core.operations.colors import (
 )
 from core.operations.contracts import ColorOutcome, ColorResult
 from core.project import Project
+from models.analysis_record import AnalysisRecord
 
 COLOR_OPERATION_VERSION = 2
 
@@ -226,6 +227,20 @@ def _run_color_batch(
                     {"clip_id": clip_id, "reason": outcome.code}
                 )
             else:
+                if outcome.record_json is not None:
+                    record = AnalysisRecord.from_dict(json.loads(outcome.record_json))
+
+                    def apply_failure(current: Project, cid: str = clip_id, record: AnalysisRecord = record) -> None:
+                        current.record_analysis("clip", cid, "colors", record)
+
+                    def failure_applied(current: Project, cid: str = clip_id, record: AnalysisRecord = record) -> bool:
+                        return current.clips_by_id[cid].analysis_records.get("colors") == record
+
+                    batch.stage_analysis(
+                        apply=apply_failure,
+                        validate_input=validate,
+                        is_applied=failure_applied,
+                    )
                 failure = {"clip_id": clip_id, "code": outcome.code}
                 if outcome.message:
                     failure["message"] = outcome.message

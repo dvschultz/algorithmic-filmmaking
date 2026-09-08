@@ -4924,8 +4924,7 @@ class MainWindow(QMainWindow):
         except (ValueError, RuntimeError) as exc:
             self._on_color_error(str(exc))
             return
-        if any(o.status == "succeeded" for o in applied.outcomes):
-            self._update_window_title()
+        self._update_window_title()
         stale = [o for o in applied.outcomes if o.code == "stale_input"]
         if stale:
             self._on_color_error(f"Color results discarded for {len(stale)} changed targets. Run analysis again.")

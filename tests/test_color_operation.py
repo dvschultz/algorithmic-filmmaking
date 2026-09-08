@@ -225,3 +225,33 @@ def test_media_probe_error_is_a_per_target_failure(tmp_path):
         result = compute_colors(request)
     assert [o.status for o in result.outcomes] == ["failed", "succeeded"]
     assert result.outcomes[0].message == "denied"
+
+
+@pytest.mark.parametrize("failure", [[], RuntimeError("decode failed")])
+def test_failed_rerun_invalidates_record_but_preserves_palette(tmp_path, failure):
+    project = _build_project(tmp_path, 1)
+    request = color_request(project)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+        ColorApplication(project, request).apply(compute_colors(request))
+    request = color_request(project, skip_existing=False)
+    with patch("core.analysis.color.extract_dominant_colors", side_effect=[failure]):
+        result = compute_colors(request)
+    ColorApplication(project, request).apply(result)
+    clip = project.clips[0]
+    assert clip.analysis_records["colors"].state == "failed"
+    assert clip.dominant_colors == [(1, 2, 3)]
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(4, 5, 6)]) as extract:
+        assert compute_colors(color_request(project)).outcomes[0].status == "succeeded"
+    extract.assert_called_once()
+
+
+def test_late_failure_does_not_replace_newer_color_record(tmp_path):
+    project = _build_project(tmp_path, 1)
+    request = color_request(project, skip_existing=False)
+    application = ColorApplication(project, request)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[]):
+        failed = compute_colors(request)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+        ColorApplication(project, request).apply(compute_colors(request))
+    assert application.apply(failed).outcomes[0].code == "stale_input"
+    assert project.clips[0].analysis_records["colors"].state == "succeeded"

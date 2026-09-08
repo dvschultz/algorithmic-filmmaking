@@ -25,6 +25,25 @@ def run(store, path, cancel=None):
     return run_colors(store, path, None, 5, lambda *a: None, cancel or Event())
 
 
+def test_failed_color_attempt_is_saved_without_success_receipt(tmp_path, monkeypatch):
+    path, store, extract = setup_colors(tmp_path, monkeypatch, 1)
+    try:
+        run(store, path)
+        previous = Project.load(path)
+        receipts = dict(previous.metadata.job_results)
+        previous.close_writer()
+        extract.side_effect = RuntimeError("decode failed")
+        result = run_colors(store, path, None, 6, lambda *a: None, Event())
+        assert len(result["result"]["failed"]) == 1
+        loaded = Project.load(path)
+        assert loaded.clips[0].analysis_records["colors"].state == "failed"
+        assert loaded.clips[0].dominant_colors == [(1, 2, 3)]
+        assert loaded.metadata.job_results == receipts
+        loaded.close_writer()
+    finally:
+        store.close()
+
+
 def test_staged_analysis_rechecks_inputs_before_saving(tmp_path, monkeypatch):
     from models.analysis_record import AnalysisRecord
 

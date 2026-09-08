@@ -70,6 +70,25 @@ assert worker.job_status == 'completed'
 assert all(c.dominant_colors == [(1, 2, 3)] for c in project.clips)
 assert project.is_dirty
 assert receiver.title.endswith('*'), receiver.title
+
+# A failed rerun is delivered on the owner thread and marks the record dirty,
+# while retaining the last palette for display.
+project.mark_clean()
+receiver._update_window_title()
+received.clear()
+worker = ColorAnalysisWorker(project.clips, sources_by_id=project.sources_by_id,
+                             project=project, skip_existing=False)
+worker.result_ready.connect(receiver.apply)
+worker.analysis_completed.connect(receiver.completed)
+worker.finished.connect(loop.quit)
+with patch('core.analysis.color.extract_dominant_colors', return_value=[]):
+    worker.start()
+    loop.exec()
+    assert worker.wait(5000)
+assert received == [('result', owner), ('completed', owner)], received
+assert all(c.analysis_records['colors'].state == 'failed' for c in project.clips)
+assert project.is_dirty
+assert receiver.title.endswith('*'), receiver.title
 """
     result = subprocess.run(
         [sys.executable, "-c", code, str(tmp_path)],
