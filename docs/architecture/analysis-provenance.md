@@ -802,6 +802,16 @@ before the fix; 141 receipt/history/scalar regressions pass. Scoped store typing
 and changed-file Ruff pass. This is a prerequisite for pruning; no automatic
 receipt deletion policy is enabled yet.
 
+Artifact collection now reconciles pending save pins against readable supported
+project documents while holding a fresh, non-borrowed project writer. It validates
+reference forms and checks document bytes again before atomically replacing the
+manifest and releasing pending pins. Saved references survive; unreferenced
+abandoned save payloads become collectible. Busy writers, missing/unreadable or
+malformed documents, future schemas, unknown references, and concurrent changes
+retain their pins. Both positive cleanup cases fail with reconciliation disabled;
+118 artifact, receipt, bundle, and recovery regressions pass. Scoped artifact-module
+typing and changed-file Ruff pass.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
@@ -813,4 +823,4 @@ receipt deletion policy is enabled yet.
   Add safe computed-receipt pruning and audit legacy job-row ownership;
   existing rows are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional
-  consumers. Abandoned save pins without a later replacement remain retained.
+  consumers. Save pins for missing, unreadable, unsupported, or actively owned project files remain conservatively retained.

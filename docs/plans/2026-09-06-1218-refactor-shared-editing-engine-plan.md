@@ -658,7 +658,13 @@ Ruff are clean. Receipt readers now lease managed payloads before concurrent
 cleanup can retire their persisted pins. Both single/batched read races reproduced;
 141 receipt/history/scalar regression tests pass, including lease release after
 failed reads. Scoped store typing and changed-file Ruff pass. Receipt pruning
-policy and abandoned-pin reconciliation remain pending.
+policy remains pending. Collection now reconciles abandoned save pins against
+readable supported projects under an independent writer lock, with strict reference
+validation and a final document-content check. Manifest replacement and pin release
+are atomic. Busy/missing/unreadable/unsupported projects and concurrent changes
+remain retained. Both positive cleanup cases fail with reconciliation disabled;
+118 artifact/receipt/bundle/recovery regressions pass. Scoped artifact typing and
+changed-file Ruff pass.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

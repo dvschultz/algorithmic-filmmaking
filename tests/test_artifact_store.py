@@ -366,3 +366,97 @@ def test_unavailable_embedding_preserves_notes_and_sequences(tmp_path, monkeypat
     assert not record.reusable(identity(operation="embeddings"), artifact_available=store.available)
     assert restored.save()
     restored.session.close()
+def test_collection_reconciles_interrupted_save_against_saved_manifest(tmp_path):
+    import json
+    from core.artifacts import ArtifactStore
+    from core.project import Project
+
+    store = ArtifactStore(tmp_path / "artifacts")
+    path = tmp_path / "project.sceneripper"
+    project = Project.new()
+    project.save(path)
+    project.session.close()
+    document = json.loads(path.read_text())
+    pin = store.create_manifest_pin(path, ())
+    retained = store.put_bytes(b"saved artifact", pin=pin)
+    abandoned = store.put_bytes(b"abandoned artifact", pin=pin)
+    document["custom_data"] = {"artifact": retained.to_dict()}
+    path.write_text(json.dumps(document))
+    assert store.collect() == [abandoned.digest]
+    assert store.available(retained)
+    with store._connection() as db:
+        assert db.execute("SELECT count(*) FROM pending_manifests").fetchone()[0] == 0
+
+
+def test_collection_preserves_active_manifest_writer(tmp_path):
+    from core.artifacts import ArtifactStore
+    from core.project import Project
+    from core.project_lock import ProjectWriter
+
+    store = ArtifactStore(tmp_path / "artifacts")
+    path = tmp_path / "project.sceneripper"
+    project = Project.new()
+    project.save(path)
+    project.session.close()
+    with ProjectWriter(path):
+        pin = store.create_manifest_pin(path, ())
+        artifact = store.put_bytes(b"in-flight save", pin=pin)
+        assert store.collect() == []
+        assert store.available(artifact)
+    assert store.collect() == [artifact.digest]
+
+
+@pytest.mark.parametrize("state", ["missing", "invalid_json", "future", "invalid_reference"])
+def test_pending_manifest_reconciliation_preserves_uncertain_projects(tmp_path, state):
+    import json
+    from core.project import Project
+
+    store = ArtifactStore(tmp_path / "artifacts")
+    path = tmp_path / "project.sceneripper"
+    project = Project.new()
+    project.save(path)
+    project.session.close()
+    document = json.loads(path.read_text())
+    if state == "missing":
+        path.unlink()
+    elif state == "invalid_json":
+        path.write_bytes(b"{")
+    else:
+        if state == "future":
+            document["version"] = "999.0"
+        else:
+            document["custom_data"] = {"artifact": {"digest": "unknown"}}
+        path.write_text(json.dumps(document))
+    pin = store.create_manifest_pin(path, ())
+    artifact = store.put_bytes(b"uncertain", pin=pin)
+    assert store.collect() == []
+    assert store.available(artifact)
+    with store._connection() as db:
+        assert db.execute("SELECT count(*) FROM pending_manifests").fetchone()[0] == 1
+
+
+def test_pending_manifest_reconciliation_detects_external_document_change(tmp_path, monkeypatch):
+    from pathlib import Path
+    from core.project import Project
+
+    store = ArtifactStore(tmp_path / "artifacts")
+    path = tmp_path / "project.sceneripper"
+    project = Project.new()
+    project.save(path)
+    project.session.close()
+    pin = store.create_manifest_pin(path, ())
+    artifact = store.put_bytes(b"uncertain", pin=pin)
+    read = Path.read_bytes
+    reads = []
+
+    def changed_read(current):
+        data = read(current)
+        if current == path:
+            reads.append(current)
+            if len(reads) == 2:
+                return data + b" "
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", changed_read)
+    assert store.collect() == []
+    assert store.available(artifact)

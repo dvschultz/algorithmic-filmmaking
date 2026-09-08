@@ -392,6 +392,55 @@ class ArtifactStore:
         with self._transaction() as db:
             db.execute("DELETE FROM owners WHERE id IN (SELECT owner FROM pending_manifests WHERE project_path=?)", (str(path.expanduser().resolve()),))
 
+    def reconcile_pending_manifests(self) -> int:
+        """Reconcile abandoned saves only while independently owning their writers."""
+        from core.project_lock import ProjectBusyError, ProjectWriter
+        from core.project_migrations import is_future_schema
+        from core.project import _validate_project_structure
+
+        with self._connection() as db:
+            paths = [row[0] for row in db.execute("SELECT DISTINCT project_path FROM pending_manifests")]
+        reconciled = 0
+        for value in paths:
+            path = Path(value)
+            try:
+                # Do not borrow an active save scope, even on this thread.
+                with ProjectWriter(path):
+                    encoded = path.read_bytes()
+                    document = json.loads(encoded)
+                    if (
+                        not isinstance(document, dict)
+                        or not isinstance(document.get("id"), str)
+                        or not document["id"]
+                        or _validate_project_structure(document)
+                        or is_future_schema(document["version"])
+                    ):
+                        continue
+                    # Unknown or malformed reference forms cannot prove absence.
+                    pending = [document]
+                    while pending:
+                        item = pending.pop()
+                        if isinstance(item, dict):
+                            for key in ("artifact", "prerender_artifact"):
+                                if item.get(key) is not None:
+                                    ArtifactRef.from_dict(item[key])
+                            pending.extend(item.values())
+                        elif isinstance(item, list):
+                            pending.extend(item)
+                    refs = document_references(document)
+                    with self._transaction() as db:
+                        if path.read_bytes() != encoded:
+                            continue
+                        owner = "project:" + value
+                        db.execute("INSERT OR IGNORE INTO owners VALUES (?, 'project')", (owner,))
+                        db.execute("DELETE FROM refs WHERE owner=?", (owner,))
+                        db.executemany("INSERT OR IGNORE INTO refs VALUES (?, ?)", ((owner, ref.digest) for ref in refs))
+                        removed = db.execute("DELETE FROM owners WHERE id IN (SELECT owner FROM pending_manifests WHERE project_path=?)", (value,)).rowcount
+                        reconciled += removed
+            except (ProjectBusyError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                continue
+        return reconciled
+
     def set_manifest(self, project_path: Path, references: Iterable[ArtifactRef]) -> None:
         """Retain a known project's references even while its media is offline."""
         owner = "project:" + str(project_path.expanduser().resolve())
@@ -579,6 +628,7 @@ class ArtifactStore:
 
     def collect(self) -> list[str]:
         """Delete only unreferenced, unchanged regular files owned by this index."""
+        self.reconcile_pending_manifests()
         removed = []
         with self._transaction() as db:
             candidates = db.execute("SELECT digest, stamp, filename FROM objects WHERE NOT EXISTS (SELECT 1 FROM refs WHERE refs.digest=objects.digest) ORDER BY digest").fetchall()
