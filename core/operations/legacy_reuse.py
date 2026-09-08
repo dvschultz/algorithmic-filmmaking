@@ -16,10 +16,12 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects")
 
 if TYPE_CHECKING:
     from core.operations.scalars import ScalarOutcome, ScalarTask
+    from core.operations.classification import ClassificationOutcome, ClassificationTask
+    from core.operations.object_detection import ObjectDetectionOutcome, ObjectDetectionTask
 
 
 def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, inputs: AnalysisInput) -> str:
@@ -142,4 +144,55 @@ def accept_legacy_scalars(tasks: "tuple[ScalarTask, ...]", *, cancel_event: Even
             outcomes.append(ScalarOutcome(task.clip_id, task.operation, "unprocessed", message="Cancelled"))
         except (ValueError, OSError, TypeError, KeyError) as exc:
             outcomes.append(ScalarOutcome(task.clip_id, task.operation, "failed", message=str(exc)))
+    return tuple(outcomes)
+
+
+def accept_legacy_visuals(
+    tasks: "tuple[ClassificationTask | ObjectDetectionTask, ...]",
+    *, cancel_event: Event | None = None,
+) -> "tuple[ClassificationOutcome | ObjectDetectionOutcome, ...]":
+    """Reuse labels/detections without inventing missing classifier confidence."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.analysis_model_identity import classification_runtime, object_detection_runtime
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.classification import ClassificationTask, ClassificationOutcome, ClassificationOptions, classification_identity
+    from core.operations.object_detection import DetectedObject, ObjectDetectionOutcome, ObjectDetectionOptions, object_detection_identity
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    outcomes: list[ClassificationOutcome | ObjectDetectionOutcome] = []
+    for task in tasks:
+        classification = isinstance(task, ClassificationTask)
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if task.analysis_json is None or task.thumbnail_path is None or not task.thumbnail_path.is_file():
+                raise ValueError("A readable thumbnail and legacy values are required")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            if classification:
+                labels = value["object_labels"]
+                if not isinstance(labels, list) or any(not isinstance(label, str) or not label for label in labels):
+                    raise ValueError("Legacy classification labels are missing or invalid")
+                identity = classification_identity(snapshot, ClassificationOptions(), fingerprints, classification_runtime())
+            else:
+                raw, count = value["detected_objects"], value["person_count"]
+                if not isinstance(raw, list) or type(count) is not int or count < 0:
+                    raise ValueError("Legacy detections and person count are required")
+                if any(isinstance(item.get("confidence"), bool) for item in raw):
+                    raise ValueError("Legacy detection confidence is invalid")
+                detections = tuple(DetectedObject.from_dict(item) for item in raw)
+                if sum(item.label == "person" for item in detections) != count:
+                    raise ValueError("Legacy person count does not match the detections")
+                identity = object_detection_identity(snapshot, ObjectDetectionOptions(), fingerprints, object_detection_runtime())
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            if classification:
+                # The normal reuse representation reads saved label names. No
+                # synthetic confidences are introduced for legacy labels.
+                outcomes.append(ClassificationOutcome(task.clip_id, "skipped", code="legacy_accepted", record_json=record_json))
+            else:
+                outcomes.append(ObjectDetectionOutcome(task.clip_id, "succeeded", detections=detections, person_count=count, record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(ClassificationOutcome(task.clip_id, "unprocessed", code="cancelled") if classification else ObjectDetectionOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
+            outcomes.append(ClassificationOutcome(task.clip_id, "failed", message=str(exc)) if classification else ObjectDetectionOutcome(task.clip_id, "failed", message=str(exc)))
     return tuple(outcomes)

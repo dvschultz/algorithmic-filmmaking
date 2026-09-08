@@ -8,7 +8,9 @@ from PySide6.QtCore import Signal
 
 from core.operations.colors import ColorApplication, color_request
 from core.operations.embeddings import EmbeddingApplication, embedding_task
-from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars
+from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals
+from core.operations.classification import ClassificationApplication, ClassificationOptions, classification_task
+from core.operations.object_detection import ObjectDetectionApplication, object_detection_task
 from core.operations.scalars import ScalarBatchApplication, ScalarOperation, scalar_task
 from core.project import Project
 from models.analysis_record import AnalysisRecord
@@ -38,7 +40,7 @@ class LegacyReuseWorker(CancellableWorker):
         self.operation = operation
         self.request = color_request(project, ids, skip_existing=False) if operation == "colors" else None
         self.tasks = tuple(embedding_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), skip_existing=False) for cid in ids) if operation == "embeddings" else ()
-        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication
+        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | ClassificationApplication | ObjectDetectionApplication
         self._compute: Callable[[], object]
         if self.request is not None:
             self.application = ColorApplication(project, self.request)
@@ -46,6 +48,14 @@ class LegacyReuseWorker(CancellableWorker):
         elif operation == "embeddings":
             self.application = EmbeddingApplication(project, self.tasks)
             self._compute = partial(accept_legacy_embeddings, self.tasks, cancel_event=self._cancel_event)
+        elif operation == "classify":
+            visual_tasks = tuple(classification_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id)) for cid in ids)
+            self.application = ClassificationApplication(project, visual_tasks, ClassificationOptions())
+            self._compute = partial(accept_legacy_visuals, visual_tasks, cancel_event=self._cancel_event)
+        elif operation == "detect_objects":
+            object_tasks = tuple(object_detection_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id)) for cid in ids)
+            self.application = ObjectDetectionApplication(project, object_tasks)
+            self._compute = partial(accept_legacy_visuals, object_tasks, cancel_event=self._cancel_event)
         else:
             tasks = tuple(scalar_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), cast(ScalarOperation, operation)) for cid in ids)
             self.application = ScalarBatchApplication(project, tasks)

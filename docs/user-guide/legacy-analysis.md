@@ -4,14 +4,16 @@ Older projects may contain analysis values without a record of the inputs or
 model that produced them. These values remain visible, but they do not count as
 completed analysis until you recompute them or explicitly accept reuse.
 
-For colors, brightness, volume, and compatible DINO embeddings, the CLI provides
-an explicit reuse command:
+For colors, brightness, volume, classification, object detection, and compatible
+DINO embeddings, the CLI provides an explicit reuse command:
 
 ```sh
 scene_ripper analyze accept-legacy project.json --operation colors --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation embeddings --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation brightness --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation volume --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation classify --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation detect_objects --clip-id CLIP_ID
 ```
 
 Omit `--clip-id` to process all clips. The command reports accepted and failed
@@ -22,6 +24,11 @@ valid vector; an unknown model requires recomputation.
 Brightness binds the default five-sample configuration. Zero brightness or
 volume is a valid measurement. An absent legacy volume value requires
 recomputation because it cannot distinguish missing analysis from no audio.
+Classification retains saved label names without inventing confidence scores.
+Object detection requires valid detections and a matching person count. Empty
+label lists and empty detections with a zero person count can be accepted.
+Both operations bind their current default settings and require a readable
+thumbnail.
 
 An accepted value retains **unknown provenance**. Acceptance records your
 decision to use it with the current inputs; it does not establish how the old

@@ -22,7 +22,7 @@ owners = []
 tool = tools.get('accept_legacy_analysis')
 assert tool.modifies_gui_state and tool.modifies_project_state
 with TemporaryDirectory() as directory:
-    for operation in ('colors', 'embeddings', 'brightness', 'volume'):
+    for operation in ('colors', 'embeddings', 'brightness', 'volume', 'classify', 'detect_objects'):
         for mode in ('current', 'reply', 'project', 'edit', 'cancel'):
             window = QObject(); owners.append(window)
             window.project = project_with_thumbnails(Path(directory), 1)
@@ -30,6 +30,8 @@ with TemporaryDirectory() as directory:
             clip.dominant_colors = [(1, 2, 3)]
             clip.embedding, clip.embedding_model = [0.1] * 768, DINOV2_TAG
             clip.average_brightness = clip.rms_volume = 0.0
+            clip.object_labels = clip.detected_objects = []
+            clip.person_count = 0
             window._chat_worker = SimpleNamespace(_stop_requested=False,
                 is_gui_tool_pending=lambda *a: True, set_gui_tool_result=Mock(return_value=True))
             requester = window._chat_worker

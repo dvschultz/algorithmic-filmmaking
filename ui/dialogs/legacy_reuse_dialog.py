@@ -33,6 +33,8 @@ class LegacyReuseDialog(QDialog):
         self.operation.addItem("Thumbnail embeddings (compatible DINO model)", "embeddings")
         self.operation.addItem("Brightness (default five samples)", "brightness")
         self.operation.addItem("Volume", "volume")
+        self.operation.addItem("Classification (default settings)", "classify")
+        self.operation.addItem("Object detection (default settings)", "detect_objects")
         self.operation.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
         self.operation.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH_WIDE)
         layout.addWidget(self.operation)
@@ -92,7 +94,7 @@ class LegacyReuseDialog(QDialog):
                 accepted = sum(outcome.status == "succeeded" for outcome in outcomes)
             else:
                 outcomes = result
-                accepted = sum(outcome.status == "succeeded" and worker.application.apply(self.project, outcome) for outcome in outcomes)
+                accepted = sum(outcome.status in ("succeeded", "skipped") and worker.application.apply(self.project, outcome) for outcome in outcomes)
             failures = [outcome.message or getattr(outcome, "code", "Reuse unavailable") for outcome in outcomes if outcome.status == "failed"]
             self.status.setText(
                 f"Accepted {accepted} of {len(self.clip_ids)} clips. Save the project to keep these decisions."

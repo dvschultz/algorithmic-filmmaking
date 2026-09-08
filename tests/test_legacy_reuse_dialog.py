@@ -8,7 +8,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume"])
+@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects"])
 def test_dialog_publication_and_cancellation(tmp_path, operation):
     code = r'''
 import sys
@@ -34,6 +34,8 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     clip.embedding = [0.1] * 768
     clip.embedding_model = DINOV2_TAG
     clip.average_brightness = clip.rms_volume = 0.0
+    clip.object_labels = clip.detected_objects = []
+    clip.person_count = 0
     operation = sys.argv[2]
     dialog = LegacyReuseDialog(owner, [clip.id])
     dialog.operation.setCurrentIndex(dialog.operation.findData(operation))

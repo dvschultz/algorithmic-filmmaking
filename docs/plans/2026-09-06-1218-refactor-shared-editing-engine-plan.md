@@ -447,6 +447,13 @@ input checks. The 182-test legacy/scalar/MCP/native GUI/import group passes,
 with scoped typing and lint clean. Remaining families and final review remain
 open.
 
+Classification and object-detection acceptance now also reach all four
+interfaces through normal operation identities and guarded publication. Empty
+results are supported, classifier confidences are not invented, and inconsistent
+person counts are rejected. Their 172-test legacy/operation/MCP/native GUI/import
+group passes, with scoped typing and lint clean. Other analysis families and
+final review remain outstanding.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -55,6 +55,8 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project = project_with_thumbnails(tmp_path, 1)
     project.clips[0].dominant_colors = [(1, 2, 3)]
     project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
+    project.clips[0].object_labels = project.clips[0].detected_objects = []
+    project.clips[0].person_count = 0
     path = tmp_path / "project.json"
     assert project.save(path)
     result = CliRunner().invoke(analyze, ["accept-legacy", str(path), "--operation", operation])
@@ -168,3 +170,42 @@ def test_scalar_reuse_requires_source_even_when_binaries_exist(tmp_path, operati
     clip.average_brightness = clip.rms_volume = 0.0
     outcome = accept_legacy_scalars((scalar_task(clip, None, operation),))[0]
     assert outcome.status == "failed" and outcome.record_json is None
+
+
+@pytest.mark.parametrize("operation", ["classify", "detect_objects"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_legacy_visual_results_include_valid_empty_outputs(tmp_path, operation, empty):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.classification import ClassificationOptions, classification_task, run_classification
+    from core.operations.object_detection import ObjectDetectionOptions, object_detection_task, run_object_detection
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.object_labels = [] if empty else ["cat"]
+    clip.detected_objects = [] if empty else [{"label": "person", "confidence": 0.9, "bbox": [0, 0, 1, 1]}]
+    clip.person_count = 0 if empty else 1
+    result = accept_legacy_analysis(project, operation)
+    assert result["accepted"] == [clip.id], result
+    assert clip.analysis_records[operation].provenance == "unknown"
+    assert operation_is_complete_for_clip(operation, clip, source=project.sources[0])
+    with patch("core.analysis.classification.classify_frame", side_effect=AssertionError("no inference")), patch("core.analysis.detection.detect_objects", side_effect=AssertionError("no inference")):
+        if operation == "classify":
+            outcomes = run_classification((classification_task(clip, project.sources[0]),), ClassificationOptions())
+        else:
+            outcomes = run_object_detection((object_detection_task(clip, project.sources[0]),), ObjectDetectionOptions())
+    assert outcomes[0].status == "skipped"
+    clip.thumbnail_path.write_bytes(b"changed thumbnail")
+    assert not operation_is_complete_for_clip(operation, clip, source=project.sources[0])
+
+
+@pytest.mark.parametrize("count,confidence", [(0, 0.9), (True, 0.9), (1, True)])
+def test_inconsistent_legacy_detections_require_recomputation(tmp_path, count, confidence):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.detected_objects = [{"label": "person", "confidence": confidence, "bbox": [0, 0, 1, 1]}]
+    clip.person_count = count
+    result = accept_legacy_analysis(project, "detect_objects")
+    assert not result["accepted"] and len(result["failed"]) == 1
+    assert "detect_objects" not in clip.analysis_records

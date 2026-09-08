@@ -980,6 +980,17 @@ tracked, inactive historical owners as described above.
   semantic reuse. The 182-test legacy/native GUI/MCP/scalar/import group passes;
   five scoped modules pass typing and changed scoped files pass lint. Other
   analysis families remain outstanding.
+
+- Classification and object-detection legacy acceptance now use their existing
+  snapshot/identity/application paths across CLI, MCP, desktop, and built-in
+  agent. Classification publishes the normal reuse representation so saved
+  label names acquire no invented confidence scores. Detection requires valid
+  boxes/confidences and an exact person-count match. Empty labels and empty
+  detections with count zero are accepted; missing thumbnails and inconsistent
+  results require recomputation. MCP queue snapshots include thumbnails for
+  these operations. The 172-test legacy/native GUI/MCP/operation/import group
+  passes; five scoped modules pass typing and scoped lint is clean. Remaining
+  analysis families and final review are still open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

@@ -15,7 +15,7 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
@@ -35,6 +35,27 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation in ("classify", "detect_objects"):
+            from core.operations.classification import ClassificationApplication, ClassificationOptions, ClassificationOutcome, classification_task
+            from core.operations.object_detection import ObjectDetectionApplication, ObjectDetectionOutcome, object_detection_task
+
+            if operation == "classify":
+                classification = classification_task(clip, project.sources_by_id.get(clip.source_id))
+                class_app = ClassificationApplication(project, (classification,), ClassificationOptions())
+                visual = accept_legacy_visuals((classification,), cancel_event=cancel_event)[0]
+                accepted = visual.status in ("succeeded", "skipped") and class_app.apply(project, cast(ClassificationOutcome, visual))
+            else:
+                detection = object_detection_task(clip, project.sources_by_id.get(clip.source_id))
+                object_app = ObjectDetectionApplication(project, (detection,))
+                visual = accept_legacy_visuals((detection,), cancel_event=cancel_event)[0]
+                accepted = visual.status in ("succeeded", "skipped") and object_app.apply(project, cast(ObjectDetectionOutcome, visual))
+            if visual.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif accepted:
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": visual.message or "Target changed"})
             continue
         if operation in ("brightness", "volume"):
             task = scalar_task(clip, project.sources_by_id.get(clip.source_id), cast(ScalarOperation, operation))

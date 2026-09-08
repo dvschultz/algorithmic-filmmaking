@@ -56,7 +56,7 @@ class AgentLegacyReuse(RetiringQObject):
                         failed.append({"clip_id": outcome.target_id, "message": outcome.message or outcome.code})
             else:
                 for outcome in result:
-                    if outcome.status == "succeeded" and self.worker.application.apply(self.project, outcome):
+                    if outcome.status in ("succeeded", "skipped") and self.worker.application.apply(self.project, outcome):
                         accepted.append(outcome.clip_id)
                     else:
                         failed.append({"clip_id": outcome.clip_id, "message": outcome.message or getattr(outcome, "code", None) or "Target changed"})

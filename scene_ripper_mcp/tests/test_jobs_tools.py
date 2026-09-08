@@ -58,14 +58,17 @@ def lifespan_ctx(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects"])
 async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path, operation):
     from core.project import Project
-    from tests.test_spine_analyze import _build_project
+    from tests.test_description_operations import project_with_thumbnails
     from scene_ripper_mcp.tools.jobs import start_accept_legacy_analysis
 
     ctx, store, _ = lifespan_ctx
-    project = _build_project(tmp_path, 1, populate_colors=1)
+    project = project_with_thumbnails(tmp_path, 1)
+    project.clips[0].dominant_colors = [(1, 2, 3)]
+    project.clips[0].object_labels = project.clips[0].detected_objects = []
+    project.clips[0].person_count = 0
     project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     path = tmp_path / "legacy.sceneripper"
     assert project.save(path)
