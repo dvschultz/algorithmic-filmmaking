@@ -48,7 +48,7 @@ def test_failed_save_reuses_recorded_computation(setup):
     assert len(Project.load(path).metadata.job_results) == 2
 
 
-def test_checkpoint_failure_reconciles_and_preserves_user_edits(setup):
+def test_checkpoint_failure_reconciles_and_edited_projection_requires_recompute(setup):
     path, store, compute = setup
     with patch.object(
         store, "checkpoint_results", side_effect=RuntimeError("checkpoint failed")
@@ -61,8 +61,8 @@ def test_checkpoint_failure_reconciles_and_preserves_user_edits(setup):
     saved.clips[0].description = "User edit"
     assert saved.save()
     run(setup)
-    assert Project.load(path).clips[0].description == "User edit"
-    assert compute.call_count == 2
+    assert Project.load(path).clips[0].description == "Generated"
+    assert compute.call_count == 3
 
 
 def test_forced_refresh_reuses_failed_save_then_advances_generation(setup):
@@ -144,14 +144,137 @@ def test_cancel_preserves_prior_results_and_missing_thumbnail_is_per_item(setup)
     assert compute.call_count == 1
 
 
-def test_missing_receipt_payload_refuses_paid_recomputation(setup):
+def test_missing_receipt_payload_reuses_verified_project_record(setup):
     path, _, compute = setup
     run(setup)
     empty = JobStore(path.parent / "empty-jobs.db")
-    with pytest.raises(StaleJobResult, match="missing"):
-        run_description_job(
-            empty, path, None, lambda *_: None, Event(), options=OPTIONS
+    result = run_description_job(
+        empty, path, None, lambda *_: None, Event(), options=OPTIONS
+    )
+    assert len(result["result"]["skipped"]) == 2
+    assert compute.call_count == 2
+
+
+def test_saved_prompt_change_requires_new_description(setup):
+    from dataclasses import replace
+
+    path, store, compute = setup
+    run(setup)
+    result = run_description_job(
+        store,
+        path,
+        None,
+        lambda *_: None,
+        Event(),
+        options=replace(OPTIONS, prompt="Different prompt"),
+    )
+    assert len(result["result"]["succeeded"]) == 2
+    assert compute.call_count == 4
+
+
+def test_job_failures_save_failed_records_without_new_receipts(setup):
+    from dataclasses import replace
+
+    path, store, compute = setup
+    run(setup)
+    receipts = Project.load(path).metadata.job_results.copy()
+    compute.side_effect = RuntimeError("Invalid provider response")
+    result = run_description_job(
+        store,
+        path,
+        None,
+        lambda *_: None,
+        Event(),
+        options=replace(OPTIONS, prompt="Different prompt"),
+    )
+    assert len(result["result"]["failed"]) == 2
+    saved = Project.load(path)
+    assert saved.metadata.job_results == receipts
+    assert all(
+        c.description == "Generated"
+        and c.analysis_records["describe"].state == "failed"
+        for c in saved.clips
+    )
+
+
+def test_committed_image_fallback_does_not_satisfy_video_request(setup):
+    from dataclasses import replace
+
+    path, store, compute = setup
+    options = replace(OPTIONS, model="gemini-test", input_mode="video")
+
+    def fallback(*args, **kwargs):
+        kwargs["on_execution"](
+            {"backend": "cloud", "model": "gemini-test", "input_mode": "frame"}
         )
+        return "Image fallback", "gemini-test"
+
+    compute.side_effect = fallback
+    for _ in range(2):
+        result = run_description_job(
+            store, path, None, lambda *_: None, Event(), options=options
+        )
+        assert len(result["result"]["succeeded"]) == 2
+    assert compute.call_count == 4
+
+
+def test_high_resolution_job_image_does_not_replace_display_thumbnail(setup):
+    path, store, compute = setup
+    project = Project.load(path)
+    display = project.clips[0].thumbnail_path
+    image = path.parent / "high-resolution.jpg"
+    image.write_bytes(b"high resolution image")
+    result = run_description_job(
+        store,
+        path,
+        [project.clips[0].id],
+        lambda *_: None,
+        Event(),
+        options=OPTIONS,
+        thumbnail_paths={project.clips[0].id: image},
+    )
+    assert len(result["result"]["succeeded"]) == 1
+    assert Project.load(path).clips[0].thumbnail_path == display
+    assert compute.call_args.args[0] == image
+    result = run_description_job(
+        store, path, [project.clips[0].id], lambda *_: None, Event(), options=OPTIONS
+    )
+    assert len(result["result"]["skipped"]) == 1
+    assert compute.call_count == 1
+
+    saved = Project.load(path)
+    saved.sources[0].fps += 1
+    assert saved.save()
+    result = run_description_job(
+        store, path, [saved.clips[0].id], lambda *_: None, Event(), options=OPTIONS
+    )
+    assert len(result["result"]["succeeded"]) == 1
+    assert compute.call_args.args[0] == display
+    assert compute.call_count == 2
+
+
+def test_failed_save_recovery_ignores_parallelism(setup):
+    from dataclasses import replace
+
+    path, store, compute = setup
+    with patch(
+        "core.jobs.commits.save_with_mtime_check",
+        side_effect=RuntimeError("save failed"),
+    ):
+        with pytest.raises(RuntimeError):
+            run(setup)
+    compute.side_effect = AssertionError(
+        "Scheduling must not invalidate completed computation"
+    )
+    result = run_description_job(
+        store,
+        path,
+        None,
+        lambda *_: None,
+        Event(),
+        options=replace(OPTIONS, parallelism=4),
+    )
+    assert len(result["result"]["succeeded"]) == 2
     assert compute.call_count == 2
 
 

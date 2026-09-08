@@ -325,3 +325,14 @@ def test_verified_local_reuse_does_not_load_weights(setup, monkeypatch):
     worker.run()
     assert all(o.status == "skipped" for o in worker.result)
     assert loader.call_count == compute.call_count == 2
+
+
+def test_gui_receipt_reuse_ignores_parallelism(setup, monkeypatch):
+    project, compute = setup
+    first = run(project)
+    monkeypatch.setattr(
+        "ui.workers.description_worker.resolve_options",
+        lambda *args: replace(OPTIONS, parallelism=4),
+    )
+    assert run(project, prepare=Mock(side_effect=AssertionError("must reuse"))) == first
+    assert compute.call_count == 2

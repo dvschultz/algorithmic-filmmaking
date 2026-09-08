@@ -230,8 +230,18 @@ require the exact published analysis record as well as its displayed fields.
 Local model loading occurs after reuse verification and checks media again before
 inference, so a valid local description does not require loading model weights.
 
-Durable headless job receipts and completion projections still need migration.
-Those paths retain their existing reuse rules; the description family is not yet
+Durable headless jobs now use the same verified records. Missing old receipt rows
+do not prevent semantic reuse; present corrupt receipts are rejected. Failed-save
+recovery preserves computed records, and failed attempts publish failure records
+without successful receipts. A committed frame fallback cannot satisfy a later
+video request. GUI and headless receipt identities exclude parallelism, so changing
+scheduling does not repeat completed inference after a failed save. Job and GUI
+computation share their full-content fingerprint cache across clips.
+
+CLI high-resolution analysis images remain separate from display thumbnails.
+Later jobs may select that recorded image while its source/range/frame-rate binding
+remains current, then verify its content and semantic identity before reuse.
+Completion projections still need migration; the description family is not yet
 complete.
 
 ## Remaining U10 work

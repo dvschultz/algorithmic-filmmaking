@@ -206,7 +206,11 @@ def recorded_image_path(target: Any, source: Any, operation: str) -> Path | None
         binding = json.loads(inputs.binding_json)
         if binding != {"target_id": target.id, "source_id": target.source_id}:
             return None
-        if json.loads(inputs.range_json) != {"start_frame": target.start_frame, "end_frame": target.end_frame}:
+        source_range = json.loads(inputs.range_json)
+        expected_range = {"start_frame": target.start_frame, "end_frame": target.end_frame}
+        if "fps" in source_range:
+            expected_range["fps"] = source.fps
+        if source_range != expected_range:
             return None
         files = {role: path for role, path, _ in inputs.files}
         if files.get("video") != source.file_path or not inputs.unchanged():

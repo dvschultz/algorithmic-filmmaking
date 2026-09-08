@@ -384,6 +384,7 @@ def run_description(
     cancel_event: Event | None = None,
     on_outcome: Callable[[DescriptionOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
 ) -> tuple[DescriptionOutcome, ...]:
     """Bound admission, serialize local inference, and suppress cancelled results."""
     if options.model is None or options.input_mode is None:
@@ -394,7 +395,7 @@ def run_description(
             input_mode=options.input_mode or resolved.input_mode,
         )
     cancel = cancel_event or Event()
-    fingerprints = AnalysisFingerprints(cancel)
+    fingerprints = fingerprints or AnalysisFingerprints(cancel)
     parallelism = (
         1
         if options.tier in ("local", "cpu", "gpu")
@@ -488,14 +489,18 @@ class DescriptionApplication:
                 return None
             source = project.sources_by_id.get(target.source_id)
             if (
-                target.thumbnail_path != task.thumbnail_path
-                or (target.start_frame, target.end_frame)
+                (target.start_frame, target.end_frame)
                 != (task.start_frame, task.end_frame)
                 or (source.file_path if source else None) != task.source_path
                 or (source.fps if source else None) != task.fps
             ):
                 return None
-            identity = (target.source_id, target.start_frame, target.end_frame)
+            identity = (
+                target.thumbnail_path,
+                target.source_id,
+                target.start_frame,
+                target.end_frame,
+            )
         image_stamp = media_stamp(task.thumbnail_path) if task.thumbnail_path else None
         source_stamp = media_stamp(task.source_path) if task.source_path else None
         if image_stamp is None:

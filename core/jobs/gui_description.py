@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 from threading import Event
 from typing import Callable
+from core.analysis_records import AnalysisFingerprints
 
 from core.jobs.commits import StaleJobResult
-from core.jobs.description import _task_data
+from core.jobs.description import _arguments, _task_data
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
 from core.operations.description import (
@@ -37,7 +38,7 @@ class GuiDescriptionCache(GuiResultJournal):
             source_ids,
             receipts,
             kind="gui_describe",
-            arguments=asdict(options),
+            arguments=_arguments(options),
             media_stamps=media_stamps,
         )
         self.options = options
@@ -90,6 +91,7 @@ class GuiDescriptionCache(GuiResultJournal):
                     raise StaleJobResult("Description source changed while queued")
                 data = {
                     **_task_data(task),
+                    "analysis_json": task.analysis_json,
                     "previous_description": previous[task.clip_id],
                     "source_media": self.fingerprints.get(task.source_path),
                     "runtime": description_runtime(task, self.options),
@@ -117,6 +119,9 @@ class GuiDescriptionCache(GuiResultJournal):
                         self.options,
                         cancel_event=cancel,
                         on_outcome=record,
+                        fingerprints=AnalysisFingerprints(
+                            cancel, media_fingerprints=self.fingerprints
+                        ),
                     )
                     for outcome in computed:
                         outcomes.setdefault(outcome.clip_id, outcome)

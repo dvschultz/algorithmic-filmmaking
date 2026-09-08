@@ -414,8 +414,9 @@ Description providers expose actual execution model/backend and input mode,
 including local model and cloud video-to-frame fallbacks. The shared operation
 and direct headless entry point use verified records and semantic reuse, including
 failure publication. GUI workers, clip/frame delivery, combined analysis, and save
-checkpoints now carry and verify those records. Durable headless job receipts and
-completion projections remain unfinished for descriptions.
+checkpoints now carry and verify those records. Durable headless jobs also verify
+reuse, recover without old receipt rows, and publish operation-owned failures.
+Completion projections remain unfinished for descriptions.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 
