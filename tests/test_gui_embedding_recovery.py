@@ -227,24 +227,19 @@ def test_unsaved_worker_is_session_only(setup):
     assert worker.operation.persistence == "session_only"
 
 
-def test_launcher_enables_saved_project_recovery(setup, monkeypatch):
-    from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
+def test_launcher_enables_saved_project_recovery(setup):
+    from core.settings import Settings
+    from ui.workers.clip_analysis_work import create_clip_analysis_worker
 
     project, _ = setup
-    window = QObject()
-    window.project = project
-    for name in (
-        "_reset_analysis_run_error",
-        "_on_embeddings_progress",
-        "_on_embeddings_error",
-        "_on_embedding_ready",
-        "_on_pipeline_embeddings_finished",
-    ):
-        setattr(window, name, Mock())
-    monkeypatch.setattr(EmbeddingAnalysisWorker, "start", Mock())
-    MainWindow._launch_embeddings_worker(window, project.clips)
-    assert window._embeddings_worker.cache.path == project.path
+    worker, application = create_clip_analysis_worker(
+        project,
+        Settings(),
+        "embeddings",
+        project.clips,
+    )
+    assert worker.cache.path == project.path.resolve()
+    assert application.project is project
 
 
 @pytest.mark.parametrize("column", ["spec_json", "payload_json"])

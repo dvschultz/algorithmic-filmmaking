@@ -140,24 +140,19 @@ def test_changed_saved_output_or_path_does_not_checkpoint(setup, change):
         store.close()
 
 
-def test_pipeline_launcher_enables_recovery(setup, monkeypatch):
-    from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
+def test_pipeline_launcher_enables_recovery(setup):
+    from core.settings import Settings
+    from ui.workers.clip_analysis_work import create_clip_analysis_worker
 
     project, _ = setup
-    window = QObject()
-    window.project = project
-    window.sources = project.sources
-    for name in (
-        "_reset_analysis_run_error",
-        "_on_face_detection_progress",
-        "_on_face_detection_error",
-        "_on_pipeline_face_detection_finished",
-    ):
-        setattr(window, name, Mock())
-    monkeypatch.setattr(FaceDetectionWorker, "start", Mock())
-    MainWindow._launch_face_detection_worker(window, project.clips)
-    assert window.face_detection_worker.cache.path == project.path
+    worker, application = create_clip_analysis_worker(
+        project,
+        Settings(),
+        "face_embeddings",
+        project.clips,
+    )
+    assert worker.cache.path == project.path.resolve()
+    assert application.project is project
 
 
 def test_model_session_is_reused_and_cache_hits_do_not_load(setup, monkeypatch):

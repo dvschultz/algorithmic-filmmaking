@@ -194,24 +194,25 @@ def test_missing_image_is_failure_but_valid_neighbor_succeeds(setup):
 
 def test_pipeline_launcher_uses_guarded_delivery(setup, monkeypatch):
     from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
-    from ui.workers.embedding_delivery import EmbeddingDelivery
+    from core.settings import Settings
+    from core.operations.embeddings import EmbeddingApplication
+    from ui.workers.clip_analysis import ClipAnalysisController
 
     project, _ = setup
     window = QObject()
     window.project = project
-    for name in (
-        "_reset_analysis_run_error",
-        "_on_embeddings_progress",
-        "_on_embeddings_error",
-        "_on_embedding_ready",
-        "_on_pipeline_embeddings_finished",
-    ):
-        setattr(window, name, Mock())
+    window.settings = Settings()
     monkeypatch.setattr(EmbeddingAnalysisWorker, "start", Mock())
-    MainWindow._launch_embeddings_worker(window, project.clips)
-    assert isinstance(window._embeddings_worker._delivery, EmbeddingDelivery)
-    window._reset_analysis_run_error.assert_called_once_with("embeddings")
+    controller = ClipAnalysisController(window, project.clips, ["embeddings"])
+    controller.start()
+    assert isinstance(controller.applications["embeddings"], EmbeddingApplication)
+    worker = controller.workers["embeddings"]
+    worker.analysis_completed.emit()
+    assert not controller.plan.results
+    worker.finished.emit()
+    assert set(controller.plan.results) == {"embeddings"}
+    controller.cancel()
+    assert controller.finished
 
 
 def test_pipeline_retains_embedding_errors_and_ready_does_not_mark_dirty(setup):

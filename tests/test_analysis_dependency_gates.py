@@ -7,38 +7,6 @@ import pytest
 from ui.main_window import MainWindow
 
 
-def test_pipeline_skips_blocked_operations_and_runs_remaining():
-    class Harness:
-        def __init__(self):
-            self._gui_state = SimpleNamespace(set_processing=lambda *_args: None)
-            self.analyze_tab = SimpleNamespace(set_analyzing=lambda *_args: None)
-            self.project = SimpleNamespace(
-                session=SimpleNamespace(session_id="session")
-            )
-            self.started = False
-
-        def _filter_available_analysis_operations(self, operations, **_kwargs):
-            return [op for op in operations if op != "shots"]
-
-        def _start_next_analysis_phase(self):
-            self.started = True
-
-        def _reset_analysis_run_error(self, _op_key):
-            pass
-
-    harness = Harness()
-
-    MainWindow._run_analysis_pipeline(
-        harness,
-        [SimpleNamespace(id="clip-1")],
-        ["colors", "shots"],
-    )
-
-    assert harness.started is True
-    assert harness._analysis_selected_ops == ["colors"]
-    assert harness._analysis_pending_phases == ["local"]
-
-
 def test_frame_analysis_skips_blocked_operations(monkeypatch):
     from unittest.mock import Mock
 
@@ -171,41 +139,6 @@ def test_start_agent_transcription_aborts_when_dependency_missing():
     started = MainWindow.start_agent_transcription(Harness(), ["clip-1"])
 
     assert started is False
-
-
-def test_launch_transcription_worker_skips_runtime_broken_backend(monkeypatch):
-    class Harness:
-        def __init__(self):
-            self.settings = SimpleNamespace()
-            self.status = []
-            self.finished = []
-
-            self.status_bar = SimpleNamespace(
-                showMessage=lambda message: self.status.append(message)
-            )
-
-        def _on_analysis_phase_worker_finished(self, op_key):
-            self.finished.append(op_key)
-
-    monkeypatch.setattr(
-        "ui.main_window.get_operation_feature_candidates",
-        lambda *_args, **_kwargs: ["transcribe"],
-    )
-    monkeypatch.setattr(
-        "core.feature_registry.check_feature_ready",
-        lambda _feature: (False, ["runtime:broken"]),
-    )
-
-    harness = Harness()
-
-    MainWindow._launch_transcription_worker(
-        harness, [SimpleNamespace(source_id="source-1")]
-    )
-
-    assert harness.finished == ["transcribe"]
-    assert harness.status == [
-        "Transcription unavailable - install dependencies in Settings > Dependencies"
-    ]
 
 
 def test_intention_shot_analysis_fails_when_dependency_missing():

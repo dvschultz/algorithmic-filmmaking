@@ -186,26 +186,27 @@ def test_waiting_job_cancels_without_unloading_active_model(setup, monkeypatch):
 
 def test_pipeline_launcher_applies_through_owner(setup, monkeypatch):
     from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
+    from core.settings import Settings
+    from ui.workers.clip_analysis import ClipAnalysisController
+    from core.operations.gaze import GazeOutcome
 
     project, _, _ = setup
     window = QObject()
     window.project = project
-    window.sources = project.sources
-    for name in (
-        "_reset_analysis_run_error",
-        "_on_gaze_progress",
-        "_on_gaze_ready",
-        "_on_gaze_error",
-        "_on_pipeline_gaze_finished",
-    ):
-        setattr(window, name, Mock())
+    window.settings = Settings()
     monkeypatch.setattr(GazeAnalysisWorker, "start", Mock())
-    MainWindow._launch_gaze_worker(window, project.clips)
-    window._gaze_worker.gaze_ready.emit(project.clips[0].id, 2.0, 1.0, "at_camera")
+    controller = ClipAnalysisController(window, project.clips, ["gaze"])
+    controller.start()
+    worker = controller.workers["gaze"]
+    worker.gaze_ready.emit(project.clips[0].id, 2.0, 1.0, "at_camera")
+    assert project.clips[0].gaze_category is None
+    worker.result = (
+        GazeOutcome(project.clips[0].id, "succeeded", 2.0, 1.0, "at_camera"),
+    )
+    worker.finished.emit()
     assert project.clips[0].gaze_category == "at_camera"
-    window._on_gaze_ready.assert_called_once()
-    window._on_gaze_error.assert_not_called()
+    controller.cancel()
+    assert controller.finished
 
 
 def test_spine_does_not_overwrite_edit_during_inference(setup):

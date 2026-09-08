@@ -121,18 +121,20 @@ def test_changed_output_or_path_is_not_checkpointed(setup, change):
 
 
 def test_pipeline_skips_saved_empty_observations(setup):
-    from ui.main_window import MainWindow
+    from PySide6.QtCore import QObject
+    from core.settings import Settings
+    from ui.workers.clip_analysis import ClipAnalysisController
 
     project, _ = setup
     for clip in project.clips:
         clip.extracted_texts = []
-    window = SimpleNamespace(
-        sources=project.sources,
-        _reset_analysis_run_error=Mock(),
-        _on_analysis_phase_worker_finished=Mock(),
-    )
-    MainWindow._launch_text_extraction_worker(window, project.clips)
-    window._on_analysis_phase_worker_finished.assert_called_once_with("extract_text")
+    window = QObject()
+    window.project = project
+    window.settings = Settings()
+    controller = ClipAnalysisController(window, project.clips, ["extract_text"])
+    controller.start()
+    assert controller.finished and not controller.workers
+    assert set(controller.plan.results["extract_text"].values()) == {"skipped"}
 
 
 def test_clip_frame_id_collision_keeps_recovery_and_checkpoints_separate(
@@ -226,27 +228,19 @@ def test_model_failure_stops_later_inference(setup):
     assert not project.metadata.job_results
 
 
-def test_pipeline_launcher_enables_recovery(setup, monkeypatch):
-    from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
+def test_pipeline_launcher_enables_recovery(setup):
+    from core.settings import Settings
+    from ui.workers.clip_analysis_work import create_clip_analysis_worker
 
     project, _ = setup
-    window = QObject()
-    window.project = project
-    window.sources = project.sources
-    window.settings = SimpleNamespace(
-        text_extraction_method="vlm", text_extraction_vlm_model="test"
+    worker, application = create_clip_analysis_worker(
+        project,
+        Settings(),
+        "extract_text",
+        project.clips,
     )
-    for name in (
-        "_reset_analysis_run_error",
-        "_on_text_extraction_progress",
-        "_on_text_extraction_error",
-        "_on_pipeline_extract_text_finished",
-    ):
-        setattr(window, name, Mock())
-    monkeypatch.setattr(TextExtractionWorker, "start", Mock())
-    MainWindow._launch_text_extraction_worker(window, project.clips)
-    assert window.text_extraction_worker.cache.path == project.path.resolve()
+    assert worker.cache.path == project.path.resolve()
+    assert application.project is project
 
 
 def test_failed_inference_is_not_cached_as_empty(setup):

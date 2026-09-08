@@ -233,8 +233,9 @@ def test_waiting_face_job_cancels_without_loading_or_unloading_active_model(
 
 def test_pipeline_completion_does_not_unload_another_active_job(setup, monkeypatch):
     from threading import Thread
-    from types import SimpleNamespace
-    from ui.main_window import MainWindow
+    from PySide6.QtCore import QObject
+    from core.settings import Settings
+    from ui.workers.clip_analysis import ClipAnalysisController
 
     project, provider = setup
     entered, release = Event(), Event()
@@ -250,13 +251,20 @@ def test_pipeline_completion_does_not_unload_another_active_job(setup, monkeypat
     provider.side_effect = compute
     snapshot = tasks(project)[:1]
     active = Thread(target=lambda: results.extend(run_faces(snapshot, FaceOptions())))
-    window = SimpleNamespace(_on_analysis_phase_worker_finished=Mock())
+    window = QObject()
+    window.project = project
+    window.settings = Settings()
+    monkeypatch.setattr(FaceDetectionWorker, "start", Mock())
+    controller = ClipAnalysisController(window, project.clips, ["face_embeddings"])
+    controller.start()
+    worker = controller.workers["face_embeddings"]
     active.start()
     try:
         assert entered.wait(5)
         # A prior worker's queued completion can arrive after this job starts.
-        MainWindow._on_pipeline_face_detection_finished(window)
-        window._on_analysis_phase_worker_finished.assert_called_once_with("face_embeddings")
+        worker.finished.emit()
+        assert "face_embeddings" in controller.plan.results
+        controller.cancel()
         unload.assert_not_called()
     finally:
         release.set()

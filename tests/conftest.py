@@ -1,6 +1,7 @@
 """Shared test fixtures and helpers for all tests."""
 
 import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,21 @@ unix_only = pytest.mark.skipif(sys.platform == "win32", reason="Unix only")
 from core.project import Project  # noqa: E402
 from core.transcription import TranscriptSegment  # noqa: E402
 from models.clip import Source, Clip  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def qt_application_lifetime() -> object | None:
+    """Keep one application alive when collected GUI tests already loaded Qt.
+
+    Per-module fixtures must not release QApplication while another test's
+    native timers or deferred deletions still belong to its event dispatcher.
+    Headless-only collections do not import Qt through this fixture.
+    """
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    if widgets is None:
+        return None
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return widgets.QApplication.instance() or widgets.QApplication([])
 
 
 @pytest.fixture

@@ -978,7 +978,7 @@ class Project:
         return self.session.execute(RemoveSources.capture(self, source_ids))
 
     # Fields that can be updated via update_source()
-    _UPDATABLE_SOURCE_FIELDS = {"color_profile", "fps", "analyzed", "name"}
+    _UPDATABLE_SOURCE_FIELDS = {"color_profile", "fps", "analyzed", "name", "has_analysis"}
 
     def update_source(self, source_id: str, **kwargs) -> Optional[Source]:
         """Update a source's fields.

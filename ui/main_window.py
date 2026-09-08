@@ -90,7 +90,7 @@ from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
 from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
 from ui.workers.export_delivery import ExportDelivery
 from ui.workers.analysis_pipeline_delivery import (
-    AnalysisPipelineRun, bind_pipeline_completion, pipeline_can_continue,
+    bind_pipeline_completion,
 )
 from ui.workers.gui_tool_reply import (
     AgentAnalysisCompletion, GuiToolReply, gui_reply_scope,
@@ -101,10 +101,8 @@ from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
 from ui.log_viewer import LogViewerWidget, get_in_app_log_bridge
 from core.analysis_dependencies import get_operation_feature_candidates
-from core.analysis_availability import clear_operation_results
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
-    PHASE_ORDER,
 )
 from ui.workers.base import CancellableWorker, summarize_messages
 from ui.workers.cinematography_worker import CinematographyWorker
@@ -572,16 +570,6 @@ class MainWindow(QMainWindow):
         self._detection_generation: int = 0
         self._thumbnail_generation: int = 0
 
-        # State for analysis pipeline (phase-based execution)
-        self._analysis_selected_ops: list[str] = []  # Operations to run
-        self._analysis_clips: list = []  # Clips being analyzed
-        self._analysis_current_phase: str = ""  # "local"|"sequential"|"cloud"|""
-        self._analysis_phase_remaining: int = 0  # Concurrent worker counter
-        self._analysis_completed_ops: list[str] = []  # Ops finished so far
-        self._analysis_pending_phases: list[str] = []  # Phases still to run
-        self._analysis_sequential_queue: list[str] = []  # Queue for sequential ops
-        self._transcription_source_queue: list = []  # Queue for multi-source transcription
-
         # Agent tool waiting state - tracks when agent is waiting for worker completion
         self._pending_agent_color_analysis = False
         self._pending_agent_shot_analysis = False
@@ -851,6 +839,9 @@ class MainWindow(QMainWindow):
             worker.cancel()
 
         for controller in tuple(getattr(self, "_active_frame_analyses", ())):
+            controller.cancel()
+
+        for controller in tuple(getattr(self, "_active_clip_analyses", ())):
             controller.cancel()
 
         # Stop chat worker if running
@@ -3308,451 +3299,138 @@ class MainWindow(QMainWindow):
                 )
 
     def _run_analysis_pipeline(
-        self,
-        clips: list,
-        operations: list[str],
-        *,
-        force_rerun: bool = False,
+        self, clips: list, operations: list[str], *, force_rerun: bool = False,
     ) -> bool:
-        """Central entry point for running analysis operations.
+        """Gate a request, then delegate its lifetime to the clip controller."""
+        from core.operations.analysis_inputs import clip_input
+        from ui.workers.clip_analysis import ClipAnalysisController
 
-        Organizes operations into phases (local → sequential → cloud) and
-        executes them with smart concurrency. Called from:
-        - Analyze tab "Analyze..." dialog result
-        - Analyze tab dropdown "Quick Run"
-        - Cut tab "Analyze Selected" dialog result
-        - Agent tool analyze_all_live
-
-        Args:
-            clips: List of Clip objects to analyze
-            operations: List of operation keys to run
-            force_rerun: Clear selected operation results before dispatch so
-                workers process clips even when prior results exist.
-        """
-        reply = getattr(self, "_dispatch_gui_reply", None)
-        session_id = self.project.session.session_id
-        previous_run = getattr(self, "_analysis_run", None)
+        clips = [clip for clip in clips if not getattr(clip, "disabled", False)]
         if not clips or not operations:
             return False
-
-        # Disabled clips are excluded from analysis the same way they're
-        # excluded from sequence/export. They keep any prior analysis fields
-        # so the Analyze tab can still surface them as disabled.
-        enabled_clips = [c for c in clips if not getattr(c, "disabled", False)]
-        skipped = len(clips) - len(enabled_clips)
-        if skipped:
-            logger.info("Skipping %d disabled clip(s) from analysis pipeline", skipped)
-        if not enabled_clips:
-            return False
-        clips = enabled_clips
-
-        # Custom Query needs query text — prompt if not already set (e.g., from agent tool)
-        if "custom_query" in operations and not self._custom_query_text:
-            query_text, ok = QInputDialog.getText(
+        project = self.project
+        session_id, path = project.session.session_id, project.path
+        reply = getattr(self, "_dispatch_gui_reply", None)
+        previous = getattr(self, "_clip_analysis_controller", None)
+        sources = tuple(project.sources_by_id.get(c.source_id) for c in clips)
+        inputs = tuple(clip_input(project, clip) for clip in clips)
+        query = self._custom_query_text
+        if "custom_query" in operations and not query:
+            query, ok = QInputDialog.getText(
                 self, "Custom Visual Query",
-                "What are you looking for? (e.g., 'blue flower', 'person wearing a hat')"
+                "What are you looking for? (e.g., 'blue flower', 'person wearing a hat')",
             )
-            if ok and query_text.strip():
-                self._custom_query_text = query_text.strip()
-            else:
-                # User cancelled — remove custom_query from operations
+            if not ok or not query.strip():
                 operations = [op for op in operations if op != "custom_query"]
-                if not operations:
-                    return False
-
-        # Validate operation keys
-        valid_ops = [op for op in operations if op in OPERATIONS_BY_KEY]
-        valid_ops = self._filter_available_analysis_operations(valid_ops)
-        if not valid_ops:
-            return False
-
-        # Dependency prompts can run a nested event loop and replace the request.
-        if self.project.session.session_id != session_id or (
-            reply is not None and not reply.is_current(self)
+                query = None
+        valid = self._filter_available_analysis_operations(
+            list(dict.fromkeys(op for op in operations if op in OPERATIONS_BY_KEY))
+        )
+        if (
+            not valid or self.project is not project
+            or project.session.session_id != session_id or project.path != path
+            or (reply is not None and not reply.is_current(self))
+            or getattr(self, "_clip_analysis_controller", None) is not previous
+            or any(project.clips_by_id.get(c.id) is not c for c in clips)
+            or any(project.sources_by_id.get(c.source_id) is not s for c, s in zip(clips, sources))
+            or tuple(clip_input(project, c) for c in clips) != inputs
         ):
             return False
-        if getattr(self, "_analysis_run", None) is not previous_run:
-            return False
-        valid_ops = list(dict.fromkeys(valid_ops))
-        self._analysis_run = AnalysisPipelineRun(session_id, reply)
-
-        if force_rerun:
-            cleared = clear_operation_results(clips, valid_ops)
-            if cleared:
-                logger.info(
-                    "Cleared %d existing analysis result field(s) before forced rerun",
-                    cleared,
-                )
-                self._mark_dirty()
-
-        for op_key in valid_ops:
-            self._reset_analysis_run_error(op_key)
-
-        logger.info(f"Starting analysis pipeline: {valid_ops} on {len(clips)} clips")
-        self._gui_state.set_processing("analysis", f"{', '.join(valid_ops)} on {len(clips)} clips")
-
-        # Store state
-        self._analysis_clips = clips
-        self._analysis_selected_ops = valid_ops
-        self._analysis_completed_ops = []
-        self._analysis_current_phase = ""
-        self._analysis_phase_remaining = 0
-        self._analysis_sequential_queue = []
-
-        # Build phase queue: only phases that have selected operations
-        self._analysis_pending_phases = [
-            phase for phase in PHASE_ORDER
-            if any(OPERATIONS_BY_KEY[op].phase == phase for op in valid_ops)
-        ]
-
-        # Update UI state
+        controller = ClipAnalysisController(
+            self, clips, valid, force_rerun=force_rerun, query=query,
+        )
+        if "custom_query" in valid:
+            self._custom_query_text = None
+        controller.progress.connect(self._on_clip_analysis_progress)
+        controller.status.connect(self._on_clip_analysis_status)
+        controller.completed.connect(self._on_clip_analysis_finished)
+        self._gui_state.set_processing("analysis", f"{', '.join(valid)} on {len(clips)} clips")
         self.analyze_tab.set_analyzing(True, "pipeline")
-
-        # Start first phase
-        self._start_next_analysis_phase()
-
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        if (
+            self.project is not project
+            or project.session.session_id != session_id or project.path != path
+            or (reply is not None and not reply.is_current(self))
+            or getattr(self, "_clip_analysis_controller", None) is not previous
+            or any(project.clips_by_id.get(c.id) is not c for c in clips)
+            or tuple(clip_input(project, c) for c in clips) != inputs
+        ):
+            controller.deleteLater()
+            return False
+        controller.start()
         return True
 
-    def _start_next_analysis_phase(self):
-        """Start the next phase in the analysis pipeline."""
-        if not pipeline_can_continue(self):
+    @Slot(object, int, str)
+    def _on_clip_analysis_progress(self, controller, value: int, operation: str) -> None:
+        if controller.is_current() and not controller.plan.cancelled:
+            self.progress_bar.setValue(value)
+            self.status_bar.showMessage(f"{OPERATIONS_BY_KEY[operation].label}: {value}%")
+
+    @Slot(object, object)
+    def _on_clip_analysis_finished(self, controller, result: dict) -> None:
+        if not controller.owns_view():
             return
-        if not self._analysis_pending_phases:
-            # All phases done
-            self._on_analysis_pipeline_complete()
+        self._gui_state.clear_processing("analysis")
+        if not controller.owns_view():
             return
-
-        phase = self._analysis_pending_phases.pop(0)
-        self._analysis_current_phase = phase
-
-        # Get operations for this phase
-        phase_ops = [
-            op for op in self._analysis_selected_ops
-            if OPERATIONS_BY_KEY[op].phase == phase
-        ]
-
-        if not phase_ops:
-            # No ops in this phase, skip
-            self._start_next_analysis_phase()
+        self.analyze_tab.set_analyzing(False)
+        if not controller.owns_view():
             return
-
-        clips = self._analysis_clips
-        logger.info(f"Starting analysis phase '{phase}': {phase_ops} on {len(clips)} clips")
-
-        if phase == "local":
-            # Local ops run concurrently
-            self._analysis_phase_remaining = len(phase_ops)
-            for op_key in phase_ops:
-                self._launch_analysis_worker(op_key, clips)
-        elif phase == "sequential":
-            # Sequential ops run one at a time (e.g., transcription is memory-heavy)
-            self._analysis_phase_remaining = len(phase_ops)
-            # Store ordered queue; pop first and launch it
-            self._analysis_sequential_queue = list(phase_ops[1:])
-            self._launch_analysis_worker(phase_ops[0], clips)
-        elif phase == "cloud":
-            # Cloud ops run concurrently (I/O-bound API calls)
-            self._analysis_phase_remaining = len(phase_ops)
-            for op_key in phase_ops:
-                self._launch_analysis_worker(op_key, clips)
-
-    def _launch_analysis_worker(self, op_key: str, clips: list):
-        """Launch a worker for a specific analysis operation.
-
-        Args:
-            op_key: Operation key (e.g., "colors", "shots")
-            clips: List of clips to process
-        """
-        if not pipeline_can_continue(self):
+        self.progress_bar.setVisible(False)
+        if not controller.owns_view():
             return
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-
-        op = OPERATIONS_BY_KEY[op_key]
-        self.status_bar.showMessage(f"{op.label}: processing {len(clips)} clips...")
-
-        if op_key == "colors":
-            self._launch_colors_worker(clips)
-        elif op_key == "shots":
-            self._launch_shots_worker(clips)
-        elif op_key == "classify":
-            self._launch_classification_worker(clips)
-        elif op_key == "detect_objects":
-            self._launch_object_detection_worker(clips)
-        elif op_key == "face_embeddings":
-            self._launch_face_detection_worker(clips)
-        elif op_key == "extract_text":
-            self._launch_text_extraction_worker(clips)
-        elif op_key == "transcribe":
-            self._launch_transcription_worker(clips)
-        elif op_key == "describe":
-            self._launch_description_worker(clips)
-        elif op_key == "cinematography":
-            self._launch_cinematography_worker(clips)
-        elif op_key == "custom_query":
-            self._launch_custom_query_worker(clips)
-        elif op_key == "gaze":
-            self._launch_gaze_worker(clips)
-        elif op_key == "embeddings":
-            self._launch_embeddings_worker(clips)
-        elif op_key == "boundary_embeddings":
-            self._launch_boundary_embeddings_worker(clips)
-        else:
-            logger.warning(f"Unknown analysis operation: {op_key}")
-            self._on_analysis_phase_worker_finished(op_key)
-
-    def _launch_colors_worker(self, clips: list):
-        """Launch color analysis worker."""
-        self._color_analysis_finished_handled = False
-        self._reset_analysis_run_error("colors")
-        logger.info(f"Creating ColorAnalysisWorker (pipeline) for {len(clips)} clips...")
-        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
-        self.color_worker.progress.connect(self._on_color_progress)
-        self.color_worker.result_ready.connect(self._on_color_result)
-        self.color_worker.job_started.connect(self._on_color_job_started)
-        self.color_worker.error.connect(self._on_color_error)
-        bind_pipeline_completion(
-            self, self.color_worker, "color_worker",
-            self.color_worker.analysis_completed, self._on_pipeline_colors_finished,
+        accepted = [controller.clips[cid] for cid in result["succeeded"]]
+        completed = list(result["operations"])
+        failed = len(result["failed"])
+        message = (
+            "Analysis cancelled" if result["cancelled"]
+            else f"Analysis finished: {len(accepted)} clips succeeded, {failed} incomplete"
         )
-        self.color_worker.start()
-
-    def _launch_shots_worker(self, clips: list):
-        """Launch shot type classification worker."""
-        self._shot_type_finished_handled = False
-        self._shot_type_run_error = None
-        logger.info(f"Creating ShotTypeWorker (pipeline) for {len(clips)} clips...")
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism, project=self.project)
-        self.shot_type_worker.progress.connect(self._on_shot_type_progress)
-        from ui.workers.shot_type_delivery import ShotTypeDelivery
-        ShotTypeDelivery(self, self.shot_type_worker, pipeline=True)
-        self.shot_type_worker.error.connect(self._on_shot_type_error)
-        bind_pipeline_completion(
-            self, self.shot_type_worker, "shot_type_worker",
-            self.shot_type_worker.analysis_completed, self._on_pipeline_shots_finished,
-        )
-        self.shot_type_worker.start()
-
-    def _launch_classification_worker(self, clips: list):
-        """Launch content classification worker."""
-        self._classification_finished_handled = False
-        self._reset_analysis_run_error("classify")
-        logger.info(f"Creating ClassificationWorker (pipeline) for {len(clips)} clips...")
-        self.classification_worker = ClassificationWorker(clips, parallelism=self.settings.local_model_parallelism, project=self.project)
-        self.classification_worker.progress.connect(self._on_classification_progress)
-        from ui.workers.classification_delivery import ClassificationDelivery
-        ClassificationDelivery(self, self.classification_worker, pipeline=True)
-        self.classification_worker.error.connect(self._on_classification_error)
-        bind_pipeline_completion(
-            self, self.classification_worker, "classification_worker",
-            self.classification_worker.classification_completed, self._on_pipeline_classify_finished,
-        )
-        self.classification_worker.start()
-
-    def _launch_object_detection_worker(self, clips: list):
-        """Launch object detection worker."""
-        self._object_detection_finished_handled = False
-        self._reset_analysis_run_error("detect_objects")
-        logger.info(f"Creating ObjectDetectionWorker (pipeline) for {len(clips)} clips...")
-        self.detection_worker_yolo = ObjectDetectionWorker(clips, parallelism=self.settings.local_model_parallelism, project=self.project)
-        self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
-        from ui.workers.object_detection_delivery import ObjectDetectionDelivery
-        ObjectDetectionDelivery(self, self.detection_worker_yolo, pipeline=True)
-        self.detection_worker_yolo.error.connect(self._on_object_detection_error)
-        bind_pipeline_completion(
-            self, self.detection_worker_yolo, "detection_worker_yolo",
-            self.detection_worker_yolo.detection_completed, self._on_pipeline_detect_objects_finished,
-        )
-        self.detection_worker_yolo.start()
-
-    def _launch_face_detection_worker(self, clips: list):
-        """Launch face detection worker."""
-        self._face_detection_finished_handled = False
-        self._reset_analysis_run_error("face_embeddings")
-        sources_by_id = {s.id: s for s in self.sources}
-        logger.info(f"Creating FaceDetectionWorker (pipeline) for {len(clips)} clips...")
-        self.face_detection_worker = FaceDetectionWorker(
-            clips, sources_by_id=sources_by_id, project=self.project,
-        )
-        self.face_detection_worker.progress.connect(self._on_face_detection_progress)
-        from ui.workers.face_delivery import FaceDelivery
-        FaceDelivery(self, self.face_detection_worker, pipeline=True)
-        self.face_detection_worker.error.connect(self._on_face_detection_error)
-        bind_pipeline_completion(
-            self, self.face_detection_worker, "face_detection_worker",
-            self.face_detection_worker.detection_completed, self._on_pipeline_face_detection_finished,
-        )
-        self.face_detection_worker.start()
-
-    def _launch_gaze_worker(self, clips: list):
-        """Launch gaze direction analysis worker."""
-        self._gaze_finished_handled = False
-        self._reset_analysis_run_error("gaze")
-        sources_by_id = {s.id: s for s in self.sources}
-        logger.info(f"Creating GazeAnalysisWorker (pipeline) for {len(clips)} clips...")
-        self._gaze_worker = GazeAnalysisWorker(
-            clips, sources_by_id=sources_by_id, project=self.project,
-        )
-        self._gaze_worker.progress.connect(self._on_gaze_progress)
-        from ui.workers.gaze_delivery import GazeDelivery
-        GazeDelivery(self, self._gaze_worker, pipeline=True)
-        bind_pipeline_completion(
-            self, self._gaze_worker, "_gaze_worker",
-            self._gaze_worker.detection_completed, self._on_pipeline_gaze_finished,
-        )
-        self._gaze_worker.error.connect(self._on_gaze_error)
-        self._gaze_worker.start()
-
-    def _launch_embeddings_worker(self, clips: list):
-        """Launch DINOv2 embedding extraction worker.
-
-        The pipeline has already filtered this operation via
-        _filter_available_analysis_operations (which calls check_feature_ready
-        for torch+transformers), so no additional dependency guard is needed
-        here — if the user declined install, this launcher is never reached.
-        """
-        self._embeddings_finished_handled = False
-        self._reset_analysis_run_error("embeddings")
-        logger.info(f"Creating EmbeddingAnalysisWorker (pipeline) for {len(clips)} clips...")
-        self._embeddings_worker = EmbeddingAnalysisWorker(clips, project=self.project)
-        self._embeddings_worker.progress.connect(self._on_embeddings_progress)
-        from ui.workers.embedding_delivery import EmbeddingDelivery
-        self._embeddings_worker._delivery = EmbeddingDelivery(
-            self, self._embeddings_worker, pipeline=True,
-        )
-        bind_pipeline_completion(
-            self, self._embeddings_worker, "_embeddings_worker",
-            self._embeddings_worker.analysis_completed, self._on_pipeline_embeddings_finished,
-        )
-        self._embeddings_worker.error.connect(self._on_embeddings_error)
-        self._embeddings_worker.start()
-
-    def _launch_boundary_embeddings_worker(self, clips: list):
-        from ui.workers.boundary_embedding_worker import BoundaryEmbeddingWorker
-        from ui.workers.embedding_delivery import BoundaryEmbeddingDelivery
-
-        self._reset_analysis_run_error("boundary_embeddings")
-        worker = BoundaryEmbeddingWorker(clips, project=self.project)
-        self._boundary_embeddings_worker = worker
-        worker.progress.connect(self._on_embeddings_progress)
-        worker._delivery = BoundaryEmbeddingDelivery(self, worker, pipeline=True)
-        bind_pipeline_completion(
-            self, worker, "_boundary_embeddings_worker", worker.analysis_completed,
-            lambda: self._on_analysis_phase_worker_finished("boundary_embeddings"),
-        )
-        worker.error.connect(self._on_boundary_embeddings_error)
-        worker.start()
-
-    def _launch_text_extraction_worker(self, clips: list):
-        """Launch text extraction worker."""
-        self._text_extraction_finished_handled = False
-        self._reset_analysis_run_error("extract_text")
-        sources_by_id = {s.id: s for s in self.sources}
-
-        # Filter to clips needing extraction
-        clips_to_process = [c for c in clips if c.extracted_texts is None]
-        if not clips_to_process:
-            logger.info("All clips already have extracted text, skipping")
-            self._on_analysis_phase_worker_finished("extract_text")
+        self.status_bar.showMessage(message)
+        for source_id in result["analyzed_sources"]:
+            if not controller.owns_view():
+                return
+            self.collect_tab.update_source_has_analysis(source_id, True)
+        if not controller.owns_view():
             return
+        self._update_chat_project_state()
+        if controller.reply is not None and controller.owns_view():
+            shot_types = {}
+            for clip in accepted:
+                if clip.shot_type:
+                    shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
+            self._active_custom_query_text = controller.query
+            try:
+                payload = self._build_agent_analysis_result(
+                    accepted, completed, message,
+                    {
+                        **result,
+                        "success": not failed and not result["cancelled"],
+                        "clip_count": len(controller.plan.clip_ids),
+                        "clip_ids": list(controller.plan.clip_ids),
+                        "shot_type_summary": shot_types,
+                        "transcribed_count": sum(bool(clip.transcript) for clip in accepted),
+                    },
+                )
+            finally:
+                self._active_custom_query_text = None
+            controller.reply.send(self, {"success": True, "result": payload})
+        elif failed and not result["cancelled"] and controller.is_current():
+            details = "\n".join(dict.fromkeys(result["errors"]))
+            if not details:
+                details = "\n".join(
+                    f"{OPERATIONS_BY_KEY[op].label}: {sum(status not in ('succeeded', 'skipped') for status in outcomes.values())} incomplete clips"
+                    for op, outcomes in result["operations"].items()
+                    if any(status not in ("succeeded", "skipped") for status in outcomes.values())
+                )
+            QMessageBox.warning(self, "Analysis Incomplete", details)
 
-        from ui.workers.text_extraction_worker import TextExtractionWorker
+    @Slot(object, str)
+    def _on_clip_analysis_status(self, controller, message: str) -> None:
+        if controller.is_current() and not controller.plan.cancelled:
+            self.status_bar.showMessage(message)
 
-        method = self.settings.text_extraction_method
-        vlm_only = (method == "vlm")
-        use_vlm = (method in ("vlm", "hybrid"))
-        vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
-
-        logger.info(f"Creating TextExtractionWorker (pipeline) for {len(clips_to_process)} clips")
-        self.text_extraction_worker = TextExtractionWorker(
-            clips=clips_to_process,
-            sources_by_id=sources_by_id,
-            project=self.project,
-            num_keyframes=3,
-            use_vlm_fallback=use_vlm,
-            vlm_model=vlm_model,
-            vlm_only=vlm_only,
-        )
-        self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
-        from ui.workers.ocr_delivery import OcrDelivery
-        OcrDelivery(self, self.text_extraction_worker, pipeline=True)
-        bind_pipeline_completion(
-            self, self.text_extraction_worker, "text_extraction_worker",
-            self.text_extraction_worker.extraction_completed, self._on_pipeline_extract_text_finished,
-        )
-        self.text_extraction_worker.error.connect(self._on_text_extraction_error)
-        self.text_extraction_worker.start()
-
-    def _launch_transcription_worker(self, clips: list):
-        """Launch transcription worker (handles multi-source sequentially)."""
-        self._transcription_finished_handled = False
-
-        # Pipeline entry points should prompt before launch, but keep a
-        # non-interactive guard here so internal calls fail safely.
-        from core.feature_registry import check_feature_ready
-
-        config_error = MainWindow._analysis_operation_configuration_error(self, "transcribe")
-        if config_error:
-            logger.warning("Transcription skipped: %s", config_error)
-            self.status_bar.showMessage(config_error)
-            self._on_analysis_phase_worker_finished("transcribe")
-            return
-
-        feature_candidates = get_operation_feature_candidates("transcribe", self.settings)
-        if feature_candidates and not any(check_feature_ready(name)[0] for name in feature_candidates):
-            logger.warning("Transcription skipped: dependencies unavailable")
-            self.status_bar.showMessage(
-                "Transcription unavailable - install dependencies in Settings > Dependencies"
-            )
-            self._on_analysis_phase_worker_finished("transcribe")
-            return
-
-        # Group clips by source_id for multi-source transcription
-        clips_by_source: dict = {}
-        for clip in clips:
-            if clip.source_id not in clips_by_source:
-                clips_by_source[clip.source_id] = []
-            clips_by_source[clip.source_id].append(clip)
-
-        logger.info(f"Transcription: {len(clips)} clips from {len(clips_by_source)} sources")
-
-        # Queue transcription for each source
-        self._transcription_source_queue = list(clips_by_source.items())
-        self._start_next_source_transcription_pipeline()
-
-    def _start_next_source_transcription_pipeline(self):
-        """Start transcription for the next source in the pipeline queue."""
-        if not pipeline_can_continue(self):
-            return
-        if not self._transcription_source_queue:
-            logger.info("All source transcriptions complete")
-            self._on_analysis_phase_worker_finished("transcribe")
-            return
-
-        source_id, clips = self._transcription_source_queue.pop(0)
-        source = self.sources_by_id.get(source_id)
-
-        if not source:
-            logger.warning(f"Source {source_id} not found, skipping {len(clips)} clips")
-            self._start_next_source_transcription_pipeline()
-            return
-
-        self._transcription_finished_handled = False
-
-        remaining = len(self._transcription_source_queue)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(
-            f"Transcribing {len(clips)} clips ({remaining + 1} sources remaining)..."
-        )
-
-        logger.info(f"Creating TranscriptionWorker for source {source_id} ({len(clips)} clips)")
-        self._start_transcription_worker(
-            clips,
-            source,
-            self._on_pipeline_source_transcription_finished,
-            pipeline=True,
-        )
 
     def _start_transcription_worker(
         self, clips: list, source: Source, completed_slot,
@@ -3788,68 +3466,6 @@ class MainWindow(QMainWindow):
             self.transcription_worker.transcription_completed.connect(completion.completed, Qt.UniqueConnection)
         self.transcription_worker.start()
 
-    @Slot()
-    def _on_pipeline_source_transcription_finished(self):
-        """Handle transcription completion for one source in pipeline flow."""
-        logger.info("=== PIPELINE: SOURCE TRANSCRIPTION FINISHED ===")
-        if self._transcription_finished_handled:
-            return
-        self._transcription_finished_handled = True
-        self._start_next_source_transcription_pipeline()
-
-    def _launch_description_worker(self, clips: list):
-        """Launch description worker."""
-        self._description_finished_handled = False
-        self._reset_description_run_errors()
-        tier = self.settings.description_model_tier
-        sources = self.project.sources_by_id
-
-        logger.info(f"Creating DescriptionWorker (pipeline) with tier={tier}...")
-        self.description_worker = DescriptionWorker(
-            clips, tier=tier, sources=sources,
-            parallelism=self.settings.description_parallelism, project=self.project,
-        )
-        self.description_worker.progress.connect(self._on_description_progress)
-        from ui.workers.description_delivery import DescriptionDelivery
-        DescriptionDelivery(self, self.description_worker, pipeline=True)
-        self.description_worker.error.connect(self._on_description_error)
-        bind_pipeline_completion(
-            self, self.description_worker, "description_worker",
-            self.description_worker.description_completed, self._on_pipeline_describe_finished,
-        )
-        self.description_worker.start()
-
-    def _launch_custom_query_worker(self, clips: list):
-        """Launch custom query worker."""
-        query = self._custom_query_text
-        if not query:
-            logger.warning("Custom query requested but no query text set")
-            self._on_analysis_phase_worker_finished("custom_query")
-            return
-
-        # Clear immediately to prevent stale reuse
-        self._custom_query_text = None
-        self._active_custom_query_text = query
-
-        self._custom_query_finished_handled = False
-        tier = self.settings.description_model_tier
-        sources = self.project.sources_by_id
-        parallelism = 3 if tier == "cloud" else 1
-
-        logger.info(f"Creating CustomQueryWorker for '{query}' on {len(clips)} clips, tier={tier}")
-        self.custom_query_worker = CustomQueryWorker(
-            clips, query=query, sources_by_id=sources,
-            tier=tier, parallelism=parallelism, project=self.project,
-        )
-        self.custom_query_worker.progress.connect(self._on_custom_query_progress)
-        from ui.workers.custom_query_delivery import CustomQueryDelivery
-        CustomQueryDelivery(self, self.custom_query_worker)
-        self.custom_query_worker.error.connect(self._on_custom_query_error)
-        bind_pipeline_completion(
-            self, self.custom_query_worker, "custom_query_worker",
-            self.custom_query_worker.analysis_completed, self._on_pipeline_custom_query_finished,
-        )
-        self.custom_query_worker.start()
 
     @Slot(int, int)
     def _on_custom_query_progress(self, current: int, total: int):
@@ -3880,63 +3496,6 @@ class MainWindow(QMainWindow):
         """Handle custom query error."""
         logger.error(f"Custom query error: {error_msg}")
 
-    def _launch_cinematography_worker(self, clips: list):
-        """Launch cinematography analysis worker."""
-        self._cinematography_finished_handled = False
-        self._reset_analysis_run_error("cinematography")
-        sources_by_id = {s.id: s for s in self.sources}
-        mode = self.settings.cinematography_input_mode
-        model = self.settings.cinematography_model
-        parallelism = self.settings.cinematography_batch_parallelism
-
-        logger.info(f"Creating CinematographyWorker (pipeline) for {len(clips)} clips")
-        self.cinematography_worker = CinematographyWorker(
-            clips=clips,
-            project=self.project,
-            sources_by_id=sources_by_id,
-            mode=mode,
-            model=model,
-            parallelism=parallelism,
-            skip_existing=True,
-        )
-        self.cinematography_worker.progress.connect(self._on_cinematography_progress)
-        from ui.workers.cinematography_delivery import CinematographyDelivery
-        CinematographyDelivery(self, self.cinematography_worker, pipeline=True)
-        bind_pipeline_completion(
-            self, self.cinematography_worker, "cinematography_worker",
-            self.cinematography_worker.analysis_completed, self._on_pipeline_cinematography_finished,
-        )
-        self.cinematography_worker.error.connect(self._on_cinematography_error)
-        self.cinematography_worker.start()
-
-    # Named slots for pipeline phase completion (Qt.UniqueConnection requires
-    # pointer-to-member, not lambdas — lambdas silently fail to connect).
-    @Slot()
-    def _on_pipeline_colors_finished(self):
-        self._on_analysis_phase_worker_finished("colors")
-
-    @Slot()
-    def _on_pipeline_shots_finished(self):
-        self._on_analysis_phase_worker_finished("shots")
-
-    @Slot()
-    def _on_pipeline_classify_finished(self):
-        self._on_analysis_phase_worker_finished("classify")
-
-    @Slot()
-    def _on_pipeline_detect_objects_finished(self):
-        self._on_analysis_phase_worker_finished("detect_objects")
-
-    @Slot()
-    def _on_pipeline_face_detection_finished(self):
-        self._on_analysis_phase_worker_finished("face_embeddings")
-
-    @Slot()
-    def _on_pipeline_gaze_finished(self):
-        if self._gaze_finished_handled:
-            return
-        self._gaze_finished_handled = True
-        self._on_analysis_phase_worker_finished("gaze")
 
     @Slot(str)
     def _on_gaze_error(self, msg):
@@ -3944,21 +3503,6 @@ class MainWindow(QMainWindow):
         self._record_analysis_run_error("_gaze_run_error", "Gaze analysis", msg)
         self.statusBar().showMessage(f"Gaze analysis failed: {msg}", 5000)
 
-    @Slot()
-    def _on_pipeline_extract_text_finished(self):
-        self._on_analysis_phase_worker_finished("extract_text")
-
-    @Slot()
-    def _on_pipeline_describe_finished(self):
-        self._on_analysis_phase_worker_finished("describe")
-
-    @Slot()
-    def _on_pipeline_cinematography_finished(self):
-        self._on_analysis_phase_worker_finished("cinematography")
-
-    @Slot()
-    def _on_pipeline_custom_query_finished(self):
-        self._on_analysis_phase_worker_finished("custom_query")
 
     def _build_custom_query_agent_summary(
         self,
@@ -4333,119 +3877,7 @@ class MainWindow(QMainWindow):
                 result["custom_visual_query"] = analysis_results["custom_query"]
         return result
 
-    def _on_analysis_phase_worker_finished(self, op_key: str):
-        """Handle completion of one worker in the analysis pipeline.
 
-        Decrements phase counter and advances to next phase when all workers
-        in the current phase are done. For sequential phases, launches the
-        next queued operation before checking phase completion.
-        """
-        if not pipeline_can_continue(self) or op_key in self._analysis_completed_ops:
-            return
-        self._analysis_completed_ops.append(op_key)
-        self._analysis_phase_remaining -= 1
-        logger.info(
-            f"=== PIPELINE: {op_key} finished "
-            f"({self._analysis_phase_remaining} remaining in phase '{self._analysis_current_phase}') ==="
-        )
-
-        # For sequential phase, launch the next queued op if any remain
-        if (
-            self._analysis_current_phase == "sequential"
-            and self._analysis_sequential_queue
-        ):
-            next_op = self._analysis_sequential_queue.pop(0)
-            logger.info(f"PIPELINE: launching next sequential op '{next_op}'")
-            self._launch_analysis_worker(next_op, self._analysis_clips)
-            return
-
-        if self._analysis_phase_remaining <= 0:
-            self._start_next_analysis_phase()
-
-    def _on_analysis_pipeline_complete(self):
-        """Handle completion of the entire analysis pipeline."""
-        if not pipeline_can_continue(self):
-            return
-        clips = self._analysis_clips
-        completed = self._analysis_completed_ops
-        clip_count = len(clips)
-
-        logger.info(f"Analysis pipeline complete: {completed} on {clip_count} clips")
-        self._gui_state.clear_processing("analysis")
-
-        self.analyze_tab.set_analyzing(False)
-        self.progress_bar.setVisible(False)
-        error_labels = self._get_completed_analysis_error_labels(completed)
-        if error_labels:
-            self.status_bar.showMessage(
-                f"Analysis finished with errors ({', '.join(error_labels)}) - {clip_count} clips ({', '.join(completed)})"
-            )
-        else:
-            self.status_bar.showMessage(
-                f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
-            )
-
-        # Mark affected sources as having analysis data
-        analyzed_source_ids = set()
-        for clip in clips:
-            if clip.source_id:
-                analyzed_source_ids.add(clip.source_id)
-        for source_id in analyzed_source_ids:
-            source = self.project.sources_by_id.get(source_id)
-            if source:
-                source.has_analysis = True
-            self.collect_tab.update_source_has_analysis(source_id, True)
-
-        # Analysis can update data-backed virtual browsers for clips whose
-        # card widgets are not currently realized. Notify the project once so
-        # the standard `clips_updated` observer path refreshes both browsers
-        # (and any other listeners) — this also marks the project dirty.
-        # Color batches already notify through their application adapter.
-        # Other operations still need this completion notification until migrated.
-        if clips and set(completed) - {"colors"} and hasattr(self, "project") and hasattr(self.project, "update_clips"):
-            self.project.update_clips(clips)
-
-        # Save project
-        if self.project.path:
-            self.project.save()
-
-        # Update chat panel
-        self._update_chat_project_state()
-
-        # If agent was waiting for analyze_all, send result back
-        run = getattr(self, "_analysis_run", None)
-        if run is not None and run.reply is not None:
-
-            shot_types = {}
-            transcribed_count = 0
-            for clip in clips:
-                if clip.shot_type:
-                    shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
-                if clip.transcript:
-                    transcribed_count += 1
-
-            agent_result = self._build_agent_analysis_result(
-                clips,
-                completed,
-                f"Analyzed {clip_count} clips ({', '.join(completed)})",
-                {
-                    "shot_type_summary": shot_types,
-                    "transcribed_count": transcribed_count,
-                },
-            )
-
-            run.reply.send(self, {"success": True, "result": agent_result})
-            logger.info(f"Sent analysis result to agent: {clip_count} clips")
-
-        if "custom_query" in completed:
-            self._active_custom_query_text = None
-
-        if run is not None:
-            run.finished = True
-        self._analysis_clips = []
-        self._analysis_selected_ops = []
-        if error_labels:
-            self._show_completed_analysis_error_dialog(completed)
 
     # ------------------------------------------------------------------
     # Individual analysis handlers (kept for manual standalone + backward compat)
@@ -8048,13 +7480,6 @@ class MainWindow(QMainWindow):
         if clip:
             logger.debug(f"Clip {clip_id}: embedding populated")
 
-    @Slot()
-    def _on_pipeline_embeddings_finished(self):
-        """Advance the pipeline once embeddings analysis completes."""
-        if self._embeddings_finished_handled:
-            return
-        self._embeddings_finished_handled = True
-        self._on_analysis_phase_worker_finished("embeddings")
 
     @Slot(str)
     def _on_embeddings_error(self, msg: str):
@@ -10009,6 +9434,9 @@ class MainWindow(QMainWindow):
 
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
         frame_analyses = tuple(getattr(self, "_active_frame_analyses", ()))
+        clip_analyses = tuple(getattr(self, "_active_clip_analyses", ()))
+        for controller in clip_analyses:
+            controller.cancel()
         intention_detections = tuple(getattr(self, "_active_intention_detections", ()))
         intention_downloads = tuple(getattr(self, "_active_intention_downloads", ()))
         for delivery in tuple(getattr(self, "_active_intention_thumbnails", ())):
@@ -10024,6 +9452,7 @@ class MainWindow(QMainWindow):
         for controller in frame_analyses:
             controller.cancel()
         analysis_workers = tuple(controller.worker for controller in frame_analyses if controller.worker is not None)
+        analysis_workers += tuple(worker for controller in clip_analyses for worker in controller.workers.values())
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
         active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)

@@ -173,24 +173,23 @@ def test_cancelled_cached_results_are_not_delivered(setup):
 
 def test_gui_launcher_tracks_boundary_completion_separately(setup, monkeypatch):
     from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
+    from core.settings import Settings
+    from ui.workers.clip_analysis import ClipAnalysisController
 
     project, _ = setup
     window = QObject()
     window.project = project
-    for name in (
-        "_reset_analysis_run_error",
-        "_on_embeddings_progress",
-        "_on_boundary_embeddings_error",
-        "_on_analysis_phase_worker_finished",
-    ):
-        setattr(window, name, Mock())
+    window.settings = Settings()
     monkeypatch.setattr(BoundaryEmbeddingWorker, "start", Mock())
-    MainWindow._launch_boundary_embeddings_worker(window, project.clips)
-    worker = window._boundary_embeddings_worker
+    controller = ClipAnalysisController(window, project.clips, ["boundary_embeddings"])
+    controller.start()
+    worker = controller.workers["boundary_embeddings"]
     assert worker.cache.path == project.path.resolve()
     worker.analysis_completed.emit()
     worker.analysis_completed.emit()
-    window._on_analysis_phase_worker_finished.assert_called_once_with(
-        "boundary_embeddings"
-    )
+    assert not controller.plan.results
+    worker.finished.emit()
+    worker.finished.emit()
+    assert set(controller.plan.results) == {"boundary_embeddings"}
+    controller.cancel()
+    assert controller.finished

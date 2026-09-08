@@ -50,6 +50,6 @@ Run:
 
 ```bash
 python -m pytest tests/test_color_profile.py::TestSceneDetectorGrayscaleIntegration::test_progress_frame_callback_accepts_frame_timecode tests/test_color_profile.py::TestSceneDetectorGrayscaleIntegration::test_scene_detect_fps_normalized_to_float tests/test_thumbnail_generation.py tests/test_cut_tab_detection_visibility.py tests/test_clip_browser_selection.py::test_virtual_clip_browser_realizes_only_visible_window -v
-python -m pytest tests/test_analysis_pipeline.py::test_pipeline_complete_refreshes_cut_browser_after_analysis tests/test_clip_browser_selection.py::test_virtual_clip_browser_update_preserves_multi_source_entries -v
+python -m pytest tests/test_clip_analysis_controller.py tests/test_clip_browser_selection.py::test_virtual_clip_browser_update_preserves_multi_source_entries -v
 ruff check core/thumbnail.py core/scene_detect.py ui/main_window.py ui/tabs/cut_tab.py tests/test_thumbnail_generation.py tests/test_cut_tab_detection_visibility.py tests/test_color_profile.py
 ```

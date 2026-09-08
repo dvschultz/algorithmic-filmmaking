@@ -1168,6 +1168,25 @@ failed-checkpoint retries report reconciled results in the existing counts and
 distribution. External project edits fail the revision guard. Dedicated and
 generic asynchronous jobs keep their existing partial-success policy.
 
-Combined frame-analysis orchestration (including its existing automatic save)
-and the ordered intention workflow remain outstanding; this cutover does not
-complete U7.
+### Combined desktop analysis orchestration
+
+The combined clip pipeline uses a Qt-free phase plan and a run-owned controller.
+All 13 operation factories reuse existing shared workers and publication adapters.
+Local and cloud phases preserve their parallel dispatch; sequential operations
+and transcription source batches advance only after native thread exit.
+
+The controller captures project, session, save location, reply, original targets,
+media identities, and provider settings. Cancellation retains workers until they
+exit, rejects late publication, and prevents subsequent phases. Reset and close
+cancel owned work without force-stopping it. Controller-owned timers prevent
+queued phase callbacks from outliving their window.
+
+Each operation reports per-clip success, skip, failure, or unprocessed status.
+Successful partial results remain in the project; forced reruns preserve prior
+metadata until a validated replacement arrives. Shared publication notifies clip
+browsers, and analysis does not implicitly save the project. Existing agent
+completion summary fields remain available alongside the per-operation outcomes.
+
+Frame-analysis and intention-workflow controllers have also been migrated. U7
+still requires an audit and migration of remaining standalone entry points and
+legacy completion adapters; these changes do not complete the overall plan.

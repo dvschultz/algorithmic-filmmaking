@@ -7,7 +7,7 @@ thread-local.
 """
 
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Optional
@@ -28,6 +28,7 @@ from ui.workers.job_adapter import (
 from ui.workers.base import CancellableWorker
 from core.operations.custom_query import (
     CustomQueryTask,
+    CustomQueryOptions,
     CustomQueryOutcome,
     compute_custom_query,
     resolve_options,
@@ -87,14 +88,15 @@ class CustomQueryWorker(CancellableWorker):
         parent=None,
         *,
         project: Optional["Project"] = None,
+        options: Optional[CustomQueryOptions] = None,
     ) -> None:
         super().__init__(parent)
         query = query.strip()
         self._query = query
-        self._tier = self._resolve_tier(tier)
-        requested_parallelism = min(max(1, parallelism), 5)
+        self._tier = options.tier if options is not None else self._resolve_tier(tier)
+        requested_parallelism = min(max(1, options.parallelism if options is not None else parallelism), 5)
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
-        self.options = resolve_options(self._tier, self._parallelism)
+        self.options = replace(options, parallelism=self._parallelism) if options is not None else resolve_options(self._tier, self._parallelism)
         self.result: tuple[CustomQueryOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
