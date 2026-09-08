@@ -448,7 +448,10 @@ The audio list and agent no longer treat legacy transcript presence as completio
 verified silence remains complete. The GUI keeps verification available and
 refreshes audio rows after settings changes. These checks run no probes or
 inference. The completion regression run passed 277 tests, with 12 focused
-follow-ups and clean scoped typing. Alignment and the broader U10 audit remain.
+follow-ups and clean scoped typing. Alignment now reports loaded CTC model/revision
+and whole-clip/segment execution separately from approximate uniform fallback.
+Its provider regression run passed 257 tests. Alignment records, recovery, and
+completion checks remain to migrate, along with the broader U10 audit.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

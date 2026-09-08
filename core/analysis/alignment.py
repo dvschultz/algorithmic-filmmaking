@@ -34,7 +34,7 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Callable
 
 from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 
@@ -45,6 +45,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CTC_TARGET_TOO_LONG = "targets length is too long for ctc"
+ALIGNMENT_MODEL = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+ExecutionCallback = Callable[[dict], None]
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +186,7 @@ def align_words(
     transcript_segments: "list[TranscriptSegment]",
     *,
     extract_audio: bool = True,
+    on_execution: ExecutionCallback | None = None,
 ) -> "list[WordTimestamp]":
     """Produce word-level timestamps for a clip's audio.
 
@@ -198,6 +201,10 @@ def align_words(
         transcript_segments: The transcript for the clip. Language is read off
             ``transcript_segments[0].language``; passing legacy segments with
             ``language is None`` raises ``LanguageUnknownError``.
+        on_execution: Optional observer of loaded CTC model execution, including
+            its available revision and whole-clip/segment scope. Approximate
+            fallback emits a separate uniform-timing event with no model.
+            Empty input emits an empty event without loading the engine.
 
     Returns:
         A list of ``WordTimestamp`` objects in chronological order. The list is
@@ -215,6 +222,8 @@ def align_words(
     """
     # Fast paths first: avoid loading the heavy model when there's nothing to do.
     if not transcript_segments:
+        if on_execution is not None:
+            on_execution({"backend": "empty", "scope": "whole_clip", "model": None, "revision": None})
         return []
 
     # Use the local import so test code can monkeypatch the model entry points
@@ -235,6 +244,8 @@ def align_words(
         seg for seg in transcript_segments if (seg.text or "").strip()
     ]
     if not non_empty_segments:
+        if on_execution is not None:
+            on_execution({"backend": "empty", "scope": "whole_clip", "model": None, "revision": None})
         return []
 
     audio_path_obj = Path(audio_path)
@@ -251,10 +262,12 @@ def align_words(
     wav_path = extract_audio_to_wav(audio_path_obj) if extract_audio else audio_path_obj
     try:
         try:
-            raw_word_timings = _run_alignment_engine(
+            raw_word_timings = _execute_alignment(
                 wav_path=wav_path,
                 text=full_text,
                 language=language,
+                scope="whole_clip",
+                on_execution=on_execution,
             )
         except Exception as exc:
             if not _is_ctc_target_too_long_error(exc):
@@ -269,6 +282,7 @@ def align_words(
                 non_empty_segments,
                 language,
                 WordTimestamp,
+                on_execution=on_execution,
             )
     finally:
         # Only clean up WAVs created by this function. Callers that pass
@@ -302,6 +316,8 @@ def _align_segments_individually(
     segments: "list[TranscriptSegment]",
     language: str,
     word_timestamp_cls,
+    *,
+    on_execution: ExecutionCallback | None = None,
 ) -> "list[WordTimestamp]":
     """Fallback alignment path for dense clips whose full text is too long.
 
@@ -330,13 +346,22 @@ def _align_segments_individually(
         )
         try:
             try:
-                raw_segment_words = _run_alignment_engine(
+                raw_segment_words = _execute_alignment(
                     wav_path=segment_wav,
                     text=text,
                     language=language,
+                    scope="segment",
+                    source_range=(start_time, end_time),
+                    on_execution=on_execution,
                 )
             except Exception as exc:
                 if _is_ctc_target_too_long_error(exc):
+                    if on_execution is not None:
+                        on_execution({
+                            "backend": "uniform", "scope": "segment", "model": None,
+                            "revision": None, "source_range": [start_time, end_time],
+                            "policy": "even-word-spacing/v1", "language": language,
+                        })
                     logger.info(
                         "Using approximate word timing for transcript segment %.3f-%.3f: "
                         "target text is too long for CTC alignment",
@@ -619,10 +644,31 @@ def extract_audio_to_wav(
     return tmp_path
 
 
+def _execute_alignment(
+    wav_path: Path,
+    text: str,
+    language: str,
+    *,
+    scope: str,
+    source_range: tuple[float, float] | None = None,
+    on_execution: ExecutionCallback | None = None,
+) -> list[dict]:
+    """Attach the actual engine execution to its whole-clip or segment attempt."""
+    if on_execution is None:
+        return _run_alignment_engine(wav_path=wav_path, text=text, language=language)
+
+    def report(execution: dict) -> None:
+        on_execution({**execution, "scope": scope, "source_range": list(source_range) if source_range else None})
+
+    return _run_alignment_engine(wav_path=wav_path, text=text, language=language, on_execution=report)
+
+
 def _run_alignment_engine(
     wav_path: Path,
     text: str,
     language: str,
+    *,
+    on_execution: ExecutionCallback | None = None,
 ) -> list[dict]:
     """Run ``ctc-forced-aligner`` against the extracted audio + text.
 
@@ -667,7 +713,18 @@ def _run_alignment_engine(
     device = "cpu"
     dtype = torch.float32
 
-    model, alignment_tokenizer = load_alignment_model(device=device, dtype=dtype)
+    model, alignment_tokenizer = load_alignment_model(
+        device=device, dtype=dtype, model_path=ALIGNMENT_MODEL
+    )
+    if on_execution is not None:
+        config = getattr(model, "config", None)
+        revision = getattr(config, "_commit_hash", None)
+        on_execution({
+            "backend": "ctc", "model": ALIGNMENT_MODEL,
+            "revision": revision if isinstance(revision, str) else None,
+            "device": device, "dtype": "float32", "language": language,
+            "romanize": True,
+        })
 
     audio_waveform = load_audio(str(wav_path), dtype=dtype, device=device)
 

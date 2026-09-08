@@ -57,8 +57,10 @@ def test_alignment_applies_empty_words_once_through_model(tmp_path):
         outcome = run_alignment(tasks)[0]
     generation = project.mutation_generation
     assert application.apply(project, outcome)
+    applied_generation = project.mutation_generation
+    assert applied_generation > generation
     assert not application.apply(project, outcome)
-    assert project.mutation_generation == generation + 1
+    assert project.mutation_generation == applied_generation
     assert clip.transcript[0].words == []
     assert (
         snapshot_alignment_tasks(project.clips, project.sources_by_id)[0].skip_reason

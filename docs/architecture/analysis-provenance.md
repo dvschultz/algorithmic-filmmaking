@@ -481,6 +481,21 @@ predicate, keep verification clickable, and refresh after settings changes. The
 completion regression run passed 277 tests, with 12 focused follow-ups and clean
 scoped typing. Alignment and the broader U10 audit remain unfinished.
 
+## Alignment execution foundation
+
+The alignment provider now offers execution callbacks for loaded CTC model
+execution (including the available model revision), whole-clip versus segment
+attempts, and uniform approximate fallback. Approximate timings identify no model;
+empty input reports no engine execution. The provider explicitly selects the
+installed library's existing model default instead of inheriting a mutable
+default. Callers without callbacks retain their existing result API.
+
+The regression run passed 257 tests covering alignment, worker delivery/recovery,
+spine imports, and MCP. Changed-file Ruff passed. Scoped typing retains one
+pre-existing external-provider return typing error, confirmed against unchanged
+HEAD. Alignment operation records, GUI/durable recovery, and completion checks
+still need migration; execution reporting alone does not establish verified reuse.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
