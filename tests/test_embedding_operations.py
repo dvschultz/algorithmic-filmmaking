@@ -27,6 +27,34 @@ def test_worker_does_not_mutate_project_models(setup):
     assert all(c.embedding is None for c in project.clips)
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("provider failed"), [[0.0] * 768] * 2])
+def test_failed_rerun_preserves_vector_and_invalidates_completion(setup, failure):
+    from core.spine.analyze import embeddings
+
+    project, compute = setup
+    embeddings(project)
+    compute.side_effect = [failure]
+    result = embeddings(project, skip_existing=False)["result"]
+    assert len(result["failed"]) == 2
+    assert all(c.analysis_records["embeddings"].state == "failed" for c in project.clips)
+    assert all(c.embedding == [0.1] * 768 for c in project.clips)
+
+
+def test_late_embedding_failure_cannot_replace_newer_success(setup):
+    from core.operations.embeddings import EmbeddingApplication, EmbeddingOptions, embedding_task, run_embeddings
+    from core.spine.analyze import embeddings
+
+    project, compute = setup
+    tasks = tuple(embedding_task(c, project.sources_by_id[c.source_id], skip_existing=False) for c in project.clips)
+    application = EmbeddingApplication(project, tasks)
+    compute.side_effect = RuntimeError("provider failed")
+    failed = run_embeddings(tasks, EmbeddingOptions())
+    compute.side_effect = lambda paths: [[0.1] * 768 for _ in paths]
+    embeddings(project)
+    assert all(not application.apply(project, outcome) for outcome in failed)
+    assert all(c.analysis_records["embeddings"].state == "succeeded" for c in project.clips)
+
+
 def test_cancel_during_inference_rejects_late_results(setup):
     project, compute = setup
     worker = EmbeddingAnalysisWorker(project.clips)

@@ -32,6 +32,36 @@ def worker_for(project, **kwargs):
     return EmbeddingAnalysisWorker(project.clips, project=project, **kwargs)
 
 
+def test_saved_gui_failure_is_delivered_without_success_receipt(setup):
+    from dataclasses import asdict
+
+    project, compute = setup
+    run(project, apply=True)
+    assert project.save()
+    receipts = dict(project.metadata.job_results)
+    compute.side_effect = RuntimeError("provider failed")
+    worker = worker_for(project, skip_existing=False)
+    application = EmbeddingApplication(project, worker.tasks)
+    delivered = []
+    worker.outcome_ready.connect(delivered.append)
+    ready = Mock()
+    worker.embedding_ready.connect(ready)
+    worker.run()
+    assert len(delivered) == len(project.clips)
+    for outcome in delivered:
+        assert outcome.status == "failed"
+        assert worker.cache.transient_outcomes[outcome.clip_id] == asdict(outcome)
+        assert outcome.clip_id not in worker.cache.results
+        assert application.apply(project, outcome)
+    ready.assert_not_called()
+    assert project.save()
+    loaded = Project.load(project.path)
+    assert all(c.analysis_records["embeddings"].state == "failed" for c in loaded.clips)
+    assert all(c.embedding == [0.123456789] * 768 for c in loaded.clips)
+    assert loaded.metadata.job_results == receipts
+    loaded.close_writer()
+
+
 def run(project, *, apply=False, prepare=lambda: True, cancel=None):
     worker = worker_for(project)
     application = EmbeddingApplication(project, worker.tasks)

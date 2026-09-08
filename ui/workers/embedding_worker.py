@@ -145,6 +145,8 @@ class EmbeddingAnalysisWorker(CancellableWorker):
                 self.outcome_ready.emit(value)
                 self.embedding_ready.emit(value.clip_id)
             elif value.status == "failed":
+                if value.can_apply:
+                    self.outcome_ready.emit(value)
                 errors.append(
                     (value.clip_id, value.message or value.code or "Analysis failed")
                 )

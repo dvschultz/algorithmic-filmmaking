@@ -95,7 +95,7 @@ class EmbeddingOutcome:
 
     @property
     def can_apply(self) -> bool:
-        return self.status == "succeeded" or (self.status == "skipped" and self.record_json is not None)
+        return self.status == "succeeded" or (self.status in ("skipped", "failed") and self.record_json is not None)
 
     @classmethod
     def from_dict(cls, data: dict) -> "EmbeddingOutcome":
@@ -182,8 +182,22 @@ def run_embeddings(
     fingerprints = fingerprints if fingerprints is not None else AnalysisFingerprints(cancel)
     runtime = runtime if runtime is not None else embedding_runtime()
     identities: dict[str, AnalysisIdentity] = {}
+    tasks_by_id = {task.clip_id: task for task in tasks}
 
     def publish(outcome: EmbeddingOutcome) -> None:
+        task = tasks_by_id[outcome.clip_id]
+        identity = identities.get(outcome.clip_id)
+        if (
+            outcome.status == "failed" and not cancel.is_set()
+            and task.thumbnail_path is not None and task.thumbnail_path.is_file()
+            and identity is not None and task.inputs is not None
+            and task.inputs.unchanged()
+        ):
+            record = replace(
+                AnalysisRecord.failure(identity, outcome.message or outcome.code or "Embedding failed"),
+                input_json=json.dumps(task.inputs.to_dict(), sort_keys=True, separators=(",", ":")),
+            )
+            outcome = replace(outcome, record_json=json.dumps(record.to_dict(), sort_keys=True))
         outcomes[outcome.clip_id] = outcome
         if not cancel.is_set():
             if on_outcome:
@@ -345,7 +359,7 @@ class EmbeddingApplication:
         if (
             project is not self.project
             or project.session.session_id != self.session_id
-            or (outcome.status != "succeeded" and not (outcome.status == "skipped" and outcome.record_json is not None))
+            or not outcome.can_apply
         ):
             return False
 
@@ -364,6 +378,16 @@ class EmbeddingApplication:
                 or current[2] != expected[2]
             ):
                 return False
+            if outcome.status == "failed":
+                record = AnalysisRecord.from_dict(json.loads(outcome.record_json or "null"))
+                if (
+                    record.identity is None or record.identity.operation != "embeddings"
+                    or record.state != "failed" or task is None or task.inputs is None
+                    or json.loads(record.input_json or "null") != task.inputs.to_dict()
+                ):
+                    raise ValueError("Embedding failure does not match its input snapshot")
+                project.record_analysis("clip", outcome.clip_id, "embeddings", record)
+                return True
             checked = EmbeddingOutcome.from_vector(outcome.clip_id, outcome.vector)
             if outcome.model != checked.model:
                 raise ValueError("Embedding model identity does not match its vector")

@@ -161,6 +161,8 @@ class GuiEmbeddingCache(GuiResultJournal):
                             for outcome in computed:
                                 if outcome.status == "succeeded":
                                     self.record(requests[outcome.clip_id], outcome)
+                                elif outcome.can_apply:
+                                    self.reused_outcomes[outcome.clip_id] = asdict(outcome)
                             for outcome in computed:
                                 publish(outcome)
                             if session.failed:

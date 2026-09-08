@@ -398,8 +398,12 @@ Color failed-attempt publication now preserves the prior visible palette while
 replacing its completion record with a verified-input failure. Shared owner
 application, queued GUI delivery, and durable job saves are covered, including
 late-result rejection and no new success receipt for a failed attempt. The 91
-focused color/provenance/recovery tests pass; thumbnail embedding failures are
-the next outstanding publication audit.
+focused color/provenance/recovery tests pass. Thumbnail embedding provider errors
+and invalid vectors now follow the same owned-failure policy across shared,
+spine, GUI, and durable delivery. The prior vector is preserved and no success
+receipt is created. Mixed batches journal successful vectors before failure
+publication. The 115 focused embedding/recovery/import tests pass. Explicit
+legacy-reuse flows and the final cross-consumer/recovery audit remain open.
 
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse

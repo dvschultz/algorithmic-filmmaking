@@ -25,6 +25,7 @@ from core.operations.embeddings import (
 )
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
+from models.analysis_record import AnalysisRecord
 
 
 def _runtime() -> dict:
@@ -267,12 +268,28 @@ def run_embedding_job(
                     runtime=runtime,
                 )
                 # Record the whole computed batch before project publication can fail.
+                failure_updates = []
                 for outcome in outcomes:
                     cid = outcome.clip_id
                     basis, specs, _ = plans[cid]
                     if inputs(project, cid) != basis:
                         raise StaleJobResult("Embedding inputs changed during computation")
                     if outcome.status != "succeeded" and not (outcome.status == "skipped" and outcome.record_json is not None):
+                        if outcome.can_apply and not cancel.is_set():
+                            failure_application = plans[cid][2]
+
+                            def apply_failure(current: Project, outcome: EmbeddingOutcome = outcome, application: EmbeddingApplication = failure_application) -> None:
+                                if not application.apply(current, outcome):
+                                    raise StaleJobResult("Embedding failure target changed")
+
+                            def validate_failure(current: Project, cid: str = cid, basis: dict = basis) -> bool:
+                                return inputs(current, cid) == basis
+
+                            def failure_applied(current: Project, cid: str = cid, record_json: str | None = outcome.record_json) -> bool:
+                                record = current.clips_by_id[cid].analysis_records.get("embeddings")
+                                return isinstance(record, AnalysisRecord) and record.to_dict() == json.loads(record_json or "null")
+
+                            failure_updates.append((apply_failure, validate_failure, failure_applied))
                         result[outcome.status].append(
                             {
                                 "clip_id": cid,
@@ -292,6 +309,12 @@ def run_embedding_job(
                             payload_json,
                             sha256(payload_json.encode()).hexdigest(),
                         )
+                for apply_failure, validate_failure, failure_applied in failure_updates:
+                    batch.stage_analysis(
+                        apply=apply_failure,
+                        validate_input=validate_failure,
+                        is_applied=failure_applied,
+                    )
                 for cid, (basis, specs, application) in plans.items():
                     if cid in settled or cancel.is_set():
                         continue

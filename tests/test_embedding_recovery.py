@@ -35,6 +35,34 @@ def run(setup, **kwargs):
     ]
 
 
+def test_failed_rerun_persists_record_without_new_success_receipt(setup):
+    path, _, compute = setup
+    run(setup)
+    previous = Project.load(path)
+    receipts = dict(previous.metadata.job_results)
+    previous.close_writer()
+    compute.side_effect = RuntimeError("provider failed")
+    assert len(run(setup, force=True)["failed"]) == 3
+    loaded = Project.load(path)
+    assert all(c.analysis_records["embeddings"].state == "failed" for c in loaded.clips)
+    assert all(c.embedding == [0.123456789] * 768 for c in loaded.clips)
+    assert loaded.metadata.job_results == receipts
+    loaded.close_writer()
+
+
+def test_mixed_batch_journals_successes_before_failure_publication(setup):
+    path, store, compute = setup
+    compute.side_effect = None
+    compute.return_value = [[0.0] * 768, [0.1] * 768, [0.2] * 768]
+    recorded = Mock(wraps=store.record_result)
+    with patch.object(store, "record_result", recorded):
+        with patch("core.jobs.commits.ResultBatch.stage_analysis", side_effect=RuntimeError("publication failed")):
+            with pytest.raises(RuntimeError, match="publication failed"):
+                run(setup)
+    assert recorded.call_count == 2
+    assert all(c.embedding is None for c in Project.load(path).clips)
+
+
 @pytest.mark.parametrize("force", [False, True])
 def test_failed_save_reuses_batch_after_store_reopen(setup, force):
     path, store, compute = setup

@@ -928,7 +928,18 @@ tracked, inactive historical owners as described above.
   Validation: 91 focused color, job batching/recovery, provenance, spine, and
   native GUI delivery tests passed; scoped color operation/job typing and lint
   checks passed. Failures before an input identity can be verified remain
-  unowned. Thumbnail embedding failure publication remains under audit.
+  unowned.
+
+- Thumbnail embedding provider failures and invalid vectors now produce owned
+  failure records when the verified media snapshot still matches. Shared/spine
+  application preserves the previous vector and rejects failures after newer
+  edits. GUI workers deliver failed records with exact transient payload matching;
+  explicit saves persist them without success receipts. Durable jobs stage failed
+  records only after journaling all successful vectors in the computed batch.
+  Missing thumbnails and cancelled or changed inputs do not acquire failure
+  ownership. Validation: 115 focused operation, worker, GUI delivery/recovery,
+  durable recovery, sequence recovery, and spine import tests passed; three
+  scoped modules passed typing and all changed Python files passed lint.
 
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,

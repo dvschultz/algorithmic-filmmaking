@@ -712,6 +712,9 @@ def embeddings(
             else:
                 result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
         elif outcome.status == "failed":
+            if outcome.can_apply and not application.apply(project, outcome):
+                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+                return
             item = {"clip_id": outcome.clip_id, "code": outcome.code}
             if outcome.message:
                 item["message"] = outcome.message
