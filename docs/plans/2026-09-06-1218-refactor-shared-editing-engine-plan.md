@@ -421,7 +421,10 @@ The initial colors/DINO path is now available through detached shared operations
 the spine, and `analyze accept-legacy`. It preserves unknown provenance and
 binds explicitly accepted values to current media inputs. Its 88-test focused
 validation passed; desktop/agent controls and the other analysis families remain
-outstanding. See [legacy analysis](../user-guide/legacy-analysis.md).
+outstanding. MCP now exposes the same explicit choice as a cancellable
+`start_accept_legacy_analysis` job, rejecting queued project/media changes;
+99 focused job/legacy/import tests pass. The desktop and its built-in agent
+still need controls. See [legacy analysis](../user-guide/legacy-analysis.md).
 
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse

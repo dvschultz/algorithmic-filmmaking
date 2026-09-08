@@ -24,6 +24,13 @@ value was computed. Changes to media, trim, model, or analysis settings can
 invalidate that decision. Verified or failed records cannot be relabelled as
 legacy, and unknown future record formats are preserved.
 
-The desktop and agent acceptance controls, and acceptance for other analysis
-operations, are not available yet. Recompute those results through their usual
-analysis commands.
+MCP agents can use `start_accept_legacy_analysis` with `project_path`, `operation`,
+and optional `clip_ids`, then poll `get_job_status` and `get_job_result`. Invoke
+it only after the user explicitly chooses legacy reuse. The job fingerprints
+media off the server event loop, supports cancellation, and rejects project or
+selected-media changes while queued. Accepted decisions are saved under the
+project writer lock.
+
+Desktop controls, the built-in desktop agent route, and acceptance for other
+analysis operations are not available yet. Recompute those results through
+their usual analysis commands.

@@ -110,3 +110,17 @@ def test_unknown_embedding_model_requires_recomputation(tmp_path):
     project.clips[0].embedding_model = None
     assert not accept_legacy_analysis(project, "embeddings")["accepted"]
     assert "embeddings" not in project.clips[0].analysis_records
+
+
+def test_cancelled_acceptance_leaves_legacy_values_unbound(tmp_path):
+    from threading import Event
+    from core.spine.analysis_reuse import accept_legacy_analysis
+
+    project = project_with_thumbnails(tmp_path, 1)
+    project.clips[0].dominant_colors = [(1, 2, 3)]
+    cancel = Event()
+    cancel.set()
+    result = accept_legacy_analysis(project, "colors", cancel_event=cancel)
+    assert result["unprocessed"] == [project.clips[0].id]
+    assert not result["accepted"]
+    assert "colors" not in project.clips[0].analysis_records

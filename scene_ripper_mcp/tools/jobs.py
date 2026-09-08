@@ -364,6 +364,93 @@ def _start_job(
 
 
 @mcp.tool()
+async def start_accept_legacy_analysis(
+    project_path: Annotated[str, "Path to the project file"],
+    operation: Annotated[str, "Legacy operation: colors or embeddings"],
+    clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
+    idempotency_key: Optional[str] = None,
+    ctx: Context | None = None,
+) -> str:
+    """Explicitly accept old analysis values for current inputs without inference.
+
+    Only invoke when the user explicitly chooses to reuse legacy analysis.
+    Provenance remains unknown; this does not verify how old values were made.
+    Hashing runs as a cancellable job. Changed project contents while queued
+    invalidate the decision. Compatible recorded DINO models are required for
+    embeddings. Poll get_job_status/get_job_result for accepted and failed IDs.
+    """
+    from core.project_revision import ProjectFileRevision
+    from scene_ripper_mcp.security import validate_project_path
+
+    if operation not in ("colors", "embeddings"):
+        return json.dumps({"success": False, "error": "Operation must be colors or embeddings"})
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    if ctx is None:
+        return json.dumps({"success": False, "error": "Job context is required"})
+    ids = list(dict.fromkeys(clip_ids)) if clip_ids is not None else None
+
+    def capture_inputs():
+        from core.project import Project
+        from core.jobs.media import media_stamp
+
+        revision = ProjectFileRevision.capture(path)
+        project = Project.load(path)
+        try:
+            selected = project.clips if ids is None else [project.clips_by_id[cid] for cid in ids if cid in project.clips_by_id]
+            media_paths = set()
+            for clip in selected:
+                source = project.sources_by_id.get(clip.source_id)
+                if source is not None:
+                    media_paths.add(source.file_path)
+                if operation == "embeddings" and clip.thumbnail_path is not None:
+                    media_paths.add(clip.thumbnail_path)
+            stamps = {str(item): media_stamp(item) for item in sorted(media_paths)}
+            revision.verify()
+            return revision, stamps
+        finally:
+            project.close_writer()
+
+    try:
+        revision, stamps = await asyncio.to_thread(capture_inputs)
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))
+    arguments = {"operation": operation, "clip_ids": ids}
+    spec = OperationSpec.build(
+        kind="accept_legacy_analysis", version=1, arguments=arguments,
+        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps},
+        persistence="job_history", input_revision=revision.digest,
+    )
+
+    def run(progress_callback, cancel_event):
+        from core.spine.analysis_reuse import accept_legacy_analysis
+        from core.spine.project_io import load_with_mtime, save_with_mtime_check
+        from core.jobs.media import media_stamp
+
+        # JobRuntime holds the project writer for this entire closure.
+        revision.verify()
+        if any(media_stamp(Path(item)) != stamp for item, stamp in stamps.items()):
+            raise ValueError("Legacy analysis media changed while queued; request reuse again")
+        project, mtime = load_with_mtime(path)
+        try:
+            revision.verify()
+            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event)
+            if result["accepted"]:
+                save_with_mtime_check(project, path, mtime)
+            progress_callback(1.0, "Legacy reuse decisions saved")
+            return {"success": True, "result": result}
+        finally:
+            project.close_writer()
+
+    return _start_job(
+        ctx, kind=spec.kind, args=arguments, project_path=str(path),
+        project_mtime_at_start=None, idempotency_key=idempotency_key,
+        run=run, operation=spec,
+    )
+
+
+@mcp.tool()
 async def start_detect_scenes_bulk(
     project_path: Annotated[str, "Absolute path to .sceneripper project file"],
     source_ids: Annotated[

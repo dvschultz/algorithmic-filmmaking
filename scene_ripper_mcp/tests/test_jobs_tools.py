@@ -57,6 +57,62 @@ def lifespan_ctx(tmp_path):
     runtime.shutdown(wait=True)
 
 
+@pytest.mark.asyncio
+async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path):
+    from core.project import Project
+    from tests.test_spine_analyze import _build_project
+    from scene_ripper_mcp.tools.jobs import start_accept_legacy_analysis
+
+    ctx, store, _ = lifespan_ctx
+    project = _build_project(tmp_path, 1, populate_colors=1)
+    path = tmp_path / "legacy.sceneripper"
+    assert project.save(path)
+    response = json.loads(await start_accept_legacy_analysis(str(path), "colors", ctx=ctx))
+    assert response["success"], response
+    _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+    output = json.loads(await get_job_result(response["task_id"], ctx=ctx))
+    assert output["result"]["result"]["accepted"] == ["c-0"]
+    loaded = Project.load(path)
+    record = loaded.clips[0].analysis_records["colors"]
+    assert record.legacy_reuse and record.provenance == "unknown"
+    loaded.close_writer()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["project", "media"])
+async def test_legacy_reuse_rejects_changes_while_queued(lifespan_ctx, tmp_path, change):
+    from tests.test_spine_analyze import _build_project
+    from scene_ripper_mcp.tools.jobs import start_accept_legacy_analysis
+
+    ctx, store, runtime = lifespan_ctx
+    project = _build_project(tmp_path, 1, populate_colors=1)
+    path = tmp_path / "legacy.sceneripper"
+    assert project.save(path)
+    release = threading.Event()
+    entered = [threading.Event() for _ in range(4)]
+    try:
+        for event in entered:
+            def block(progress, cancel, event=event):
+                event.set()
+                assert release.wait(10)
+                return {}
+            runtime.submit(kind="blocker", args={}, run=block)
+        assert all(event.wait(5) for event in entered)
+        response = json.loads(await start_accept_legacy_analysis(str(path), "colors", ctx=ctx))
+        assert response["success"], response
+        if change == "project":
+            project.clips[0].start_frame += 1
+            assert project.save()
+        else:
+            project.sources[0].file_path.write_bytes(b"replacement media")
+        expected = path.read_bytes()
+        release.set()
+        _wait_for_status(store, response["task_id"], STATUS_FAILED)
+        assert path.read_bytes() == expected
+    finally:
+        release.set()
+
+
 def _wait_for_status(store, task_id, expected, timeout=5.0):
     deadline = time.monotonic() + timeout
     targets = {expected} if isinstance(expected, str) else expected
