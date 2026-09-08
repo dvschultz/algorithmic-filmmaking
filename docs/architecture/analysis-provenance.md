@@ -710,8 +710,18 @@ without audio still returns None. Sequencing propagates those failures instead o
 caching defaults or silently continuing. Eight failure cases reproduced before
 the changes; the resulting provider/runtime/platform run passed 66 tests and
 changed-file Ruff. Six provider typing findings are unchanged from the verified
-baseline. Scalar provenance, failure records, detached execution, owner delivery,
-recovery, and completion/cost checks are still pending.
+baseline. Shared scalar tasks and outcomes now bind full source content, ranges,
+sampling parameters, package runtime, and (for volume) exact FFmpeg/FFprobe content.
+Volume executes those captured binary paths. Verified black/no-audio results reuse;
+legacy values and changed media, binaries, options, or packages recompute. Owned
+failure records preserve the prior value, and application guards reject changed
+targets, sessions, paths, and projections. Cancellation suppresses late results.
+The shared headless `analyze_scalars` entry point publishes through those guards.
+The regression run passed 100 tests, including provider execution-path and import
+boundary checks; the new operation module passes scoped typing and changed-file
+Ruff is clean. A float initialization also removes the prior color-provider typing
+errors. Sequencing/GUI integration, durable recovery, registered CLI/MCP/agent
+surfaces, and completion/cost checks remain pending.
 
 ## Remaining U10 work
 

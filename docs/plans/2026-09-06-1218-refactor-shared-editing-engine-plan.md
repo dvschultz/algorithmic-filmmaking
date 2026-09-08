@@ -555,8 +555,16 @@ Partial brightness decoding and nonfinite volume values also fail; valid no-audi
 media remains distinct. Sequencing propagates these errors without caching
 fallback values. Eight failure cases reproduced before the fix; 66 provider,
 runtime, and platform tests pass with changed-file Ruff clean. Six unrelated
-provider typing errors are confirmed baseline findings. Scalar provenance and
-its operation/delivery/recovery/completion migration remain pending.
+provider typing errors are confirmed baseline findings. Shared scalar operations
+now capture immutable inputs, full source/binary fingerprints, runtime and sampling
+identity, reusable empty results, and owned failure records. Guarded application
+preserves old values on failure and rejects stale targets, paths, sessions, or
+projections. Volume uses the actual captured FFmpeg/FFprobe paths. The shared
+headless `analyze_scalars` entry point is wired to these operations. The regression
+run passed 100 tests; scoped operation typing and changed-file Ruff pass. The three
+color-provider typing errors were also removed by correcting a float initialization.
+Sequencing/GUI, durable recovery, registered CLI/MCP/agent surfaces, and
+completion/cost integration remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

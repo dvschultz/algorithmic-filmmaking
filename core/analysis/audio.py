@@ -324,7 +324,7 @@ def _find_nearest(sorted_times: list[float], time: float) -> float:
     return before if (time - before) <= (after - time) else after
 
 
-def has_audio_track(file_path: Path, *, strict: bool = False) -> bool:
+def has_audio_track(file_path: Path, *, strict: bool = False, _ffprobe_path: Path | None = None) -> bool:
     """Check if a file has an audio stream.
 
     Args:
@@ -334,7 +334,7 @@ def has_audio_track(file_path: Path, *, strict: bool = False) -> bool:
     Returns:
         True if file has at least one audio stream
     """
-    _ffprobe = find_binary("ffprobe") or "ffprobe"
+    _ffprobe = str(_ffprobe_path) if _ffprobe_path is not None else find_binary("ffprobe") or "ffprobe"
     cmd = [
         _ffprobe, "-v", "error",
         "-select_streams", "a",
@@ -589,6 +589,8 @@ def extract_clip_volume(
     duration_seconds: float,
     *,
     _has_audio: Optional[bool] = None,
+    _ffmpeg_path: Path | None = None,
+    _ffprobe_path: Path | None = None,
 ) -> Optional[float]:
     """Extract mean RMS volume level for a clip segment using FFmpeg volumedetect.
 
@@ -607,11 +609,11 @@ def extract_clip_volume(
             or start_seconds < 0 or duration_seconds <= 0):
         raise ValueError("Volume analysis requires a finite, positive duration and nonnegative start")
     if _has_audio is None:
-        _has_audio = has_audio_track(source_path, strict=True)
+        _has_audio = has_audio_track(source_path, strict=True, _ffprobe_path=_ffprobe_path)
     if not _has_audio:
         return None
 
-    _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
+    _ffmpeg = str(_ffmpeg_path) if _ffmpeg_path is not None else find_binary("ffmpeg") or "ffmpeg"
     null_target = "NUL" if sys.platform == "win32" else "-"
     cmd = [
         _ffmpeg, "-y",

@@ -869,3 +869,45 @@ def analyze_clips(
     return run_analysis_plan(
         operations, execute, progress=progress_callback, cancel=cancel_event
     )
+
+
+def analyze_scalars(
+    project: "Project",
+    operation: str,
+    clip_ids: list[str] | None = None,
+    *,
+    num_samples: int = 5,
+    skip_existing: bool = True,
+    progress_callback: Callable[[float, str], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict:
+    """Run verified brightness or volume analysis on the project owner thread."""
+    from dataclasses import replace
+    from core.operations.scalars import ScalarApplication, ScalarOutcome, scalar_task, run_scalars
+
+    if operation not in ('brightness', 'volume'):
+        raise ValueError('Scalar operation must be brightness or volume')
+    ids = list(dict.fromkeys(clip_ids)) if clip_ids is not None else [c.id for c in project.clips]
+    if any(cid not in project.clips_by_id for cid in ids):
+        raise ValueError('Unknown scalar analysis clip ID')
+    tasks = tuple(scalar_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id),
+        'brightness' if operation == 'brightness' else 'volume', num_samples=num_samples,
+        skip_existing=skip_existing) for cid in ids)
+    applications = {task.clip_id: ScalarApplication(project, task) for task in tasks}
+    delivered: dict[str, ScalarOutcome] = {}
+
+    def deliver(outcome: ScalarOutcome) -> None:
+        if _check_cancel(cancel_event):
+            outcome = replace(outcome, status='unprocessed', record_json=None, message='Cancelled')
+        elif outcome.record_json is not None and not applications[outcome.clip_id].apply(project, outcome):
+            outcome = replace(outcome, status='failed', record_json=None, message='Scalar analysis target changed before publication')
+        delivered[outcome.clip_id] = outcome
+        if progress_callback is not None:
+            progress_callback(len(delivered) / len(tasks), f'{operation}: {len(delivered)}/{len(tasks)}')
+
+    outcomes = run_scalars(tasks, cancel_event=cancel_event, on_outcome=deliver)
+    result: dict = {'succeeded': [], 'skipped': [], 'failed': [], 'unprocessed': [], 'total_clips': len(tasks)}
+    for computed in outcomes:
+        outcome = delivered.get(computed.clip_id, computed)
+        result[outcome.status].append({'clip_id': outcome.clip_id, 'message': outcome.message})
+    return {'success': True, 'result': result}

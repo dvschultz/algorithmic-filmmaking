@@ -331,7 +331,7 @@ def rgb_to_hsv(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
 
     # Hue calculation
     if diff == 0:
-        h = 0
+        h = 0.0
     elif max_c == r:
         h = (60 * ((g - b) / diff) + 360) % 360
     elif max_c == g:
