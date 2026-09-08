@@ -90,3 +90,67 @@ with TemporaryDirectory() as directory:
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_queued_verified_reuse_and_failure_delivery():
+    code = r"""
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from dataclasses import asdict
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
+from core.operations.cinematography import CinematographyApplication, CinematographyOptions, cinematography_task, run_cinematography
+from models.cinematography import CinematographyAnalysis
+from tests.test_description_operations import project_with_thumbnails
+from ui.workers.cinematography_delivery import CinematographyDelivery
+app = QCoreApplication([])
+class Worker(QThread):
+    outcome_ready = Signal(object)
+    def is_cancelled(self): return False
+    def run(self):
+        self.outcome_ready.emit(self.outcome)
+        self.outcome_ready.emit(self.outcome)
+with TemporaryDirectory() as directory:
+    for mode in ('reuse', 'failure', 'tampered'):
+        window = QObject()
+        project = window.project = project_with_thumbnails(Path(directory), 1)
+        options = CinematographyOptions('cloud', 'frame', 'model', 'local')
+        task = cinematography_task(project.clips[0], project.sources[0])
+        with patch('core.analysis.cinematography.analyze_cinematography', return_value=CinematographyAnalysis(shot_size='CU', analysis_model='model')):
+            first = run_cinematography((task,), options)[0]
+        assert CinematographyApplication(project, (task,), options).apply(project, first)
+        assert project.save(Path(directory) / 'project.json')
+        task = cinematography_task(project.clips[0], project.sources[0], skip_existing=mode != 'failure')
+        if mode == 'failure':
+            with patch('core.analysis.cinematography.analyze_cinematography', side_effect=ValueError('Invalid answer')):
+                outcome = run_cinematography((task,), options)[0]
+        else: outcome = run_cinematography((task,), options)[0]
+        worker = Worker()
+        worker.tasks = (task,)
+        worker.options = options
+        worker.outcome = outcome
+        worker.cache = SimpleNamespace(path=project.path.resolve(), results={}, transient_outcomes={task.clip_id: asdict(outcome)})
+        if mode == 'tampered': worker.cache.transient_outcomes[task.clip_id]['record_json'] = '{}'
+        window.cinematography_worker = worker
+        window._on_cinematography_clip_ready = Mock()
+        window._on_cinematography_error = Mock()
+        delivery = CinematographyDelivery(window, worker)
+        worker.start(); assert worker.wait(5000)
+        app.processEvents()
+        assert project.clips[0].cinematography.shot_size == 'CU'
+        assert not project.metadata.job_results
+        if mode == 'reuse': window._on_cinematography_clip_ready.assert_called_once()
+        else: window._on_cinematography_clip_ready.assert_not_called()
+        if mode == 'failure': assert project.clips[0].analysis_records['cinematography'].state == 'failed'
+        if mode == 'tampered': window._on_cinematography_error.assert_called_once()
+        else: window._on_cinematography_error.assert_not_called()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

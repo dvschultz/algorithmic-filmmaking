@@ -51,27 +51,31 @@ def setup(request, tmp_path, monkeypatch):
     return project, compute
 
 
-def worker_for(project):
+def worker_for(project, *, reuse=False, options=None):
     return CinematographyWorker(
         project.clips,
         sources_by_id=project.sources_by_id,
         project=project,
-        skip_existing=False,
+        skip_existing=reuse,
+        options=options,
         analysis_targets=[AnalysisTarget.from_frame(f) for f in project.frames] or None,
     )
 
 
-def run(project, *, apply=False, prepare=lambda: True, cancel=None, limit=None):
-    worker = worker_for(project)
+def run(
+    project, *, apply=False, prepare=lambda: True, cancel=None, limit=None, **kwargs
+):
+    worker = worker_for(project, **kwargs)
     tasks = worker.tasks[:limit]
-    application = CinematographyApplication(project, tasks)
+    application = CinematographyApplication(project, tasks, worker.options)
 
     def deliver(outcome):
-        if apply and outcome.status == "succeeded":
+        if apply and outcome.can_apply:
             assert application.apply(project, outcome)
-            receipt = worker.cache.results[outcome.clip_id]
-            assert receipt.matches(outcome)
-            project.record_job_result(receipt.result_id, receipt.digest)
+            receipt = worker.cache.results.get(outcome.clip_id)
+            if receipt is not None:
+                assert receipt.matches(outcome)
+                project.record_job_result(receipt.result_id, receipt.digest)
 
     return worker.cache.run(tasks, cancel or Event(), prepare, deliver, lambda *_: None)
 
@@ -248,3 +252,78 @@ def test_changed_media_during_inference_is_not_recorded(setup):
     assert not worker.cache.results
     assert all(outcome.status == "failed" for outcome in worker.result)
     assert not project.metadata.job_results
+
+
+def test_saved_records_reuse_without_old_receipts(setup):
+    project, compute = setup
+    run(project, apply=True)
+    assert project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    with store._connect() as connection:
+        connection.execute("DELETE FROM job_results")
+    outcomes = run(Project.load(project.path), apply=True, reuse=True)
+    assert len(outcomes) == 2
+    assert all(o.status == "skipped" and o.code == "valid_analysis" for o in outcomes)
+    assert compute.call_count == 2
+
+
+def test_failure_keeps_display_but_invalidates_record(setup):
+    project, compute = setup
+    run(project, apply=True)
+    compute.side_effect = ValueError("Invalid answer")
+    outcomes = run(project, apply=True)
+    assert all(o.status == "failed" and o.record_json for o in outcomes)
+    assert all(
+        t.cinematography.shot_size == "CU"
+        and t.analysis_records["cinematography"].state == "failed"
+        for t in project.frames or project.clips
+    )
+
+
+def test_recovery_ignores_parallelism(setup):
+    project, compute = setup
+    first = run(project)
+    assert (
+        run(
+            project,
+            options=replace(OPTIONS, parallelism=4),
+            prepare=Mock(side_effect=AssertionError("must reuse")),
+        )
+        == first
+    )
+    assert compute.call_count == 2
+
+
+def test_checkpoint_requires_matching_record(setup):
+    project, _ = setup
+    run(project, apply=True)
+    for target in project.frames or project.clips:
+        target.analysis_records["cinematography"] = replace(
+            target.analysis_records["cinematography"], input_json="{}"
+        )
+    assert project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    assert not any(
+        store.get_result(rid)["committed"] for rid in project.metadata.job_results
+    )
+
+
+def test_constructing_worker_does_not_import_local_runtime(setup, monkeypatch):
+    project, _ = setup
+    monkeypatch.setattr(
+        "core.analysis.description.is_mlx_vlm_available",
+        Mock(side_effect=AssertionError("owner thread must not probe MLX")),
+    )
+    worker = worker_for(project, options=replace(OPTIONS, tier="local"))
+    assert len(worker.tasks) == 2
+
+
+def test_runtime_change_invalidates_gui_receipts(setup, monkeypatch):
+    project, compute = setup
+    run(project)
+    monkeypatch.setattr(
+        "core.operations.cinematography.model_runtime",
+        lambda *args: {"packages": {"test": "changed"}},
+    )
+    run(project)
+    assert compute.call_count == 4

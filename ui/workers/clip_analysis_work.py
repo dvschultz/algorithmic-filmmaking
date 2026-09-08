@@ -150,7 +150,7 @@ def create_clip_analysis_worker(
                 input_mode=settings.description_input_mode,
             ),
         )
-        return worker, DescriptionApplication(project, worker.tasks)
+        return worker, DescriptionApplication(project, worker.tasks, worker.options)
     if operation == "cinematography":
         from ui.workers.cinematography_worker import CinematographyWorker
         from core.operations.cinematography import (
@@ -172,7 +172,7 @@ def create_clip_analysis_worker(
                 settings.cinematography_batch_parallelism,
             ),
         )
-        return worker, CinematographyApplication(project, worker.tasks)
+        return worker, CinematographyApplication(project, worker.tasks, worker.options)
     if operation == "custom_query":
         from ui.workers.custom_query_worker import CustomQueryWorker
         from core.operations.custom_query import (
@@ -200,5 +200,5 @@ def create_clip_analysis_worker(
                 3 if tier == "cloud" else 1,
             ),
         )
-        return worker, CustomQueryApplication(project, worker.tasks)
+        return worker, CustomQueryApplication(project, worker.tasks, worker.options)
     raise ValueError(f"Unsupported clip analysis operation: {operation}")

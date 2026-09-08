@@ -316,9 +316,17 @@ path, replace verification state, and preserve the earlier display values.
 
 Owner-thread publication checks the prior record, displayed values, media stamps,
 editorial bindings, requested settings, and prompt digest. Legacy deliveries clear
-prior verification rather than implicitly carrying it forward. GUI workers,
-durable job receipts, completion checks, and their recovery/delivery surfaces
-still need migration; cinematography and U10 remain incomplete.
+prior verification rather than implicitly carrying it forward.
+
+GUI clip/frame workers now capture those records and perform reuse checks on the
+worker thread. Construction no longer probes MLX on the UI thread. Queued delivery
+and the combined frame pipeline preserve success, reuse, and failure records;
+reused and failed outcomes have exact delivery guards without successful receipts.
+GUI recovery checks full media/runtime identity, excludes parallelism from receipt
+matching, tolerates missing old receipts, and requires the exact record at explicit
+save. The combined pipelines queue existing cinematography for verification.
+Durable headless receipts and completion/availability checks still need migration;
+cinematography and U10 remain incomplete.
 
 ## Remaining U10 work
 

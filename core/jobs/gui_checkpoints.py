@@ -260,6 +260,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_cinematography":
+            if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("cinematography") != json.loads(payload["record_json"]):
+                continue
             from core.operations.cinematography import CinematographyOutcome
 
             analysis = CinematographyOutcome(**payload).analysis

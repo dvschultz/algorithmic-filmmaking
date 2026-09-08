@@ -92,7 +92,7 @@ def create_frame_analysis_worker(
             parallelism=min(settings.description_parallelism, 2),
             options=options,
         )
-        return worker, CinematographyApplication(project, worker.tasks)
+        return worker, CinematographyApplication(project, worker.tasks, worker.options)
     raise ValueError("Unsupported frame analysis operation")
 
 

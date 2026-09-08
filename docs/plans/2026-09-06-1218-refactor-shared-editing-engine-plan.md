@@ -399,8 +399,9 @@ headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reu
 verifies saved records without duplicate history or local weight loading. Durable
 query retries recover records with their answers; later explicit requests still
 append new history. Cinematography shared operations and direct headless calls now
-retain verified records for actual frame/video execution. Its GUI and durable-job
-adapters and completion checks remain to be migrated.
+retain verified records for actual frame/video execution. GUI delivery, recovery,
+and combined clip/frame pipelines now carry those records. Its durable-job adapters
+and completion checks remain to be migrated.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

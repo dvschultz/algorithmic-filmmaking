@@ -12,7 +12,7 @@ from typing import Optional, TYPE_CHECKING
 from PySide6.QtCore import Signal
 
 from core.jobs import JobRuntime
-from core.jobs.cinematography import _runtime, _task_data
+from core.jobs.cinematography import _task_data
 from core.jobs.gui_cinematography import GuiCinematographyCache
 from core.jobs.media import media_stamp
 from core.jobs.spec import OperationSpec
@@ -22,6 +22,7 @@ from core.operations.cinematography import (
     CinematographyOutcome,
     CinematographyOptions,
     compute_cinematography,
+    cinematography_task,
     resolve_options,
     run_cinematography,
 )
@@ -62,6 +63,7 @@ class CinematographyWorker(CancellableWorker):
 
     progress = Signal(int, int, str)  # current, total, clip_id
     clip_completed = Signal(str, object)  # clip_id, CinematographyAnalysis
+    outcome_ready = Signal(object)
     analysis_completed = Signal(dict)  # {clip_id: CinematographyAnalysis}
 
     def __init__(
@@ -119,12 +121,11 @@ class CinematographyWorker(CancellableWorker):
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="cinematography",
-                version=1,
+                version=2,
                 arguments={"clip_ids": [task.clip_id for task in self.tasks]},
                 inputs={
                     "tasks": [_task_data(task) for task in self.tasks],
                     "options": asdict(self.options),
-                    "runtime": _runtime(self.options),
                 },
                 persistence="session_only",
                 session_id=project.session.session_id if project is not None else None,
@@ -183,10 +184,6 @@ class CinematographyWorker(CancellableWorker):
         tasks = []
 
         for clip in clips:
-            # Skip if already analyzed
-            if skip_existing and clip.cinematography is not None:
-                continue
-
             # Validate source exists
             source = sources_by_id.get(clip.source_id)
             if not source:
@@ -199,16 +196,7 @@ class CinematographyWorker(CancellableWorker):
                 continue
 
             # Create immutable task
-            tasks.append(
-                ClipAnalysisTask(
-                    clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
-                    source_path=source.file_path if source.file_path.exists() else None,
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    fps=source.fps,
-                )
-            )
+            tasks.append(cinematography_task(clip, source, skip_existing=skip_existing))
 
         return tasks
 
@@ -219,30 +207,12 @@ class CinematographyWorker(CancellableWorker):
         tasks = []
 
         for target in targets:
-            if skip_existing and target.cinematography is not None:
-                continue
-
             image_path = target.image_path
             if not image_path or not image_path.exists():
                 logger.warning(f"Skipping target {target.id}: image not found")
                 continue
 
-            # For frame targets, use "frame" mode since there's no video
-            source_path = None
-            if target.video_path and target.video_path.exists():
-                source_path = target.video_path
-
-            tasks.append(
-                ClipAnalysisTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
-                    source_path=source_path,
-                    start_frame=target.start_frame or 0,
-                    end_frame=target.end_frame or 0,
-                    fps=target.fps or 30.0,
-                    target_type=target.target_type,
-                )
-            )
+            tasks.append(cinematography_task(target, skip_existing=skip_existing))
 
         return tasks
 
@@ -293,7 +263,10 @@ class CinematographyWorker(CancellableWorker):
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
+                return
+            if value.can_apply:
+                self.outcome_ready.emit(value)
+            if value.has_result:
                 results[value.clip_id] = value.analysis
                 self.clip_completed.emit(value.clip_id, value.analysis)
             elif value.status == "failed":

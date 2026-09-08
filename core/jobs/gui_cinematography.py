@@ -7,13 +7,16 @@ from threading import Event
 from typing import Callable
 
 from core.jobs.commits import StaleJobResult
-from core.jobs.cinematography import _runtime, _task_data
+from core.jobs.cinematography import _task_data
+from core.analysis_records import AnalysisFingerprints
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
 from core.operations.cinematography import (
     CinematographyOptions,
     CinematographyOutcome,
     CinematographyTask,
+    cinematography_parameters,
+    cinematography_runtime,
     run_cinematography,
 )
 
@@ -36,11 +39,12 @@ class GuiCinematographyCache(GuiResultJournal):
             source_ids,
             receipts,
             kind="gui_cinematography",
-            arguments=asdict(options),
+            arguments=cinematography_parameters(options),
             media_stamps=media_stamps,
         )
         self.options = options
-        self.runtime = _runtime(options)
+        self.tasks: dict[str, CinematographyTask] = {}
+        self.transient_outcomes: dict[str, dict] = {}
         self.previous_json = json.dumps(
             previous_results, sort_keys=True, allow_nan=False
         )
@@ -51,7 +55,8 @@ class GuiCinematographyCache(GuiResultJournal):
         source = Path(data["source_path"]) if data["source_path"] else None
         if (
             self.fingerprints.get(source) != data["source_media"]
-            or _runtime(self.options) != data["runtime"]
+            or cinematography_runtime(self.tasks[request.clip_id], self.options)
+            != data["runtime"]
         ):
             raise StaleJobResult("Cinematography source media or runtime changed")
 
@@ -65,7 +70,7 @@ class GuiCinematographyCache(GuiResultJournal):
     ) -> tuple[CinematographyOutcome, ...]:
         if not tasks:
             return ()
-        self.start(cancel)
+        self.tasks = {task.clip_id: task for task in tasks}
         previous = json.loads(self.previous_json)
         outcomes: dict[str, CinematographyOutcome] = {}
         pending = []
@@ -77,6 +82,7 @@ class GuiCinematographyCache(GuiResultJournal):
             progress(len(outcomes), len(tasks), outcome.clip_id)
 
         try:
+            self.start(cancel, allow_missing_receipts=True)
             for task in tasks:
                 if cancel.is_set():
                     break
@@ -88,7 +94,7 @@ class GuiCinematographyCache(GuiResultJournal):
                     **_task_data(task),
                     "previous_cinematography": previous[task.clip_id],
                     "source_media": self.fingerprints.get(task.source_path),
-                    "runtime": self.runtime,
+                    "runtime": cinematography_runtime(task, self.options),
                 }
                 request, payload = self.prepare(task.clip_id, data, task.thumbnail_path)
                 requests[task.clip_id] = request
@@ -104,6 +110,8 @@ class GuiCinematographyCache(GuiResultJournal):
                     def record(outcome: CinematographyOutcome) -> None:
                         if outcome.status == "succeeded":
                             self.record(requests[outcome.clip_id], outcome)
+                        elif outcome.can_apply:
+                            self.transient_outcomes[outcome.clip_id] = asdict(outcome)
                         publish(outcome)
 
                     computed = run_cinematography(
@@ -111,6 +119,9 @@ class GuiCinematographyCache(GuiResultJournal):
                         self.options,
                         cancel_event=cancel,
                         on_outcome=record,
+                        fingerprints=AnalysisFingerprints(
+                            cancel, media_fingerprints=self.fingerprints
+                        ),
                     )
                     for outcome in computed:
                         outcomes.setdefault(outcome.clip_id, outcome)
@@ -118,6 +129,9 @@ class GuiCinematographyCache(GuiResultJournal):
                     cancel.set()
         except FingerprintCancelled:
             cancel.set()
+        finally:
+            if hasattr(self, "store"):
+                self.store.close()
         return tuple(
             outcomes.get(
                 task.clip_id,
