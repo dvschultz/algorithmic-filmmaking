@@ -623,8 +623,22 @@ without old receipt rows. Save checkpoints require the exact face record alongsi
 the projected faces. Failed outcomes preserve displayed faces; cancelled queued
 outcomes do not publish. The combined regression run passed 318 tests, with 11
 delivery follow-ups, five changed modules passing scoped typing, and changed-file
-Ruff clean. Durable headless face records, completion checks, and managed face
-embedding storage remain unfinished.
+Ruff clean.
+
+Durable headless face jobs now retain version 2 records and authenticate the
+faces/record pair before recovery. Semantic reuse performs full-content checks
+without inference and survives missing historical receipt rows. Existing managed
+face edits require force. Failed refreshes retain owned failure records and leave
+displayed faces unchanged; forced batches reconcile save/checkpoint failures before
+another refresh. Queued or in-flight changes to an existing model pack reject
+publication. Initial model download receipts recover after failed saves, including
+forced requests. Cancellation after receipt recording retains the computation
+without publishing it; already accepted prefixes remain saveable. Legacy raw GUI
+task serialization remains unchanged. The shared reuse verifier now serves both
+normal operations and durable jobs. The combined regression run passed 329 tests,
+including CLI and MCP, with three changed modules passing scoped typing and
+changed-file Ruff clean. Face completion checks and managed embedding storage
+remain unfinished.
 
 ## Remaining U10 work
 

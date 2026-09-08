@@ -25,11 +25,11 @@ def setup(tmp_path, monkeypatch):
                 "bbox": [0, 0, 10, 10],
                 "embedding": [0.123456789] * 512,
                 "confidence": 0.9,
-                "frame_number": 0,
             }
         ]
     )
-    monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", compute)
+    from tests.analysis_fixtures import mock_face_execution
+    mock_face_execution(monkeypatch, tmp_path, compute)
     monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
     monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
     yield path, store, compute
@@ -84,7 +84,8 @@ def test_manual_embedding_edit_is_not_overwritten(setup):
     saved = Project.load(path)
     saved.clips[0].face_embeddings[0]["embedding"][0] = 0.5
     assert saved.save()
-    run(setup)
+    with pytest.raises(StaleJobResult, match="force"):
+        run(setup)
     assert compute.call_count == 2
     assert Project.load(path).clips[0].face_embeddings[0]["embedding"][0] == 0.5
 
@@ -109,7 +110,7 @@ def test_queued_interval_and_runtime_are_frozen(setup, monkeypatch):
     run(setup, operation=operation)
     assert compute.call_args.kwargs["sample_interval"] == 0.4
     operation = face_job_spec(Project.load(path), None, FaceOptions(), arguments={})
-    monkeypatch.setattr("core.jobs.faces._runtime", lambda: {"changed": True})
+    monkeypatch.setattr("core.jobs.faces.face_target_runtime", lambda: {"changed": True})
     with pytest.raises(StaleJobResult):
         run(setup, operation=operation)
 

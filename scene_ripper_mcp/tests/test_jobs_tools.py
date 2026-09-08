@@ -703,7 +703,8 @@ async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_
     monkeypatch.setattr("core.analysis.gaze.extract_gaze_from_clip", Mock(return_value={"gaze_yaw": 2., "gaze_pitch": 1., "gaze_category": "at_camera"}))
     monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
     monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
-    monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", Mock(return_value=[]))
+    from tests.analysis_fixtures import mock_face_execution
+    mock_face_execution(monkeypatch, tmp_path, Mock(return_value=[]))
     monkeypatch.setattr("core.analysis.ocr.extract_text_from_clip", Mock(return_value=[]))
     monkeypatch.setattr("core.analysis.embeddings.extract_clip_embeddings_batch", Mock(side_effect=lambda paths: [[0.1] * 768 for _ in paths]))
     monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
@@ -795,7 +796,8 @@ async def test_face_submission_records_durable_results(lifespan_ctx, tmp_path, m
     captured = {}
     monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=[{"embedding": [.123456789] * 512, "confidence": .9, "bbox": [0, 0, 1, 1]}])
-    monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", compute)
+    from tests.analysis_fixtures import mock_face_execution
+    mock_face_execution(monkeypatch, tmp_path, compute)
     monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
     monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
     ids = ["clip-1"]

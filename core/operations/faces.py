@@ -23,6 +23,7 @@ from core.operations.face_records import (
     face_runtime,
     execution_inputs,
     saved_execution,
+    reusable_face_record,
     validate_face_frames,
 )
 
@@ -346,47 +347,21 @@ def _verified_face(
         identity = identify(
             inputs, {**environment, "model": "buffalo_l", "components": []}
         )
-        if (
-            task.skip
-            and snapshot.record is not None
-            and snapshot.record.identity is not None
-        ):
-            try:
-                from core.jobs.media import media_stamp
-                from core.analysis.faces import _get_model_cache_dir
-
-                execution = saved_execution(snapshot.record)
-                directory = (
-                    _get_model_cache_dir() / "insightface" / "models" / "buffalo_l"
-                ).resolve()
-                for item in execution["weight_files"]:
-                    if Path(item["path"]).parent != directory:
-                        raise ValueError("Face model cache path changed")
-                    item["stamp"] = list(media_stamp(Path(item["path"])) or ())
-                by_path = {item["path"]: item for item in execution["weight_files"]}
-                for component in execution["components"]:
-                    component["weights"]["stamp"] = by_path[component["path"]]["stamp"]
-                bound = execution_inputs(snapshot, execution)
-                runtime = face_runtime(execution, environment)
-                candidate = identify(bound, runtime)
-                reused = replace(snapshot, inputs=bound).reusable_record(candidate)
-                if (
-                    reused is not None
-                    and bound.unchanged()
-                    and face_environment() == environment
-                ):
-                    value = face_result_value(reused.value["face_embeddings"])
-                    if value != reused.value:
-                        raise ValueError("Invalid saved face projection")
-                    return FaceOutcome(
-                        task.clip_id,
-                        "skipped",
-                        tuple(Face.from_dict(v) for v in value["face_embeddings"]),
-                        code="valid_analysis",
-                        record_json=json.dumps(reused.to_dict(), sort_keys=True),
-                    )
-            except (ValueError, TypeError, KeyError, AttributeError, OSError):
-                pass
+        reused = (
+            reusable_face_record(
+                snapshot, options.sample_interval, fingerprints, environment
+            )
+            if task.skip
+            else None
+        )
+        if reused is not None and face_environment() == environment:
+            return FaceOutcome(
+                task.clip_id,
+                "skipped",
+                tuple(Face.from_dict(v) for v in reused.value["face_embeddings"]),
+                code="valid_analysis",
+                record_json=json.dumps(reused.to_dict(), sort_keys=True),
+            )
         if prepare is not None:
             if not prepare():
                 cancel.set()

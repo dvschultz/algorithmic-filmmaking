@@ -6,7 +6,13 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from core.analysis_records import AnalysisInput, AnalysisSnapshot, model_runtime
+from core.analysis_records import (
+    AnalysisFingerprints,
+    AnalysisInput,
+    AnalysisSnapshot,
+    model_runtime,
+)
+from models.analysis_record import AnalysisRecord
 
 FACE_SAMPLING = {
     "policy": "half-open-uniform-frames/v1",
@@ -218,3 +224,47 @@ def saved_execution(record) -> dict:
         "components": components,
         "weight_files": files,
     }
+
+
+def reusable_face_record(
+    snapshot: AnalysisSnapshot,
+    interval: float,
+    fingerprints: AnalysisFingerprints,
+    environment: dict,
+) -> AnalysisRecord | None:
+    """Fully verify saved faces without performing inference on a cache miss."""
+    if snapshot.record is None or snapshot.record.identity is None:
+        return None
+    try:
+        from core.jobs.media import media_stamp
+        from core.analysis.faces import _get_model_cache_dir
+
+        execution = saved_execution(snapshot.record)
+        directory = (
+            _get_model_cache_dir() / "insightface" / "models" / "buffalo_l"
+        ).resolve()
+        for item in execution["weight_files"]:
+            if Path(item["path"]).parent != directory:
+                return None
+            item["stamp"] = list(media_stamp(Path(item["path"])) or ())
+        by_path = {item["path"]: item for item in execution["weight_files"]}
+        for component in execution["components"]:
+            component["weights"]["stamp"] = by_path[component["path"]]["stamp"]
+        bound = execution_inputs(snapshot, execution)
+        runtime = face_runtime(execution, environment)
+        candidate = fingerprints.identity(
+            bound,
+            operation="face_embeddings",
+            operation_version=2,
+            model=runtime,
+            parameters=face_parameters(interval),
+            sampling=FACE_SAMPLING,
+        )
+        reused = replace(snapshot, inputs=bound).reusable_record(candidate)
+        if reused is not None and bound.unchanged():
+            value = face_result_value(reused.value["face_embeddings"])
+            if value == reused.value:
+                return reused
+    except (ValueError, TypeError, KeyError, AttributeError, OSError):
+        pass
+    return None

@@ -7,6 +7,33 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
+def mock_face_execution(monkeypatch, directory: Path, provider) -> Path:
+    """Report real fixture weight fingerprints around a configurable provider."""
+    from types import SimpleNamespace
+    from core.analysis.face_weights import FaceWeights
+    from core.analysis.faces import face_model_execution
+    from core.operations.face_records import face_packages
+
+    pack = directory / "insightface" / "models" / "buffalo_l"
+    pack.mkdir(parents=True, exist_ok=True)
+    for name in ("detection", "recognition"):
+        (pack / f"{name}.onnx").write_bytes(name.encode())
+    monkeypatch.setattr("core.analysis.faces._get_model_cache_dir", lambda: directory)
+    monkeypatch.setattr("core.operations.faces.face_environment", lambda: {
+        "packages": face_packages(), "available_providers": ["CPUExecutionProvider"]})
+
+    def compute(**kwargs):
+        model = SimpleNamespace(_scene_ripper_weights=FaceWeights.capture(pack), models={
+            name: SimpleNamespace(model_file=str(pack / f"{name}.onnx"),
+                session=SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"]))
+            for name in ("detection", "recognition")})
+        kwargs["on_execution"](face_model_execution(model))
+        return [{"frame_number": kwargs["start_frame"], **face} for face in provider(**kwargs)]
+
+    monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", compute)
+    return pack
+
+
 def verify_word_alignment(clip: Clip, source: Source, directory: Path) -> None:
     """Give dialog fixtures real media and a record for their supplied word data."""
     from core.analysis.alignment import ALIGNMENT_MODEL

@@ -497,8 +497,13 @@ changes reject execution; first model download and interrupted publication recov
 without repeated inference. Semantic reuse skips preparation, and saved checkpoints
 require matching records and faces. The GUI regression run passed 318 tests with
 11 delivery follow-ups, five modules passing scoped typing, and changed-file Ruff
-clean. Durable headless face records, completion checks, and managed embedding
-storage remain pending.
+clean. Durable headless face jobs now authenticate saved record/output pairs,
+reuse verified results without old receipt rows, preserve faces on failure, and
+require force for edited managed output. Initial model downloads and failed
+saves/checkpoints recover without repeated inference. Cancellation retains computed
+receipts without publishing cancelled targets. The combined regression run passed
+329 tests, with scoped typing for three changed modules and changed-file Ruff
+clean. Face completion checks and managed embedding storage remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
