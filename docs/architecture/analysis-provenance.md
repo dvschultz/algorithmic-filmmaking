@@ -342,6 +342,20 @@ probe or load VLM runtimes. Clip and frame completion use their actual input mod
 The remaining cross-consumer and legacy-reuse audit still applies; U10 remains
 incomplete.
 
+## Transcription extraction checkpoint
+
+Clip transcription and whole-video MLX/Groq transcription now raise an error
+when FFmpeg extraction fails or produces an empty file. Confirmed media without
+audio still produces a valid empty transcript. Temporary extraction files are
+removed on failure, and whole-video MLX model loading starts only after successful
+extraction. Saved jobs report extraction failure without publishing an empty
+transcript or a successful receipt.
+
+The focused transcription, audio transcription, recovery, GUI recovery, and import
+regression run passed 98 tests. Transcription execution identity, verified records,
+reuse, and delivery migration remain unfinished; this corrects the distinction
+between failed extraction and successful silence before that migration.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

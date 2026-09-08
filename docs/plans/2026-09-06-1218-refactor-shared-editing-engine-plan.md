@@ -404,7 +404,10 @@ and combined clip/frame pipelines now carry those records. Durable jobs verify r
 retain failed-attempt records, and recover forced refreshes without repeated
 inference. Cinematography completion and availability checks now validate current
 records and settings without probing VLM runtimes on the UI thread. Transcription
-and audio/alignment remain among the next analysis families to migrate.
+and audio/alignment remain among the next analysis families to migrate. Their
+extraction prerequisite now distinguishes FFmpeg failure/empty output from valid
+silence, removes failed temporary files, and prevents successful saved receipts
+for extraction failures (98 focused regression tests passed).
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
@@ -433,7 +436,8 @@ bindings without importing inference runtimes on the UI thread.
 Custom-query validation distinguishes malformed answers from valid negative
 matches and versions its parser in receipt identities. The shared operation and
 direct headless entry point now own per-query semantic/failure records while
-preserving append history. GUI and durable job delivery remain unfinished.
+preserving append history. GUI and durable job delivery now carry and verify those
+records as described above; the cross-consumer audit remains unfinished.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

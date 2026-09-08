@@ -482,6 +482,11 @@ def _transcribe_video_faster_whisper(
     )
 
 
+def _audio_extraction_error(error: subprocess.CalledProcessError) -> TranscriptionError:
+    detail = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr
+    return TranscriptionError(f"FFmpeg audio extraction failed: {detail or error}")
+
+
 def _transcribe_video_mlx(
     video_path: Path,
     model_name: str,
@@ -494,8 +499,6 @@ def _transcribe_video_mlx(
 
     mlx-whisper requires audio input, so we extract audio via FFmpeg first.
     """
-    mlx_model = get_mlx_model(model_name)
-
     if progress_callback:
         progress_callback(0.1, "Extracting audio for MLX Whisper...")
 
@@ -521,6 +524,9 @@ def _transcribe_video_mlx(
             **get_subprocess_kwargs(),
         )
 
+        if tmp_path.stat().st_size == 0:
+            raise TranscriptionError("FFmpeg audio extraction produced an empty file")
+        mlx_model = get_mlx_model(model_name)
         if progress_callback:
             progress_callback(0.3, "Transcribing with MLX Whisper...")
 
@@ -545,8 +551,7 @@ def _transcribe_video_mlx(
         )
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg audio extraction failed: {e.stderr.decode() if e.stderr else e}")
-        return []
+        raise _audio_extraction_error(e) from e
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -612,8 +617,7 @@ def transcribe_clip(
 
         # Check if audio was actually extracted (file size > 0)
         if tmp_path.stat().st_size == 0:
-            logger.warning(f"No audio extracted from {source_path} ({start_time}-{end_time})")
-            return []
+            raise TranscriptionError("FFmpeg audio extraction produced an empty file")
 
         if resolved == "groq":
             return _transcribe_cloud_groq(
@@ -684,8 +688,7 @@ def transcribe_clip(
             f"'/Applications/Scene Ripper.app' — or run from source."
         ) from e
     except subprocess.CalledProcessError as e:
-        logger.warning(f"FFmpeg failed to extract audio: {e.stderr.decode() if e.stderr else e}")
-        return []
+        raise _audio_extraction_error(e) from e
 
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -814,11 +817,15 @@ def _transcribe_cloud_groq(
                 env=get_subprocess_env(),
                 **get_subprocess_kwargs(),
             )
+            if tmp_path.stat().st_size == 0:
+                raise TranscriptionError("FFmpeg audio extraction produced an empty file")
             audio_file_path = tmp_path
         except subprocess.CalledProcessError as e:
             tmp_path.unlink(missing_ok=True)
-            logger.error(f"FFmpeg audio extraction failed: {e.stderr.decode() if e.stderr else e}")
-            return []
+            raise _audio_extraction_error(e) from e
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
     else:
         audio_file_path = audio_path
         tmp_path = None
