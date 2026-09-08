@@ -408,6 +408,11 @@ and audio/alignment remain among the next analysis families to migrate. Their
 extraction prerequisite now distinguishes FFmpeg failure/empty output from valid
 silence, removes failed temporary files, and prevents successful saved receipts
 for extraction failures (98 focused regression tests passed).
+Transcription providers now report actual backend/model selection, including MLX
+fallback/mapping and model-free no-audio results. Groq model selection is pinned
+for each provider call and accepts an explicit queued selection. The provider
+regression run passed 135 tests, with 15 follow-up execution tests; shared records,
+queued option snapshots, verified reuse, and delivery remain unfinished.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

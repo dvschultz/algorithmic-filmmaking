@@ -352,9 +352,21 @@ extraction. Saved jobs report extraction failure without publishing an empty
 transcript or a successful receipt.
 
 The focused transcription, audio transcription, recovery, GUI recovery, and import
-regression run passed 98 tests. Transcription execution identity, verified records,
-reuse, and delivery migration remain unfinished; this corrects the distinction
-between failed extraction and successful silence before that migration.
+regression run passed 98 tests. This corrects the distinction between failed
+extraction and successful silence before the record migration.
+
+Clip and whole-video providers now expose an optional execution callback reporting
+the resolved backend and actual model before extraction or model loading. This
+includes MLX-to-faster-whisper fallback and MLX model-name mapping. Confirmed
+video-only media reports an audio-probe result without resolving or loading a
+model. Groq model selection is frozen before extraction; callers can provide an
+explicit cloud model for a queued request. Provider callbacks and the API request
+use that same selection even if settings change during the call.
+
+The provider regression run passed 135 tests, followed by 15 execution tests with
+expanded auto-backend and extraction-failure coverage. Scoped provider typing and
+Ruff passed. Shared transcript records, queued option snapshots, verified reuse,
+and delivery migration remain unfinished.
 
 ## Remaining U10 work
 

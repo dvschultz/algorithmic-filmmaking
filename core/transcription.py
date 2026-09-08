@@ -43,6 +43,8 @@ from core.transcription_storage import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
+ExecutionCallback = Callable[[dict[str, str | None]], None]
+
 # Avoid Hugging Face tokenizer thread-pool warnings when FFmpeg subprocesses
 # are spawned after tokenizer initialization.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -237,6 +239,30 @@ def _resolve_backend(backend: str = "auto") -> str:
     return "faster-whisper"
 
 
+def transcription_model(
+    resolved_backend: str,
+    model_name: str,
+    cloud_model: str | None = None,
+) -> str:
+    """Resolve the actual model name without importing or loading inference code.
+
+    ``resolved_backend`` must be the concrete result of ``_resolve_backend``.
+    An explicit cloud model freezes the setting for queued execution.
+    """
+    if resolved_backend == "mlx-whisper":
+        return _MLX_MODEL_MAP.get(model_name, model_name)
+    if resolved_backend == "groq":
+        if cloud_model is not None:
+            return cloud_model
+        try:
+            from core.settings import load_settings
+            selected = load_settings().transcription_cloud_model
+            return selected or _DEFAULT_GROQ_MODEL
+        except Exception:
+            return _DEFAULT_GROQ_MODEL
+    return model_name
+
+
 def get_model(model_name: str = "small.en"):
     """Get or load the faster-whisper model (lazy loading).
 
@@ -352,6 +378,9 @@ def transcribe_video(
     progress_callback: Optional[Callable[[float, str], None]] = None,
     segmentation_mode: str = "backend",
     segment_max_seconds: float = 12.0,
+    *,
+    cloud_model: str | None = None,
+    on_execution: ExecutionCallback | None = None,
 ) -> list[TranscriptSegment]:
     """Transcribe audio from a video file.
 
@@ -363,18 +392,25 @@ def transcribe_video(
         progress_callback: Optional callback(progress, message)
         segmentation_mode: "backend", "sentence", "phrase", or "fixed"
         segment_max_seconds: Max segment length for fixed segmentation
+        cloud_model: Optional frozen Groq model; defaults to current settings
+        on_execution: Reports actual backend/model before extraction or inference
 
     Returns:
         List of TranscriptSegment objects
     """
     has_audio = _has_audio_stream(video_path)
     if has_audio is False:
+        if on_execution:
+            on_execution({"backend": "audio-probe", "model": None, "input_mode": "no-audio"})
         logger.info("Skipping transcription for %s: no audio track found", video_path)
         if progress_callback:
             progress_callback(1.0, "No audio track found")
         return []
 
     resolved = _resolve_backend(backend)
+    actual_model = transcription_model(resolved, model_name, cloud_model)
+    if on_execution:
+        on_execution({"backend": resolved, "model": actual_model, "input_mode": "audio"})
 
     if resolved == "groq":
         return _transcribe_cloud_groq(
@@ -383,6 +419,7 @@ def transcribe_video(
             segmentation_mode,
             segment_max_seconds,
             progress_callback,
+            cloud_model=actual_model,
         )
 
     if resolved == "mlx-whisper":
@@ -565,6 +602,9 @@ def transcribe_clip(
     backend: str = "auto",
     segmentation_mode: str = "backend",
     segment_max_seconds: float = 12.0,
+    *,
+    cloud_model: str | None = None,
+    on_execution: ExecutionCallback | None = None,
 ) -> list[TranscriptSegment]:
     """Transcribe a specific clip range from a video.
 
@@ -579,16 +619,23 @@ def transcribe_clip(
         backend: "auto", "faster-whisper", "mlx-whisper", or "groq"
         segmentation_mode: "backend", "sentence", "phrase", or "fixed"
         segment_max_seconds: Max segment length for fixed segmentation
+        cloud_model: Optional frozen Groq model; defaults to current settings
+        on_execution: Reports actual backend/model before extraction or inference
 
     Returns:
         List of TranscriptSegment objects with times relative to clip start
     """
     has_audio = _has_audio_stream(source_path)
     if has_audio is False:
+        if on_execution:
+            on_execution({"backend": "audio-probe", "model": None, "input_mode": "no-audio"})
         logger.info("Skipping clip transcription for %s: no audio track found", source_path)
         return []
 
     resolved = _resolve_backend(backend)
+    actual_model = transcription_model(resolved, model_name, cloud_model)
+    if on_execution:
+        on_execution({"backend": resolved, "model": actual_model, "input_mode": "audio"})
 
     # Extract audio segment to temp file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -625,6 +672,7 @@ def transcribe_clip(
                 language,
                 segmentation_mode,
                 segment_max_seconds,
+                cloud_model=actual_model,
             )
 
         if resolved == "mlx-whisper":
@@ -760,6 +808,8 @@ def _transcribe_cloud_groq(
     segmentation_mode: str = "backend",
     segment_max_seconds: float = 12.0,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    *,
+    cloud_model: str | None = None,
 ) -> list[TranscriptSegment]:
     """Transcribe using Groq cloud API via LiteLLM.
 
@@ -776,6 +826,8 @@ def _transcribe_cloud_groq(
         List of TranscriptSegment objects
     """
     from core.settings import get_groq_api_key
+
+    groq_model = transcription_model("groq", "", cloud_model)
 
     api_key = get_groq_api_key()
     if not api_key:
@@ -833,14 +885,6 @@ def _transcribe_cloud_groq(
     try:
         if progress_callback:
             progress_callback(0.3, "Sending to Groq cloud...")
-
-        # Load cloud model from settings
-        try:
-            from core.settings import load_settings
-            settings = load_settings()
-            groq_model = getattr(settings, "transcription_cloud_model", _DEFAULT_GROQ_MODEL)
-        except Exception:
-            groq_model = _DEFAULT_GROQ_MODEL
 
         import litellm
 
