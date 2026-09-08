@@ -119,10 +119,13 @@ class SequenceExporter:
                     raise ValueError("Export output must not overwrite source media")
             if plan.music_path is not None and plan.music_path.resolve() == config.output_path.resolve():
                 raise ValueError("Export output must not overwrite the music source")
-            widths = [source.width for source in sources.values() if source.width]
-            heights = [source.height for source in sources.values() if source.height]
-            widths.extend(frame.width for frame in (frames or {}).values() if frame.width)
-            heights.extend(frame.height for frame in (frames or {}).values() if frame.height)
+            used_sources = {segment.source_id for segment in plan.segments if segment.kind == "video"}
+            used_frames = {entry.frame_id for entry in sequence.get_all_clips() if entry.is_frame_entry}
+            media_dimensions = [source for sid, source in sources.items() if sid in used_sources]
+            widths = [source.width for source in media_dimensions if source.width]
+            heights = [source.height for source in media_dimensions if source.height]
+            widths.extend(frame.width for fid, frame in (frames or {}).items() if fid in used_frames and frame.width)
+            heights.extend(frame.height for fid, frame in (frames or {}).items() if fid in used_frames and frame.height)
             config = replace(
                 config, width=config.width or max(widths, default=1280),
                 height=config.height or max(heights, default=720),

@@ -21,7 +21,7 @@ FIELDS = {"brightness": "average_brightness", "volume": "rms_volume"}
 
 def scalar_runtime(operation: ScalarOperation) -> dict:
     if operation == "brightness":
-        return model_runtime("opencv-gray-mean/v1", ("opencv-python", "numpy"))
+        return model_runtime("opencv-gray-mean/v2", ("opencv-python", "numpy"))
     if operation == "volume":
         return {
             "name": "ffmpeg-volumedetect/v1",

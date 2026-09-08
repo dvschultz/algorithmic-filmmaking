@@ -397,6 +397,19 @@ replace the final full-suite and code-review gates.
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
+**2026-09-08 review fixes:** The final review found five defects. Four are now
+fixed: brightness rejects failed frame seeks and uses a new runtime identity;
+legacy face CLI tests isolate their actual CLI cache; automatic export dimensions
+use only sequence media; GUI render-plan mapping omits filesystem preflight while
+render workers retain it. The seek and four decoded export regressions failed
+before their fixes, and the CLI failures reproduced after an earlier CLI import.
+Regression runs passed 157, 61, and 88 tests (overlapping groups). Scoped typing
+passes for scalars and export; changed non-window files pass Ruff. MainWindow's
+six unused-import diagnostics are identical to the pre-fix baseline. Artifact
+hydration still runs on the GUI load path and remains the fifth open review fix.
+The full suite at `9b798a5` finished with 6,096 passed, two skipped and the two CLI
+fixture failures; a new full run is required after the remaining implementation.
+
 **2026-09-08 full-suite checkpoint:** The run started at `52cab7a` completed
 with 5,942 passed, two skipped, and one failed test. The failure was
 `test_queued_model_is_resolved_once`: its settings stub omitted `cache_dir`,

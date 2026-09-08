@@ -38,7 +38,7 @@ def test_preview_readiness_requires_retained_verified_and_unchanged_file(tmp_pat
     assert not MainWindow._has_ready_sequence_preview(window)
 
 
-def test_scrub_uses_the_compiled_entry_at_a_rounded_cut(tmp_path):
+def test_scrub_uses_the_compiled_entry_at_a_rounded_cut(tmp_path, monkeypatch):
     from unittest.mock import Mock
     from core.project import Project
     from models.clip import Clip, Source
@@ -67,6 +67,10 @@ def test_scrub_uses_the_compiled_entry_at_a_rounded_cut(tmp_path):
         ),
         _sequence_preview_source_id=None, _update_sequence_chromatic_bar=Mock(), status_bar=Mock(),
     )
+    def no_filesystem_preflight(*args, **kwargs):
+        raise AssertionError("Scrub mapping must not inspect media files")
+
+    monkeypatch.setattr(Path, "is_file", no_filesystem_preflight)
     MainWindow._on_timeline_playhead_changed(window, 0.99)
     assert window._preview_sync_clip is second
     assert window.sequence_tab.video_player.load_video.call_args.args[0].name == "second.mp4"

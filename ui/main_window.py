@@ -5057,7 +5057,7 @@ class MainWindow(QMainWindow):
         from models.media_time import VideoRange, frame_boundary
         sequence, sources, clips, frames = self._get_sequence_preview_inputs()
         try:
-            plan = compile_render_plan(sequence, sources, clips, frames=frames)
+            plan = compile_render_plan(sequence, sources, clips, frames=frames, check_media=False)
         except ValueError as exc:
             self.sequence_tab.video_player.stop()
             self.status_bar.showMessage(str(exc))
@@ -5222,7 +5222,7 @@ class MainWindow(QMainWindow):
         """Return (signature, path, settings) for the active sequence preview."""
         sequence, sources, clips, frames = self._get_sequence_preview_inputs()
         from core.render_plan import compile_render_plan
-        compile_render_plan(sequence, sources, clips, frames=frames)
+        compile_render_plan(sequence, sources, clips, frames=frames, check_media=False)
         settings = SequencePreviewSettings()
         signature = compute_sequence_preview_signature(
             sequence=sequence,
@@ -5293,7 +5293,7 @@ class MainWindow(QMainWindow):
 
         from core.render_plan import compile_render_plan
         try:
-            compile_render_plan(sequence, sources, clips, frames=frames)
+            compile_render_plan(sequence, sources, clips, frames=frames, check_media=False)
         except ValueError as exc:
             self._on_sequence_preview_error(str(exc))
             return

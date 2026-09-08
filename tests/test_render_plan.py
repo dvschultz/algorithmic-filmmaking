@@ -56,6 +56,16 @@ def test_plan_is_detached_and_immutable(tmp_path):
         plan.segments[0].reverse = True
 
 
+def test_gui_mapping_can_resolve_offline_media_but_render_preflight_rejects_it(tmp_path):
+    project = media_project(tmp_path, (24,))
+    project.sources[0].file_path.unlink()
+    plan = compile_project(project, check_media=False)
+    assert plan.source_frame_at(0) == 240
+    assert plan.media_stamps == ()
+    with pytest.raises(RenderPlanError, match="missing"):
+        compile_project(project)
+
+
 def test_gap_uses_output_rate_and_edl_retains_record_position(tmp_path):
     project = media_project(tmp_path, (24,))
     entry = project.sequence.get_all_clips()[0]

@@ -116,6 +116,31 @@ def test_export_retains_first_and_last_selected_source_frames(ffmpeg, tmp_path):
     assert decoded_ids(ffmpeg, output) == list(range(12, 24))
 
 
+@pytest.mark.parametrize("unused_kind", ["source", "frame"])
+@pytest.mark.parametrize("unused_width", [128, 129])
+def test_auto_export_dimensions_ignore_unused_library_media(ffmpeg, tmp_path, unused_kind, unused_width):
+    from models.frame import Frame
+
+    source = make_numbered_video(ffmpeg, tmp_path / "source.mp4", count=4)
+    clip = Clip(source_id=source.id, start_frame=0, end_frame=4)
+    project = Project(sources=[source], clips=[clip], sequence=Sequence(fps=24))
+    project.add_to_sequence([clip.id])
+    frames = {}
+    if unused_kind == "source":
+        project.add_source(Source(file_path=tmp_path / "unused.mp4", width=unused_width, height=128))
+    else:
+        unused = Frame(file_path=tmp_path / "unused.png", width=unused_width, height=128)
+        frames[unused.id] = unused
+    output = tmp_path / "export.mp4"
+    assert SequenceExporter(ffmpeg).export(
+        project.sequence, project.sources_by_id, {clip.id: (clip, source)},
+        ExportConfig(output_path=output, fps=24, crf=0), frames=frames,
+    )
+    # Decoding at the original 64x64 raster proves the selected media set controls
+    # dimensions as well as preserving the four source images.
+    assert decoded_ids(ffmpeg, output) == list(range(4))
+
+
 def test_silent_video_then_audio_video_retains_audio_at_its_cut(ffmpeg, tmp_path):
     import numpy as np
 

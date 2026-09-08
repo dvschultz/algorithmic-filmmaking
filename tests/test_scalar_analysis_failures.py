@@ -18,7 +18,7 @@ def test_brightness_failure_is_not_a_neutral_measurement(
     reads = [(True, frame), (False, None)] if failure == "partial" else [(False, None)]
     cap = SimpleNamespace(
         isOpened=lambda: failure != "open",
-        set=Mock(),
+        set=Mock(return_value=True),
         read=Mock(side_effect=reads),
         release=Mock(),
     )
@@ -26,6 +26,68 @@ def test_brightness_failure_is_not_a_neutral_measurement(
     with pytest.raises(RuntimeError):
         color.get_average_brightness(tmp_path / "video.mp4", 0, 2, 30)
     cap.release.assert_called_once()
+
+
+def test_failed_seek_cannot_publish_verified_brightness(tmp_path, monkeypatch):
+    import numpy as np
+    from core.analysis_availability import scalar_analysis_is_complete
+    from core.operations.scalars import ScalarApplication, run_scalars, scalar_task
+    from core.project import Project
+    from models.clip import Clip, Source
+
+    source = Source(file_path=tmp_path / "video.mp4", fps=30)
+    source.file_path.write_bytes(b"media")
+    clip = Clip(source_id=source.id, start_frame=240, end_frame=270)
+    clip.average_brightness = 0.75
+    project = Project(sources=[source], clips=[clip])
+    cap = SimpleNamespace(
+        isOpened=lambda: True,
+        set=Mock(return_value=False),
+        read=Mock(return_value=(True, np.zeros((2, 2, 3), dtype=np.uint8))),
+        release=Mock(),
+    )
+    monkeypatch.setattr("core.analysis.color.cv2.VideoCapture", lambda _: cap)
+    task = scalar_task(clip, source, "brightness", skip_existing=False)
+    application = ScalarApplication(project, task)
+    outcome = run_scalars((task,))[0]
+    assert outcome.status == "failed"
+    assert application.apply(project, outcome)
+    assert clip.average_brightness == 0.75
+    assert clip.analysis_records["brightness"].state == "failed"
+    assert not scalar_analysis_is_complete(clip, source, "brightness")
+    cap.read.assert_not_called()
+    cap.release.assert_called_once()
+
+
+def test_brightness_from_unchecked_seek_runtime_requires_recomputation(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from core.analysis_availability import scalar_analysis_is_complete
+    from core.operations.scalars import ScalarApplication, run_scalars, scalar_task
+    from core.project import Project
+    from models.analysis_record import AnalysisIdentity
+    from models.clip import Clip, Source
+
+    source = Source(file_path=tmp_path / "video.mp4", fps=30)
+    source.file_path.write_bytes(b"media")
+    clip = Clip(source_id=source.id, start_frame=240, end_frame=270)
+    project = Project(sources=[source], clips=[clip])
+    provider = Mock(return_value=0.25)
+    monkeypatch.setattr("core.analysis.color.get_average_brightness", provider)
+    task = scalar_task(clip, source, "brightness")
+    assert ScalarApplication(project, task).apply(project, run_scalars((task,))[0])
+    previous = clip.analysis_records["brightness"]
+    identity = previous.identity.to_dict()
+    identity["model"]["name"] = "opencv-gray-mean/v1"
+    clip.analysis_records["brightness"] = replace(previous, identity=AnalysisIdentity.from_dict(identity))
+    assert not scalar_analysis_is_complete(clip, source, "brightness")
+    provider.return_value = 0.75
+    task = scalar_task(clip, source, "brightness")
+    outcome = run_scalars((task,))[0]
+    assert outcome.status == "succeeded"
+    assert ScalarApplication(project, task).apply(project, outcome)
+    assert clip.average_brightness == 0.75
+    assert provider.call_count == 2
+    assert scalar_analysis_is_complete(clip, source, "brightness")
 
 
 @pytest.mark.parametrize("failure", ["exit", "missing", "nan", "timeout"])

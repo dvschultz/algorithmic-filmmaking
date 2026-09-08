@@ -18,8 +18,9 @@ async def test_legacy_faces_recompute_across_surfaces(request, tmp_path, monkeyp
     from core.analysis_availability import operation_is_complete_for_clip
 
     project, provider, _ = request.getfixturevalue("face_setup")
-    settings = Settings(cache_dir=tmp_path, model_cache_dir=tmp_path)
+    settings = Settings(cache_dir=tmp_path, thumbnail_cache_dir=tmp_path, model_cache_dir=tmp_path)
     monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    monkeypatch.setattr("cli.commands.analyze.CLIConfig.load", lambda: settings)
     clip = project.clips[0]
     legacy = [] if empty else [{"bbox": [1, 2, 3, 4], "embedding": [0.5] * 512, "confidence": 0.9, "frame_number": clip.start_frame}]
     clip.face_embeddings = legacy

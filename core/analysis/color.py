@@ -467,7 +467,8 @@ def get_average_brightness(
 
         luminance_values: list[float] = []
         for pos in sample_positions:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+            if not cap.set(cv2.CAP_PROP_POS_FRAMES, pos):
+                raise RuntimeError(f"Cannot seek to brightness sample at frame {pos}")
             ret, frame = cap.read()
             if not ret or frame is None:
                 raise RuntimeError(f"Cannot decode brightness sample at frame {pos}")
