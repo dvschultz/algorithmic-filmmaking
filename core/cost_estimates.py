@@ -83,7 +83,8 @@ OPERATION_LABELS: dict[str, str] = {
     "transcription_with_words": "Word-level alignment",
 }
 
-# Map operation key to a function that checks if a clip has that metadata
+# Presence checks for display and operation labels; estimates use verified
+# completion below for migrated operations.
 METADATA_CHECKS: dict[str, Callable[[Any], bool]] = {
     "colors": lambda clip: bool(clip.dominant_colors),
     "shots": lambda clip: bool(clip.shot_type) or bool(clip.cinematography),
@@ -224,6 +225,12 @@ def estimate_sequence_cost(
         return []
 
     estimates: list[OperationEstimate] = []
+    from core.settings import load_settings
+    from core.analysis_availability import (
+        VERIFIED_ANALYSIS_OPERATIONS, compute_operation_need_counts, word_timing_is_complete,
+    )
+    configured_settings = load_settings()
+    settings = settings if settings is not None else configured_settings
     for op_key in required:
         check = METADATA_CHECKS.get(op_key)
         if check is None:
@@ -239,18 +246,25 @@ def estimate_sequence_cost(
                 clip, sources.get(clip.source_id),
                 sample_interval=face_sample_interval, runtime=runtime,
             ) for clip in clips)
-        elif op_key in ("brightness", "volume"):
-            from core.analysis_availability import compute_operation_need_counts
-
+        elif op_key in VERIFIED_ANALYSIS_OPERATIONS:
             needing = compute_operation_need_counts(
                 clips, [op_key], sources_by_id=sources_by_id,
             )[op_key]
+        elif op_key == "transcription_with_words":
+            needing = sum(
+                not word_timing_is_complete(clip, (sources_by_id or {}).get(getattr(clip, "source_id", "")))
+                for clip in clips
+            )
         else:
             needing = sum(1 for clip in clips if not check(clip))
+        tier = _resolve_tier(op_key, tier_overrides, settings)
+        if tier != _resolve_tier(op_key, None, configured_settings):
+            # Current completion describes the configured backend. An explicit
+            # different backend needs its own verified result.
+            needing = total
         if needing == 0:
             continue
 
-        tier = _resolve_tier(op_key, tier_overrides, settings)
         time_info = TIME_PER_CLIP.get(op_key, {})
         cost_info = COST_PER_CLIP.get(op_key, {})
 

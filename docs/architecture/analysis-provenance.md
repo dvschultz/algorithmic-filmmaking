@@ -772,6 +772,14 @@ run passes, including cancellation, changed targets/projects/paths, saved reuse,
 and durable-plan checks. Three changed modules pass scoped typing and changed-file
 Ruff is clean.
 
+Sequence cost gates now use shared verified completion across migrated operation
+families and require verified word timing for alignment. Defaults read current
+settings; explicit tier changes require a new result. Valid empty OCR, gaze, and
+transcription results count as complete, while legacy projections and changed
+ranges require work. Twelve cases reproduced before migration; the regression
+run passed 128 tests with scoped typing and changed-file Ruff clean. Same-tier
+unsaved model-setting overrides remain part of the cross-consumer option audit.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

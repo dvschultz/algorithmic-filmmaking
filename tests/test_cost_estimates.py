@@ -77,19 +77,19 @@ class TestStoryteller:
         assert est.clips_needing == 10
         assert est.clips_total == 10
 
-    def test_some_clips_have_description(self):
+    def test_legacy_descriptions_still_need_analysis(self):
         clips = [MockClip() for _ in range(10)]
         clips[0].description = "A dog"
         clips[1].description = "A cat"
         clips[2].description = "A bird"
         result = estimate_sequence_cost("storyteller", clips)
         assert len(result) == 1
-        assert result[0].clips_needing == 7
+        assert result[0].clips_needing == 10
 
-    def test_all_clips_have_description(self):
+    def test_all_legacy_descriptions_still_need_analysis(self):
         clips = [MockClip(description=f"Desc {i}") for i in range(5)]
         result = estimate_sequence_cost("storyteller", clips)
-        assert result == []
+        assert result[0].clips_needing == 5
 
     def test_local_tier_is_free(self):
         clips = [MockClip() for _ in range(10)]
@@ -107,16 +107,16 @@ class TestStoryteller:
 class TestShotType:
     """shot_type requires 'shots' analysis."""
 
-    def test_clips_with_shot_type_are_ready(self):
+    def test_legacy_shot_types_need_verification(self):
         clips = [MockClip(shot_type="wide") for _ in range(5)]
         result = estimate_sequence_cost("shot_type", clips)
-        assert result == []
+        assert result[0].clips_needing == 5
 
-    def test_clips_with_cinematography_are_ready(self):
-        """Cinematography analysis satisfies the 'shots' check."""
+    def test_legacy_cinematography_does_not_verify_shots(self):
+        """An unrelated legacy projection cannot establish shot provenance."""
         clips = [MockClip(cinematography=object()) for _ in range(5)]
         result = estimate_sequence_cost("shot_type", clips)
-        assert result == []
+        assert result[0].clips_needing == 5
 
     def test_mixed_clips(self):
         clips = [
@@ -127,7 +127,7 @@ class TestShotType:
         ]
         result = estimate_sequence_cost("shot_type", clips)
         assert len(result) == 1
-        assert result[0].clips_needing == 2
+        assert result[0].clips_needing == 4
         assert result[0].clips_total == 4
 
 
@@ -145,7 +145,7 @@ class TestColor:
         clips = [MockClip(dominant_colors=[(255, 0, 0)])] * 3 + [MockClip()] * 2
         result = estimate_sequence_cost("color", clips)
         assert len(result) == 1
-        assert result[0].clips_needing == 2
+        assert result[0].clips_needing == 5
 
 
 class TestExquisiteCorpus:

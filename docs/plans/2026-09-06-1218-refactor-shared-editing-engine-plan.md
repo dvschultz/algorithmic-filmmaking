@@ -547,7 +547,14 @@ weights, pack membership, range, sampling, and packages invalidate reuse. Model
 loading also respects cache-root changes, including changes during initialization.
 The relocation regression run passed 203 tests plus 20 follow-ups, with both
 provider and record modules passing scoped typing and changed-file Ruff clean.
-Cost-check migration for the other analysis families remains pending.
+Cost gates now use shared verified completion for all registered migrated analysis
+families and verified word timing for alignment. Existing fields alone no longer
+remove estimated work. Defaults read current settings, and an explicit different
+tier requires its own result. Empty OCR/gaze/transcription, cloud description/rich
+analysis, stale ranges, and legacy projections have focused coverage. Twelve cases
+failed before this migration; 128 regression tests pass, with scoped cost-module
+typing and changed-file Ruff clean. Same-tier unsaved model-setting overrides and
+the remaining cross-consumer source/option audit still need verification.
 
 Brightness/volume provider preparation: failed decode/probe/FFmpeg operations now
 raise instead of becoming neutral brightness or missing-audio measurements.
