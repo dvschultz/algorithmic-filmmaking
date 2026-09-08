@@ -556,14 +556,24 @@ class TestCostEstimationOverride:
         assert result[0].operation == "brightness"
         assert result[0].clips_needing == 1
 
-    def test_override_required_skips_already_analyzed(self):
-        """Clips with existing data should not count as needing analysis."""
+    def test_override_required_skips_only_verified_analysis(self, tmp_path, monkeypatch):
+        """Reference-guided estimates require provenance for scalar projections."""
         from core.cost_estimates import estimate_sequence_cost
+        from core.project import Project
+        from core.spine.analyze import analyze_scalars
 
         clip = _make_clip(average_brightness=0.5)
-        result = estimate_sequence_cost(
-            "reference_guided",
-            [clip],
-            override_required=["brightness"],
-        )
-        assert result == []  # Already has brightness
+        source = Source(id=clip.source_id, file_path=tmp_path / "video.mp4", fps=30)
+        source.file_path.write_bytes(b"video")
+        project = Project(sources=[source], clips=[clip])
+
+        def estimate():
+            return estimate_sequence_cost(
+                "reference_guided", [clip], override_required=["brightness"],
+                sources_by_id=project.sources_by_id,
+            )
+
+        assert estimate()[0].clips_needing == 1
+        monkeypatch.setattr("core.analysis.color.get_average_brightness", lambda *args, **kwargs: 0.5)
+        assert analyze_scalars(project, "brightness")["result"]["succeeded"]
+        assert estimate() == []
