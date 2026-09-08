@@ -635,7 +635,10 @@ without automatic reuse. Transformed-clip production now also uses verified
 managed media with content/range/runtime identity and staged publication. Sequence
 and undo references, save/export leases, portable restoration, and cache eviction
 are wired. Batch leases protect the handoff from rendering to project ownership.
-The complete cross-consumer audit, including legacy prerender playback, remains.
+Legacy prerender playback now routes transforms through the verified shared preview
+instead of trusting file existence; untransformed playback uses the original source.
+Seven regressions reproduced the old behavior and 100 playback/cache tests pass.
+The rest of the cross-consumer audit remains.
 Description providers expose actual execution model/backend and input mode,
 including local model and cloud video-to-frame fallbacks. The shared operation
 and direct headless entry point use verified records and semantic reuse, including

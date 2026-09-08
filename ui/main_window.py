@@ -153,11 +153,13 @@ def _resolve_playback_source(seq_clip, source, timeline_frame: int, timeline_fps
     """Resolve a source file and its explicit source/timeline playback range."""
     from core.sequence_time import playback_range
 
+    if any(getattr(seq_clip, transform, False) for transform in ("hflip", "vflip", "reverse")):
+        raise ValueError("Transformed clips require a rendered sequence preview")
     media = playback_range(seq_clip, source.fps)
     source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps, timeline_fps)
-    prerendered = getattr(seq_clip, "prerendered_path", None)
-    if prerendered and Path(prerendered).exists():
-        return Path(prerendered), 0.0, float(media.duration), source_seconds - float(media.start)
+    # A legacy path (or a content-only artifact reference) does not establish
+    # which source, range, and transforms produced that render. Transformed
+    # playback goes through the shared preview plan and its verified cache.
     return source.file_path, float(media.start), float(media.end), source_seconds
 
 
@@ -5441,6 +5443,11 @@ class MainWindow(QMainWindow):
             self.sequence_tab.video_player.stop()  # Shows black
             self._update_sequence_chromatic_bar(None)
             self._playback_timer.start()
+            return
+
+        if any(getattr(seq_clip, transform, False) for transform in ("hflip", "vflip", "reverse")):
+            self._pause_playback()
+            self._start_sequence_preview_render(play_after_frame=frame)
             return
 
         self._current_playback_clip = seq_clip

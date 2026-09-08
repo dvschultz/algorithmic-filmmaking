@@ -814,6 +814,15 @@ typing and changed-file Ruff pass.
 
 ## Remaining U10 work
 
+Legacy direct playback no longer treats an existing prerender path as verified
+output. Untransformed entries resolve the original source and explicit range;
+transformed entries pause playback and request the shared sequence preview,
+which validates the current plan and cache identity. Direct source resolution
+rejects transforms so no caller can silently drop them. Seven regressions failed
+before the fix; 100 playback, render-plan, prerender, and media-cache tests pass.
+The new tests and diff checks are clean; MainWindow retains the same six unused
+imports reported by Ruff before this change.
+
 Cost estimates now pass the requested settings through shared completion and
 provider-option resolution. Unsaved model or input-mode changes within the same
 tier require analysis, while a matching explicit request remains reusable even
@@ -855,7 +864,7 @@ place, not evidence that receipt pruning is implemented.
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
-- Finish the cross-consumer reuse/projection audit, including legacy prerender playback.
+- Finish the remaining cross-consumer reuse/projection audit.
   Add safe computed-receipt pruning and audit legacy job-row ownership;
   existing rows are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional
