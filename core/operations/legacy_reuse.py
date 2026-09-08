@@ -6,13 +6,20 @@ migration. Publication uses the normal operation's stale-input owner guard.
 
 from dataclasses import replace
 import json
+from math import isfinite
 from threading import Event
+from typing import TYPE_CHECKING
 
 from core.analysis_records import AnalysisFingerprints, AnalysisInput
 from core.operations.colors import ColorRequest, color_identity
 from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
+
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume")
+
+if TYPE_CHECKING:
+    from core.operations.scalars import ScalarOutcome, ScalarTask
 
 
 def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, inputs: AnalysisInput) -> str:
@@ -90,4 +97,49 @@ def accept_legacy_embeddings(tasks: tuple[EmbeddingTask, ...], *, cancel_event: 
             outcomes.append(EmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled"))
         except (ValueError, OSError, TypeError, KeyError) as exc:
             outcomes.append(EmbeddingOutcome(task.clip_id, "failed", code="legacy_reuse_unavailable", message=str(exc)))
+    return tuple(outcomes)
+
+
+def accept_legacy_scalars(tasks: "tuple[ScalarTask, ...]", *, cancel_event: Event | None = None) -> "tuple[ScalarOutcome, ...]":
+    """Accept finite legacy measurements, including zero, without probing media."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.scalars import FIELDS, ScalarOutcome, scalar_parameters, scalar_runtime, scalar_sampling, scalar_value
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            snapshot = AnalysisSnapshot.from_json(task.snapshot_json)
+            region = json.loads(snapshot.inputs.range_json)
+            start, end, fps = region["start_frame"], region["end_frame"], region["fps"]
+            if (
+                not any(role == "video" for role, _, _ in snapshot.inputs.files)
+                or type(start) is not int or type(end) is not int
+                or start < 0 or end <= start or isinstance(fps, bool)
+                or not isinstance(fps, (int, float)) or not isfinite(fps) or fps <= 0
+            ):
+                raise ValueError("A valid source range is required for scalar reuse")
+            raw = json.loads(snapshot.value_json)[FIELDS[task.operation]]
+            # A legacy None volume cannot distinguish an absent measurement
+            # from a verified no-audio result. Recompute to establish that fact.
+            if raw is None:
+                raise ValueError("No legacy measurement is available; recompute analysis")
+            value = scalar_value(task.operation, raw)
+            identity = fingerprints.identity(
+                snapshot.inputs, operation=task.operation,
+                model=scalar_runtime(task.operation), parameters=scalar_parameters(task),
+                sampling=scalar_sampling(task.operation),
+            )
+            record_json = _accept(
+                json.dumps(snapshot.record.to_dict()) if snapshot.record else None,
+                value, identity, snapshot.inputs,
+            )
+            outcomes.append(ScalarOutcome(task.clip_id, task.operation, "succeeded", record_json))
+        except FingerprintCancelled:
+            outcomes.append(ScalarOutcome(task.clip_id, task.operation, "unprocessed", message="Cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(ScalarOutcome(task.clip_id, task.operation, "failed", message=str(exc)))
     return tuple(outcomes)

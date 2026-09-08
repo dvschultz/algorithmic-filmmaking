@@ -59,7 +59,7 @@ class AgentLegacyReuse(RetiringQObject):
                     if outcome.status == "succeeded" and self.worker.application.apply(self.project, outcome):
                         accepted.append(outcome.clip_id)
                     else:
-                        failed.append({"clip_id": outcome.clip_id, "message": outcome.message or outcome.code or "Target changed"})
+                        failed.append({"clip_id": outcome.clip_id, "message": outcome.message or getattr(outcome, "code", None) or "Target changed"})
             self.result = {"success": not failed, "result": {"accepted": accepted, "failed": failed, "provenance": "unknown", "saved": False}}
             self.window._update_window_title()
         except Exception as exc:

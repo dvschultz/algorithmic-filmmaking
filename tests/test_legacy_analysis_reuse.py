@@ -46,19 +46,21 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path):
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume"])
+def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
     from core.project import Project
 
     project = project_with_thumbnails(tmp_path, 1)
     project.clips[0].dominant_colors = [(1, 2, 3)]
+    project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     path = tmp_path / "project.json"
     assert project.save(path)
-    result = CliRunner().invoke(analyze, ["accept-legacy", str(path), "--operation", "colors"])
+    result = CliRunner().invoke(analyze, ["accept-legacy", str(path), "--operation", operation])
     assert result.exit_code == 0, result.output
     loaded = Project.load(path)
-    record = loaded.clips[0].analysis_records["colors"]
+    record = loaded.clips[0].analysis_records[operation]
     assert record.provenance == "unknown" and record.legacy_reuse
     loaded.close_writer()
 
@@ -124,3 +126,45 @@ def test_cancelled_acceptance_leaves_legacy_values_unbound(tmp_path):
     assert result["unprocessed"] == [project.clips[0].id]
     assert not result["accepted"]
     assert "colors" not in project.clips[0].analysis_records
+
+
+@pytest.mark.parametrize("operation,field", [("brightness", "average_brightness"), ("volume", "rms_volume")])
+def test_legacy_zero_scalar_reuses_and_invalidates(tmp_path, operation, field):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.spine.analyze import analyze_scalars
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    setattr(clip, field, 0.0)
+    assert not operation_is_complete_for_clip(operation, clip, source=project.sources[0])
+    assert accept_legacy_analysis(project, operation)["accepted"] == [clip.id]
+    record = clip.analysis_records[operation]
+    assert record.provenance == "unknown" and record.legacy_reuse
+    assert operation_is_complete_for_clip(operation, clip, source=project.sources[0])
+    with patch("core.analysis.color.get_average_brightness", side_effect=AssertionError("no inference")), patch("core.analysis.audio.extract_clip_volume", side_effect=AssertionError("no inference")):
+        result = analyze_scalars(project, operation)["result"]
+    assert len(result["skipped"]) == 1
+    clip.start_frame += 1
+    assert not operation_is_complete_for_clip(operation, clip, source=project.sources[0])
+
+
+@pytest.mark.parametrize("operation", ["brightness", "volume"])
+def test_missing_scalar_is_not_explicitly_accepted(tmp_path, operation):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+
+    project = project_with_thumbnails(tmp_path, 1)
+    result = accept_legacy_analysis(project, operation)
+    assert result["accepted"] == [] and len(result["failed"]) == 1
+    assert operation not in project.clips[0].analysis_records
+
+
+@pytest.mark.parametrize("operation", ["brightness", "volume"])
+def test_scalar_reuse_requires_source_even_when_binaries_exist(tmp_path, operation):
+    from core.operations.legacy_reuse import accept_legacy_scalars
+    from core.operations.scalars import scalar_task
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.average_brightness = clip.rms_volume = 0.0
+    outcome = accept_legacy_scalars((scalar_task(clip, None, operation),))[0]
+    assert outcome.status == "failed" and outcome.record_json is None

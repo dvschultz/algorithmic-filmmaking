@@ -58,22 +58,24 @@ def lifespan_ctx(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path):
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume"])
+async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path, operation):
     from core.project import Project
     from tests.test_spine_analyze import _build_project
     from scene_ripper_mcp.tools.jobs import start_accept_legacy_analysis
 
     ctx, store, _ = lifespan_ctx
     project = _build_project(tmp_path, 1, populate_colors=1)
+    project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     path = tmp_path / "legacy.sceneripper"
     assert project.save(path)
-    response = json.loads(await start_accept_legacy_analysis(str(path), "colors", ctx=ctx))
+    response = json.loads(await start_accept_legacy_analysis(str(path), operation, ctx=ctx))
     assert response["success"], response
     _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
     output = json.loads(await get_job_result(response["task_id"], ctx=ctx))
     assert output["result"]["result"]["accepted"] == ["c-0"]
     loaded = Project.load(path)
-    record = loaded.clips[0].analysis_records["colors"]
+    record = loaded.clips[0].analysis_records[operation]
     assert record.legacy_reuse and record.provenance == "unknown"
     loaded.close_writer()
 

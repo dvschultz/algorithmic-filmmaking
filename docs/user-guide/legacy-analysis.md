@@ -4,12 +4,14 @@ Older projects may contain analysis values without a record of the inputs or
 model that produced them. These values remain visible, but they do not count as
 completed analysis until you recompute them or explicitly accept reuse.
 
-For colors and compatible DINO embeddings, the CLI provides an explicit reuse
-command:
+For colors, brightness, volume, and compatible DINO embeddings, the CLI provides
+an explicit reuse command:
 
 ```sh
 scene_ripper analyze accept-legacy project.json --operation colors --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation embeddings --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation brightness --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation volume --clip-id CLIP_ID
 ```
 
 Omit `--clip-id` to process all clips. The command reports accepted and failed
@@ -17,6 +19,9 @@ clip IDs and saves accepted decisions. It reads and fingerprints the current
 media but does not run inference. Color reuse binds the default five-color
 analysis configuration. Embeddings must have a compatible recorded model and
 valid vector; an unknown model requires recomputation.
+Brightness binds the default five-sample configuration. Zero brightness or
+volume is a valid measurement. An absent legacy volume value requires
+recomputation because it cannot distinguish missing analysis from no audio.
 
 An accepted value retains **unknown provenance**. Acceptance records your
 decision to use it with the current inputs; it does not establish how the old
@@ -32,7 +37,7 @@ selected-media changes while queued. Accepted decisions are saved under the
 project writer lock.
 
 In the desktop app, select clips in Cut or Analyze and choose **Edit → Reuse
-Legacy Analysis…**. Choose colors or thumbnail embeddings, review the explanation,
+Legacy Analysis…**. Choose an operation, review the explanation,
 and click **Reuse selected values**. Media checks run in the background. Cancel
 discards pending decisions; changed clips or a replaced project reject late
 results. Save the project to keep accepted decisions.

@@ -1,6 +1,6 @@
 """Explicit legacy-analysis decisions shared by headless entry points."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from threading import Event
 
 if TYPE_CHECKING:
@@ -15,12 +15,13 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import accept_legacy_colors, accept_legacy_embeddings
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars
+    from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
     project.session.assert_owner()
-    if operation not in ("colors", "embeddings"):
-        raise ValueError("Explicit legacy reuse currently supports colors and embeddings")
+    if operation not in LEGACY_REUSE_OPERATIONS:
+        raise ValueError("Unsupported legacy reuse operation")
     ids = list(dict.fromkeys(clip_ids)) if clip_ids is not None else list(project.clips_by_id)
     result: dict = {"accepted": [], "failed": [], "unprocessed": [], "provenance": "unknown"}
     for index, cid in enumerate(ids):
@@ -34,6 +35,17 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation in ("brightness", "volume"):
+            task = scalar_task(clip, project.sources_by_id.get(clip.source_id), cast(ScalarOperation, operation))
+            scalar_application = ScalarApplication(project, task)
+            scalar = accept_legacy_scalars((task,), cancel_event=cancel_event)[0]
+            if scalar.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif scalar.status == "succeeded" and scalar_application.apply(project, scalar):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": scalar.message or "Target changed"})
             continue
         if operation == "colors":
             request = color_request(project, [cid], skip_existing=False)

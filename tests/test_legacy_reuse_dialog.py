@@ -8,7 +8,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("operation", ["colors", "embeddings"])
+@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume"])
 def test_dialog_publication_and_cancellation(tmp_path, operation):
     code = r'''
 import sys
@@ -33,9 +33,10 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     clip.dominant_colors = [(1, 2, 3)]
     clip.embedding = [0.1] * 768
     clip.embedding_model = DINOV2_TAG
+    clip.average_brightness = clip.rms_volume = 0.0
     operation = sys.argv[2]
     dialog = LegacyReuseDialog(owner, [clip.id])
-    dialog.operation.setCurrentIndex(0 if operation == 'colors' else 1)
+    dialog.operation.setCurrentIndex(dialog.operation.findData(operation))
     entered, release = threading.Event(), threading.Event()
     def identity(*args, **kwargs):
         assert threading.get_ident() != owner_thread

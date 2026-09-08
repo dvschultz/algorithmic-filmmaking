@@ -366,7 +366,7 @@ def _start_job(
 @mcp.tool()
 async def start_accept_legacy_analysis(
     project_path: Annotated[str, "Path to the project file"],
-    operation: Annotated[str, "Legacy operation: colors or embeddings"],
+    operation: Annotated[str, "Legacy operation: colors, embeddings, brightness, or volume"],
     clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
     idempotency_key: Optional[str] = None,
     ctx: Context | None = None,
@@ -382,8 +382,10 @@ async def start_accept_legacy_analysis(
     from core.project_revision import ProjectFileRevision
     from scene_ripper_mcp.security import validate_project_path
 
-    if operation not in ("colors", "embeddings"):
-        return json.dumps({"success": False, "error": "Operation must be colors or embeddings"})
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS
+
+    if operation not in LEGACY_REUSE_OPERATIONS:
+        return json.dumps({"success": False, "error": "Unsupported legacy reuse operation"})
     valid, error, path = validate_project_path(project_path)
     if not valid:
         return json.dumps({"success": False, "error": error})
@@ -406,6 +408,12 @@ async def start_accept_legacy_analysis(
                     media_paths.add(source.file_path)
                 if operation == "embeddings" and clip.thumbnail_path is not None:
                     media_paths.add(clip.thumbnail_path)
+            if operation == "volume":
+                from core.binary_resolver import find_binary
+                for name in ("ffmpeg", "ffprobe"):
+                    binary = find_binary(name)
+                    if binary is not None:
+                        media_paths.add(Path(binary))
             stamps = {str(item): media_stamp(item) for item in sorted(media_paths)}
             revision.verify()
             return revision, stamps

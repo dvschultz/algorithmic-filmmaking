@@ -10,6 +10,7 @@ from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success, output_info
 from cli.utils.progress import ProgressContext
 from cli.utils.project_writer import own_project
+from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS
 
 
 @click.group()
@@ -33,7 +34,7 @@ def analyze() -> None:
 
 @analyze.command("accept-legacy")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
-@click.option("--operation", type=click.Choice(["colors", "embeddings"]), required=True)
+@click.option("--operation", type=click.Choice(LEGACY_REUSE_OPERATIONS), required=True)
 @click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Exact clip ID (default: all clips)")
 @click.pass_context
 def accept_legacy(ctx: click.Context, project_file: Path, operation: str, clip_ids: tuple[str, ...]) -> None:

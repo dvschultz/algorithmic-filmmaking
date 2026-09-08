@@ -969,7 +969,17 @@ tracked, inactive historical owners as described above.
   cover both operations, changed inputs/project/request, and cancellation;
   24 legacy/reply/cancellation tests pass, with scoped worker/delivery typing
   and lint clean. Remaining analysis families still need this flow; the
-  existing two-operation path is not completion of U10.
+  acceptance path is not completion of U10.
+
+- Brightness and volume legacy reuse now use their normal scalar task identity,
+  validation, and owner publication. All four surfaces expose them (CLI, MCP,
+  desktop dialog, built-in agent), sharing the supported-operation list. Finite
+  zero values are accepted; absent values and missing/invalid source ranges are
+  rejected. Volume decisions include FFmpeg/FFprobe inputs, including queued
+  MCP stamp checks. Legacy unknown provenance remains intact during ordinary
+  semantic reuse. The 182-test legacy/native GUI/MCP/scalar/import group passes;
+  five scoped modules pass typing and changed scoped files pass lint. Other
+  analysis families remain outstanding.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

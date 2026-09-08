@@ -440,6 +440,13 @@ shutdown tracking. Its 24-test legacy/reply/cancellation group passes. Other
 analysis families still need acceptance support. See
 [legacy analysis](../user-guide/legacy-analysis.md).
 
+Brightness and volume acceptance now also use their existing scalar identities
+and applications across all four surfaces. Zero measurements remain valid;
+missing values or source ranges require recomputation. Volume includes binary
+input checks. The 182-test legacy/scalar/MCP/native GUI/import group passes,
+with scoped typing and lint clean. Remaining families and final review remain
+open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

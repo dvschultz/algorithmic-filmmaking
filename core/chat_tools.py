@@ -444,13 +444,15 @@ def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
 
 
 @tools.register(
-    description="Explicitly reuse legacy colors or compatible DINO embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
+    description="Explicitly reuse legacy colors, brightness, volume, or compatible DINO embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
     requires_project=True, modifies_gui_state=True, modifies_project_state=True,
 )
 def accept_legacy_analysis(main_window, operation: str, clip_ids: list[str]) -> dict:
     """Route an explicit decision to detached computation and owner publication."""
-    if operation not in ("colors", "embeddings"):
-        return {"success": False, "error": "Operation must be colors or embeddings"}
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS
+
+    if operation not in LEGACY_REUSE_OPERATIONS:
+        return {"success": False, "error": "Unsupported legacy reuse operation"}
     ids = list(dict.fromkeys(clip_ids))
     if not ids or any(cid not in main_window.project.clips_by_id for cid in ids):
         return {"success": False, "error": "Specify existing clip IDs to reuse"}

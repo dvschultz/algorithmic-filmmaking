@@ -1,10 +1,15 @@
 """Detached legacy reuse decisions with owner-thread application objects."""
 
+from functools import partial
+from collections.abc import Callable
+from typing import cast
+
 from PySide6.QtCore import Signal
 
 from core.operations.colors import ColorApplication, color_request
 from core.operations.embeddings import EmbeddingApplication, embedding_task
-from core.operations.legacy_reuse import accept_legacy_colors, accept_legacy_embeddings
+from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars
+from core.operations.scalars import ScalarBatchApplication, ScalarOperation, scalar_task
 from core.project import Project
 from models.analysis_record import AnalysisRecord
 from ui.workers.base import CancellableWorker
@@ -18,8 +23,8 @@ class LegacyReuseWorker(CancellableWorker):
         super().__init__(parent)
         self.gui_tool_reply: GuiToolReply | None = None
         project.session.assert_owner()
-        if operation not in ("colors", "embeddings"):
-            raise ValueError("Legacy reuse supports colors and embeddings")
+        if operation not in LEGACY_REUSE_OPERATIONS:
+            raise ValueError("Unsupported legacy reuse operation")
         ids = list(dict.fromkeys(clip_ids))
         if not ids:
             raise ValueError("Select clips to reuse their legacy analysis")
@@ -33,11 +38,22 @@ class LegacyReuseWorker(CancellableWorker):
         self.operation = operation
         self.request = color_request(project, ids, skip_existing=False) if operation == "colors" else None
         self.tasks = tuple(embedding_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), skip_existing=False) for cid in ids) if operation == "embeddings" else ()
-        self.application = ColorApplication(project, self.request) if self.request is not None else EmbeddingApplication(project, self.tasks)
+        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication
+        self._compute: Callable[[], object]
+        if self.request is not None:
+            self.application = ColorApplication(project, self.request)
+            self._compute = partial(accept_legacy_colors, self.request, cancel_event=self._cancel_event)
+        elif operation == "embeddings":
+            self.application = EmbeddingApplication(project, self.tasks)
+            self._compute = partial(accept_legacy_embeddings, self.tasks, cancel_event=self._cancel_event)
+        else:
+            tasks = tuple(scalar_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), cast(ScalarOperation, operation)) for cid in ids)
+            self.application = ScalarBatchApplication(project, tasks)
+            self._compute = partial(accept_legacy_scalars, tasks, cancel_event=self._cancel_event)
 
     def run(self) -> None:
         try:
-            result = accept_legacy_colors(self.request, cancel_event=self._cancel_event) if self.request is not None else accept_legacy_embeddings(self.tasks, cancel_event=self._cancel_event)
+            result = self._compute()
             self.result_ready.emit(result)
         except Exception as exc:
             self.error.emit(str(exc))
