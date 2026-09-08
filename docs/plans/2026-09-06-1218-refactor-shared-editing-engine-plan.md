@@ -600,7 +600,13 @@ retaining uncommitted computations for retry. `analyze scalars` CLI and
 `start_analyze_scalars` MCP routes are registered, with verified scalar status
 counts. The regression run passed 237 tests and the final scalar job/status run
 passed 28 tests; scoped job typing and changed-file Ruff pass. Caller documentation
-is updated. GUI agent scalar analysis registration remains pending.
+is updated. Brightness/volume are now opt-in registry operations dispatched by the
+analysis picker and existing analyze_all_live agent tool through the shared retiring
+controller. ScalarAnalysisWorker uses shared operations and saved GUI journals,
+including verified reuse and owned failure publication. Canonical spine and durable
+multi-operation plans route scalar steps to the same implementations. The regression
+run passed 234 tests; scoped typing passes for three changed modules and changed-file
+Ruff is clean. Cancellation and stale target/project/path delivery are covered.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

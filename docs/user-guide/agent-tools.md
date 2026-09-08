@@ -99,7 +99,7 @@ History lasts until the project is cleared or replaced and is not saved in the p
 | Tool | What it does | Example prompt |
 |------|-------------|----------------|
 | `start_clip_analysis` | Run one or more analysis types | "Analyze colors and shot types on all clips" |
-| `analyze_all_live` | Run analysis pipeline on all clips | "Run all analysis" |
+| `analyze_all_live` | Run analysis on selected clip IDs, including brightness and volume | "Measure the brightness of these clips" |
 | `describe_content_live` | Describe clip content with VLM | "Describe what's in the selected clips" |
 | `custom_visual_query` | Ask a yes/no question about clips | "Which clips show someone dancing?" |
 | `get_clip_cinematography` | Get full cinematography analysis | "Show me the cinematography for clip 5" |

@@ -22,6 +22,14 @@ class AnalysisOperation:
 # All operations in display order
 ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
     AnalysisOperation(
+        "brightness", "Measure Brightness", "Measure average grayscale brightness over sampled clip frames",
+        "local", False,
+    ),
+    AnalysisOperation(
+        "volume", "Measure Volume", "Measure clip audio volume, including verified no-audio results",
+        "local", False,
+    ),
+    AnalysisOperation(
         "colors", "Extract Colors",
         "Extract dominant colors from clip thumbnails",
         "local", True,

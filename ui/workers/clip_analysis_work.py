@@ -20,6 +20,13 @@ def create_clip_analysis_worker(
     options = options or ClipAnalysisOptions()
     sources = project.sources_by_id
     worker: Any
+    if operation in ("brightness", "volume"):
+        from ui.workers.scalar_worker import ScalarAnalysisWorker
+
+        worker = ScalarAnalysisWorker(
+            **common, operation="brightness" if operation == "brightness" else "volume",
+        )
+        return worker, worker.application
     if operation == "colors":
         from ui.workers.color_worker import ColorAnalysisWorker
 

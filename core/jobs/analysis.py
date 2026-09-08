@@ -17,6 +17,12 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    for scalar in ("brightness", "volume"):
+        if scalar in (arguments.get("operations") or []):
+            from core.jobs.scalars import scalar_job_spec
+
+            step = scalar_job_spec(project, arguments.get("clip_ids"), scalar, arguments={})
+            inputs[scalar] = json.loads(step.inputs_json)
     if "shots" in (arguments.get("operations") or []):
         from core.jobs.shots import shot_job_spec
         from core.operations.shots import ShotTypeOptions
@@ -158,6 +164,19 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op in ("brightness", "volume"):
+                from core.jobs.scalars import scalar_job_spec, run_scalar_job
+                from core.operations.scalars import ScalarOperation
+
+                scalar_kind: ScalarOperation = "brightness" if op == "brightness" else "volume"
+                scalar_inputs = captured.get(op)
+                if scalar_inputs is None:
+                    raise StaleJobResult("Analysis job has no captured scalar inputs")
+                current, _ = load_with_mtime(path)
+                step = scalar_job_spec(current, ids, scalar_kind, arguments={})
+                if json.loads(step.inputs_json) != scalar_inputs:
+                    raise StaleJobResult("Scalar inputs changed before analysis")
+                return run_scalar_job(store, path, ids, report or (lambda *_: None), cancel, kind=scalar_kind, operation=step)
             if op == "shots":
                 from core.jobs.shots import shot_job_spec, run_shot_job
                 from core.operations.shots import ShotTypeOptions

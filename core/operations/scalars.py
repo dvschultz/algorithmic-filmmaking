@@ -124,6 +124,10 @@ class ScalarOutcome:
     def has_result(self) -> bool:
         return self.record_json is not None and self.status in ("succeeded", "skipped")
 
+    @property
+    def can_apply(self) -> bool:
+        return self.record_json is not None and self.status != "unprocessed"
+
 
 def _compute(
     task: ScalarTask, fingerprints: AnalysisFingerprints, cancel: Event
@@ -345,3 +349,16 @@ class ScalarApplication:
             return True
 
         return project.session.apply_external(publish)
+
+
+class ScalarBatchApplication:
+    """Route detached outcomes to applications captured on the project owner."""
+
+    def __init__(self, project: "Project", tasks: tuple[ScalarTask, ...]) -> None:
+        self.applications = {task.clip_id: ScalarApplication(project, task) for task in tasks}
+        if len(self.applications) != len(tasks):
+            raise ValueError("Scalar analysis requires unique clip IDs")
+
+    def apply(self, project: "Project", outcome: ScalarOutcome) -> bool:
+        application = self.applications.get(outcome.clip_id)
+        return application.apply(project, outcome) if application is not None else False

@@ -823,7 +823,19 @@ def boundary_embeddings(
     return {"success": True, "result": result}
 
 
+def brightness(project: Project, clip_ids: list[str] | None = None, *, skip_existing: bool = True, progress_callback: Callable[[float, str], None] | None = None, cancel_event: threading.Event | None = None) -> dict:
+    """Measure verified brightness for a canonical analysis plan."""
+    return analyze_scalars(project, "brightness", clip_ids, skip_existing=skip_existing, progress_callback=progress_callback, cancel_event=cancel_event)
+
+
+def volume(project: Project, clip_ids: list[str] | None = None, *, skip_existing: bool = True, progress_callback: Callable[[float, str], None] | None = None, cancel_event: threading.Event | None = None) -> dict:
+    """Measure verified volume for a canonical analysis plan."""
+    return analyze_scalars(project, "volume", clip_ids, skip_existing=skip_existing, progress_callback=progress_callback, cancel_event=cancel_event)
+
+
 ANALYZE_CLIP_OPERATION_MAP: dict[str, Callable[..., dict]] = {
+    "brightness": brightness,
+    "volume": volume,
     "colors": analyze_colors,
     "shots": analyze_shots,
     "classify": classify_content,

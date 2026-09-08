@@ -761,8 +761,16 @@ prefixes. Recovery checks recorded source content identity against verified curr
 inputs. Registered `analyze scalars` CLI and `start_analyze_scalars` MCP routes use
 these jobs; MCP status counts verified scalar completion. The regression run passed
 237 tests and the final scalar job/status run passed 28 tests. The new job module
-passes scoped typing and changed-file Ruff is clean. GUI agent scalar analysis
-registration remains pending.
+passes scoped typing and changed-file Ruff is clean. Brightness and volume are now
+opt-in local operations in the central analysis registry. The existing
+`analyze_all_live` agent tool and analysis picker dispatch them through
+`ScalarAnalysisWorker` and the shared retiring controller. Successful, reused, and
+owned failure records use guarded owner application; saved GUI computations retain
+job history and receipt recovery. Canonical spine and durable multi-operation plans
+also route scalar steps through their shared implementations. A 234-test regression
+run passes, including cancellation, changed targets/projects/paths, saved reuse,
+and durable-plan checks. Three changed modules pass scoped typing and changed-file
+Ruff is clean.
 
 ## Remaining U10 work
 

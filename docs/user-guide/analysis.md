@@ -555,6 +555,11 @@ recovery; saving does not rebuild a missing cache.
 
 ## Brightness and volume
 
+In the analysis picker, select **Measure Brightness** or **Measure Volume**.
+Neither is selected by default. The GUI agent can request these through
+`analyze_all_live` using operation keys `brightness` and `volume`. Computation runs
+off the UI thread, and only results that still match the project are accepted.
+
 Use the CLI to measure either scalar across a saved project:
 
 ```bash

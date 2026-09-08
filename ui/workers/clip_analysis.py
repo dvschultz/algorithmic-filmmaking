@@ -19,6 +19,8 @@ from ui.workers.clip_analysis_work import create_clip_analysis_worker
 
 
 WORKER_ATTRIBUTES = {
+    "brightness": "_brightness_worker",
+    "volume": "_volume_worker",
     "colors": "color_worker",
     "shots": "shot_type_worker",
     "classify": "classification_worker",
