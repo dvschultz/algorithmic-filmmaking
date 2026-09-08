@@ -202,6 +202,19 @@ Consumers of the low-level path-returning helper must use a retained batch or
 attach a reference before unrelated cache eviction. Ordinary project saving no
 longer duplicates managed prerenders into the legacy transformed-clips folder.
 
+## Description execution metadata
+
+Description providers now report their actual model/backend and frame/video input
+mode through an optional execution callback. A local Qwen-to-Moondream fallback
+returns the Moondream model name, using the same model-resolution rule as the
+loader and durable job runtime snapshot. Cloud video extraction failures report
+frame execution, and metadata is available before inference so failed attempts
+can retain their execution identity.
+
+This is preparation for the description migration. Description operations and
+receipts still need verified records, semantic reuse, and operation-owned failures;
+the callback alone does not change their reuse decisions.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

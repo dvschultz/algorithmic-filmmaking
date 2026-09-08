@@ -18,11 +18,16 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PIL import Image
 
 from core.binary_resolver import find_binary
+from core.analysis_model_identity import (
+    LOCAL_DESCRIPTION_FALLBACK,
+    MOONDREAM_REVISION as MOONDREAM_REVISION,
+    local_description_runtime,
+)
 from core.settings import load_settings
 
 logger = logging.getLogger(__name__)
@@ -38,9 +43,7 @@ _LOCAL_MODEL_KEY: tuple[str, bool] | None = None
 # Local VLM model
 # PINNED: mlx-community quantized model; verify availability before updating
 _LOCAL_VLM_NAME = "mlx-community/Qwen3-VL-4B-Instruct-4bit"
-_LOCAL_VLM_FALLBACK = "vikhyatk/moondream2"  # Fallback for non-Apple-Silicon
-# PINNED: Git revision (tag) on vikhyatk/moondream2; bump when new release tested
-MOONDREAM_REVISION = "2025-06-21"
+_LOCAL_VLM_FALLBACK = LOCAL_DESCRIPTION_FALLBACK
 
 # Backward-compatible aliases
 _CPU_MODEL = None
@@ -401,8 +404,9 @@ def _load_moondream_fallback(model_id: Optional[str] = None):
     model_id = model_id or load_settings().description_model_local
 
     # If the setting points to a Qwen mlx model but we can't use mlx, use fallback
-    if "mlx" in model_id.lower() or "qwen" in model_id.lower():
-        model_id = _LOCAL_VLM_FALLBACK
+    resolved_model = local_description_runtime(model_id, mlx=False)["model"]
+    if resolved_model != model_id:
+        model_id = resolved_model
         logger.warning(f"mlx-vlm not available, falling back to {model_id}")
 
     # On Windows, Python doesn't use the system cert store by default.
@@ -719,6 +723,7 @@ def describe_frame(
     *,
     model_name: Optional[str] = None,
     input_mode: Optional[str] = None,
+    on_execution: Callable[[dict], None] | None = None,
 ) -> tuple[str, str]:
     """Generate description for a video frame or clip.
 
@@ -734,6 +739,8 @@ def describe_frame(
         start_frame: Starting frame number of clip
         end_frame: Ending frame number of clip
         fps: Video frame rate
+        on_execution: Receives the actual provider/model/input mode before inference,
+            including when inference subsequently fails.
 
     Returns:
         Tuple of (description, model_name)
@@ -756,8 +763,11 @@ def describe_frame(
 
     if tier == "local":
         model = model_name or settings.description_model_local
+        runtime = local_description_runtime(model, mlx=is_mlx_vlm_available())
+        if on_execution:
+            on_execution({**runtime, "input_mode": "frame"})
         desc = describe_frame_local(image_path, prompt, model_name=model)
-        return desc, model
+        return desc, runtime["model"]
 
     elif tier == "cloud":
         model = model_name or settings.description_model_cloud
@@ -780,6 +790,8 @@ def describe_frame(
                 logger.warning(f"Video extraction failed, falling back to frame: {e}")
             else:
                 try:
+                    if on_execution:
+                        on_execution({"backend": "cloud", "model": model, "input_mode": "video"})
                     return describe_video_cloud(temp_video, prompt, model_name=model)
                 finally:
                     if temp_video.exists():
@@ -788,6 +800,8 @@ def describe_frame(
 
         # Frame-based description (default or when video mode not selected)
         logger.info("Using frame mode for description")
+        if on_execution:
+            on_execution({"backend": "cloud", "model": model, "input_mode": "frame"})
         desc = describe_frame_cloud(image_path, prompt, model_name=model)
         return desc, model
 

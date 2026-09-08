@@ -26,20 +26,10 @@ from core.project_revision import ProjectRevisionConflict
 def _runtime(options: DescriptionOptions) -> dict:
     if options.tier not in ("local", "cpu", "gpu"):
         return {"backend": "cloud"}
-    from core.analysis.description import (
-        is_mlx_vlm_available,
-        _LOCAL_VLM_FALLBACK,
-        MOONDREAM_REVISION,
-    )
+    from core.analysis.description import is_mlx_vlm_available
+    from core.analysis_model_identity import local_description_runtime
 
-    mlx = is_mlx_vlm_available()
-    model = options.model or ""
-    fallback = not mlx and ("mlx" in model.lower() or "qwen" in model.lower())
-    return {
-        "backend": "mlx" if mlx else "transformers",
-        "model": _LOCAL_VLM_FALLBACK if fallback else model,
-        "revision": None if mlx else MOONDREAM_REVISION,
-    }
+    return local_description_runtime(options.model or "", mlx=is_mlx_vlm_available())
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:

@@ -33,7 +33,8 @@ class TestDescriptionAnalysis(unittest.TestCase):
         )
         mock_local.return_value = "A cat sitting on a mat."
 
-        desc, model = describe_frame(self.image_path)
+        with patch("core.analysis.description.is_mlx_vlm_available", return_value=True):
+            desc, model = describe_frame(self.image_path)
 
         self.assertEqual(desc, "A cat sitting on a mat.")
         self.assertEqual(model, "qwen3-vl-test")
@@ -66,7 +67,8 @@ class TestDescriptionAnalysis(unittest.TestCase):
         mock_local.return_value = "A car on the road."
 
         # Request local explicitly
-        desc, model = describe_frame(self.image_path, tier="local")
+        with patch("core.analysis.description.is_mlx_vlm_available", return_value=True):
+            desc, model = describe_frame(self.image_path, tier="local")
 
         self.assertEqual(desc, "A car on the road.")
         self.assertEqual(model, "qwen3-vl-test")

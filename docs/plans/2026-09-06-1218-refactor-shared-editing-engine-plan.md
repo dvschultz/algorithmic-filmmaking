@@ -410,6 +410,9 @@ managed media with content/range/runtime identity and staged publication. Sequen
 and undo references, save/export leases, portable restoration, and cache eviction
 are wired. Batch leases protect the handoff from rendering to project ownership.
 The complete cross-consumer audit, including legacy prerender playback, remains.
+Description providers now expose actual execution model/backend and input mode,
+including local model and cloud video-to-frame fallbacks. Their verified-record
+and semantic-reuse migration remains unfinished.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

@@ -2,6 +2,20 @@
 
 from core.analysis_records import model_runtime
 
+LOCAL_DESCRIPTION_FALLBACK = "vikhyatk/moondream2"
+MOONDREAM_REVISION = "2025-06-21"
+
+
+def local_description_runtime(model: str, *, mlx: bool) -> dict:
+    """Resolve the local model using the same fallback rule as its loader."""
+    fallback = not mlx and ("mlx" in model.lower() or "qwen" in model.lower())
+    return {
+        "backend": "mlx" if mlx else "transformers",
+        "model": LOCAL_DESCRIPTION_FALLBACK if fallback else model,
+        "revision": None if mlx else MOONDREAM_REVISION,
+    }
+
+
 OCR_PROMPT = """Extract ALL visible text from this image. Include:
 - Signs, labels, titles
 - Subtitles or captions
