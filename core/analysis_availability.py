@@ -91,6 +91,7 @@ def audio_transcription_is_complete(audio: AudioSource, *, settings: Settings | 
             model=configured.transcription_model,
             language=configured.transcription_language,
             backend=configured.transcription_backend,
+            cloud_model=configured.transcription_cloud_model,
             segmentation_mode=configured.transcription_segmentation_mode,
             segment_max_seconds=configured.transcription_segment_max_seconds,
         ))
@@ -149,11 +150,11 @@ def alignment_is_complete(clip: Clip, source: Source | None) -> bool:
         return False
 
 
-def word_timing_is_complete(clip: Clip, source: Source | None) -> bool:
+def word_timing_is_complete(clip: Clip, source: Source | None, *, settings: Settings | None = None) -> bool:
     """Recognize verified native transcription words or forced-alignment words."""
     if clip.transcript is None or any(segment.words is None for segment in clip.transcript):
         return False
-    return alignment_is_complete(clip, source) or operation_is_complete_for_clip("transcribe", clip, source=source)
+    return alignment_is_complete(clip, source) or operation_is_complete_for_clip("transcribe", clip, source=source, settings=settings)
 
 
 def face_analysis_is_complete(clip: Clip, source: Source | None, *, sample_interval: float = 1.0, runtime: dict | None = None) -> bool:
@@ -251,7 +252,7 @@ def scalar_analysis_is_complete(
         return False
 
 
-def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
+def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None, settings: Settings | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
     if op_key in VERIFIED_ANALYSIS_OPERATIONS:
         import json
@@ -294,10 +295,11 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
         if record is None or record.identity is None or source is None:
             return False
         try:
-            settings = load_settings()
+            settings = settings if settings is not None else load_settings()
             transcript_options = resolve_transcription_options(TranscriptionOptions(
                 model=settings.transcription_model, language=settings.transcription_language,
                 backend=settings.transcription_backend,
+                cloud_model=settings.transcription_cloud_model,
                 segmentation_mode=settings.transcription_segmentation_mode,
                 segment_max_seconds=settings.transcription_segment_max_seconds,
             ))
@@ -338,7 +340,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
         if record is None or record.identity is None:
             return False
         try:
-            cinema_options = resolve_cinematography()
+            cinema_options = resolve_cinematography(settings=settings)
             cinema_task = cinematography_task(clip, source)
             if cinema_task.snapshot_json is None:
                 return False
@@ -379,7 +381,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
                 return False
             if source is not None and "video" not in files:
                 return False
-            description_options = resolve_options()
+            description_options = resolve_options(settings=settings)
             task = description_task(clip, source)
             expected_runtime = runtime if runtime is not None else description_runtime(task, description_options, allow_imports=False)
             data = record.identity.to_dict()
@@ -447,7 +449,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
         record = current_record(clip, op_key)
         if record is None or record.identity is None or not clip.shot_type:
             return False
-        options = ShotTypeOptions.from_settings()
+        options = ShotTypeOptions.from_settings(settings=settings)
         prompt = SHOT_CLOUD_PROMPT if options.tier == "cloud" else json.dumps(SHOT_TYPE_PROMPTS, sort_keys=True)
         data = record.identity.to_dict()
         return bool(
@@ -487,7 +489,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
         return bool(
             data["operation_version"] == 2 and data["schema_version"] == 1
             and data["model"] == (runtime if runtime is not None else ocr_runtime())
-            and data["parameters"] == asdict(resolve_ocr_options(OcrOptions()))
+            and data["parameters"] == asdict(resolve_ocr_options(OcrOptions(), settings=settings))
             and data["sampling"] == {"policy": "half-open-keyframes/v1"}
             and data["prompt_sha256"] == sha256(OCR_PROMPT.encode()).hexdigest()
             and record.value == {"extracted_texts": [text.to_dict() for text in clip.extracted_texts]}
@@ -547,7 +549,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
     return operation_has_result(op_key, clip)
 
 
-def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str], *, sources_by_id: dict | None = None) -> dict[str, int]:
+def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str], *, sources_by_id: dict | None = None, settings: Settings | None = None) -> dict[str, int]:
     """Count how many clips still need each operation."""
     clip_list = list(clips)
     counts: dict[str, int] = {}
@@ -594,7 +596,7 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str], *, so
 
             runtime = embedding_runtime()
         counts[op_key] = sum(
-            1 for clip in clip_list if not operation_is_complete_for_clip(op_key, clip, runtime=runtime, source=(sources_by_id or {}).get(getattr(clip, "source_id", None)))
+            1 for clip in clip_list if not operation_is_complete_for_clip(op_key, clip, runtime=runtime, source=(sources_by_id or {}).get(getattr(clip, "source_id", None)), settings=settings)
         )
     return counts
 

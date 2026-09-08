@@ -666,6 +666,13 @@ remain retained. Both positive cleanup cases fail with reconciliation disabled;
 118 artifact/receipt/bundle/recovery regressions pass. Scoped artifact typing and
 changed-file Ruff pass.
 
+The cost/completion audit also covers unsaved settings: requested provider models
+and input modes now flow through shared completion checks instead of consulting
+only global defaults. Nine regressions reproduce the old omission; 107 cost and
+completion tests plus 136 operation/import-boundary tests pass. Parallelism-only
+changes preserve reuse. Scoped typing and changed-file Ruff pass. Full-suite
+verification and the remaining retention/legacy work are still open.
+
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 
 **Files:** New `models/analysis_record.py`, `core/artifacts.py`, `tests/test_analysis_records.py`, `tests/test_artifact_store.py`; existing `models/clip.py`, `models/frame.py`, `core/analysis_availability.py`, `core/analysis_target.py`, `core/paths.py`, `core/project_migrations.py`, `core/sequence_preview.py`, `core/remix/prerender.py`.

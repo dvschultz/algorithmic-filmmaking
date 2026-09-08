@@ -16,6 +16,7 @@ from core.provider_errors import is_transient_provider_error
 from models.cinematography import CinematographyAnalysis
 
 if TYPE_CHECKING:
+    from core.settings import Settings
     from core.project import Project
     from models.clip import Clip
     from models.frame import Frame
@@ -217,11 +218,12 @@ def cinematography_identity(
 
 
 def resolve_options(
-    mode: str | None = None, model: str | None = None, parallelism: int = 1
+    mode: str | None = None, model: str | None = None, parallelism: int = 1,
+    *, settings: "Settings | None" = None,
 ) -> CinematographyOptions:
     from core.settings import load_settings
 
-    settings = load_settings()
+    settings = settings if settings is not None else load_settings()
     return CinematographyOptions(
         settings.cinematography_tier,
         mode or settings.cinematography_input_mode,

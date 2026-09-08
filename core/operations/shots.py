@@ -20,6 +20,7 @@ from core.jobs.media import media_stamp
 from core.operations.contracts import OutcomeStatus
 
 if TYPE_CHECKING:
+    from core.settings import Settings
     from core.project import Project
 
 # The local model is a process-wide singleton, including cloud fallback.
@@ -77,10 +78,10 @@ class ShotTypeOptions:
         )
 
     @classmethod
-    def from_settings(cls) -> "ShotTypeOptions":
+    def from_settings(cls, *, settings: "Settings | None" = None) -> "ShotTypeOptions":
         from core.settings import load_settings
 
-        settings = load_settings()
+        settings = settings if settings is not None else load_settings()
         return cls(
             "cloud" if settings.shot_classifier_tier == "cloud" else "local",
             settings.shot_classifier_cloud_model,

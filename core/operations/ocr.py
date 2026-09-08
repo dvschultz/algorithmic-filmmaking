@@ -17,6 +17,7 @@ from core.jobs.media import media_stamp
 from core.operations.contracts import OutcomeStatus
 
 if TYPE_CHECKING:
+    from core.settings import Settings
     from core.project import Project
     from models.clip import Clip, ExtractedText, Source
     from models.frame import Frame
@@ -55,12 +56,13 @@ class OcrOptions:
     use_text_detection: bool = True
 
 
-def resolve_ocr_options(options: OcrOptions) -> OcrOptions:
+def resolve_ocr_options(options: OcrOptions, *, settings: "Settings | None" = None) -> OcrOptions:
     model = options.vlm_model
     if options.use_vlm_fallback and not model:
         from core.settings import load_settings
 
-        model = load_settings().description_model_cloud or "gemini-3-flash-preview"
+        configured = settings if settings is not None else load_settings()
+        model = configured.description_model_cloud or "gemini-3-flash-preview"
     return replace(
         options,
         vlm_model=model if options.use_vlm_fallback else None,

@@ -13,6 +13,7 @@ from core.operations.contracts import OutcomeStatus
 from core.provider_errors import is_transient_provider_error
 
 if TYPE_CHECKING:
+    from core.settings import Settings
     from core.project import Project
     from models.clip import Clip
     from models.frame import Frame
@@ -197,12 +198,13 @@ def description_identity(
 
 
 def resolve_options(
-    tier: str | None = None, prompt: str | None = None, parallelism: int = 1
+    tier: str | None = None, prompt: str | None = None, parallelism: int = 1,
+    *, settings: "Settings | None" = None,
 ) -> DescriptionOptions:
     """Snapshot non-secret provider settings before work is queued."""
     from core.settings import load_settings
 
-    settings = load_settings()
+    settings = settings if settings is not None else load_settings()
     tier = resolve_tier(tier or settings.description_model_tier)
     return DescriptionOptions(
         tier,

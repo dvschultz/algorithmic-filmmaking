@@ -197,7 +197,7 @@ def estimate_sequence_cost(
         algorithm: Algorithm key from ALGORITHM_CONFIG
         clips: List of Clip objects (or any objects with the metadata fields)
         tier_overrides: Per-operation tier overrides {"describe": "cloud"}
-        settings: Settings object for tier defaults and parallelism
+        settings: Settings for verified reuse, tier defaults, and parallelism
         override_required: Explicit list of required operations, bypassing
             the algorithm config lookup. Used by reference_guided where
             requirements depend on user-selected dimensions.
@@ -229,8 +229,7 @@ def estimate_sequence_cost(
     from core.analysis_availability import (
         VERIFIED_ANALYSIS_OPERATIONS, compute_operation_need_counts, word_timing_is_complete,
     )
-    configured_settings = load_settings()
-    settings = settings if settings is not None else configured_settings
+    settings = settings if settings is not None else load_settings()
     for op_key in required:
         check = METADATA_CHECKS.get(op_key)
         if check is None:
@@ -248,18 +247,18 @@ def estimate_sequence_cost(
             ) for clip in clips)
         elif op_key in VERIFIED_ANALYSIS_OPERATIONS:
             needing = compute_operation_need_counts(
-                clips, [op_key], sources_by_id=sources_by_id,
+                clips, [op_key], sources_by_id=sources_by_id, settings=settings,
             )[op_key]
         elif op_key == "transcription_with_words":
             needing = sum(
-                not word_timing_is_complete(clip, (sources_by_id or {}).get(getattr(clip, "source_id", "")))
+                not word_timing_is_complete(clip, (sources_by_id or {}).get(getattr(clip, "source_id", "")), settings=settings)
                 for clip in clips
             )
         else:
             needing = sum(1 for clip in clips if not check(clip))
         tier = _resolve_tier(op_key, tier_overrides, settings)
-        if tier != _resolve_tier(op_key, None, configured_settings):
-            # Current completion describes the configured backend. An explicit
+        if tier != _resolve_tier(op_key, None, settings):
+            # Current completion describes the requested settings. An explicit
             # different backend needs its own verified result.
             needing = total
         if needing == 0:

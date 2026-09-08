@@ -814,6 +814,15 @@ typing and changed-file Ruff pass.
 
 ## Remaining U10 work
 
+Cost estimates now pass the requested settings through shared completion and
+provider-option resolution. Unsaved model or input-mode changes within the same
+tier require analysis, while a matching explicit request remains reusable even
+when global settings differ. This includes local/cloud transcription models and
+native word timing; parallelism-only changes do not invalidate analysis. Nine
+regressions fail when settings forwarding is disabled. The cost/completion group
+passes 107 tests and the operation/import-boundary group passes 136 tests; scoped
+typing for all six changed source modules and changed-file Ruff pass.
+
 The full regression run collected 5,844 tests. Its first nine failures exposed
 stale test assumptions in picker source bindings, scalar application ownership,
 legacy audio transcription status, and receipt batching. Updated fixtures create
