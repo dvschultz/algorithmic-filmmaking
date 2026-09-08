@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from core.project import Project
+from core.settings import Settings
 from models.audio_source import AudioSource
 from core.transcription_models import TranscriptSegment
 from core.chat_tools import tools
@@ -32,7 +33,7 @@ with TemporaryDirectory() as directory:
         requester = window._chat_worker
         window._active_audio_transcribes = set()
         window.status_bar = SimpleNamespace(showMessage=Mock())
-        window.settings = SimpleNamespace(transcription_model='small.en', transcription_language='en', transcription_backend='faster-whisper', transcription_segmentation_mode='backend', transcription_segment_max_seconds=12)
+        window.settings = Settings(transcription_model='small.en', transcription_language='en', transcription_backend='faster-whisper', transcription_segmentation_mode='backend', transcription_segment_max_seconds=12)
         window._on_audio_transcript_ready = Mock()
         window._on_audio_transcribe_error = Mock()
         window._on_audio_transcribe_requested = lambda aid: MainWindow._on_audio_transcribe_requested(window, aid)
