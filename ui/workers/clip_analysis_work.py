@@ -50,7 +50,7 @@ def create_clip_analysis_worker(
         worker = ClassificationWorker(
             **common, top_k=options.top_k, parallelism=settings.local_model_parallelism
         )
-        return worker, ClassificationApplication(project, worker.tasks)
+        return worker, ClassificationApplication(project, worker.tasks, worker.options)
     if operation == "detect_objects":
         from ui.workers.object_detection_worker import ObjectDetectionWorker
         from core.operations.object_detection import ObjectDetectionApplication
@@ -66,7 +66,6 @@ def create_clip_analysis_worker(
         from ui.workers.text_extraction_worker import TextExtractionWorker
         from core.operations.ocr import OcrApplication
 
-        common.pop("skip_existing")
         method = settings.text_extraction_method
         worker = TextExtractionWorker(
             **common,
@@ -81,7 +80,7 @@ def create_clip_analysis_worker(
             if method in ("vlm", "hybrid")
             else None,
         )
-        return worker, OcrApplication(project, worker.tasks)
+        return worker, OcrApplication(project, worker.tasks, worker.options)
     if operation == "transcribe":
         from ui.workers.transcription_worker import TranscriptionWorker
         from core.operations.transcription import TranscriptionApplication

@@ -85,7 +85,7 @@ def test_external_analysis_thumbnail_checkpoint_retry_preserves_display_image(se
     assert compute.call_count == 2
 
 
-def test_existing_user_labels_are_preserved(setup):
+def test_edited_labels_require_verified_recomputation(setup):
     path, _, compute = setup
     run(setup)
     saved = Project.load(path)
@@ -93,8 +93,8 @@ def test_existing_user_labels_are_preserved(setup):
     saved.update_clips([saved.clips[0]])
     assert saved.save()
     run(setup)
-    assert Project.load(path).clips[0].object_labels == ["manual"]
-    assert compute.call_count == 2
+    assert Project.load(path).clips[0].object_labels == ["person"]
+    assert compute.call_count == 3
 
 
 @pytest.mark.parametrize("media", ["image", "source"])
@@ -193,16 +193,29 @@ def test_corrupt_receipt_refuses_recomputation(setup, column):
     assert compute.call_count == 2
 
 
-def test_missing_receipt_refuses_recomputation(setup):
+def test_verified_record_outlives_job_cache(setup):
     path, _, compute = setup
     run(setup)
     empty = JobStore(path.parent / "empty.db")
     try:
-        with pytest.raises(StaleJobResult, match="missing"):
-            run((path, empty, compute))
+        assert len(run((path, empty, compute))["skipped"]) == 2
     finally:
         empty.close()
     assert compute.call_count == 2
+
+
+def test_saved_failure_is_retryable_and_keeps_display_labels(setup):
+    path, _, compute = setup
+    run(setup)
+    compute.side_effect = RuntimeError("provider failed")
+    assert len(run(setup, force=True)["failed"]) == 2
+    project = Project.load(path)
+    assert all(c.analysis_records["classify"].state == "failed" for c in project.clips)
+    assert all(c.object_labels == ["person"] for c in project.clips)
+    compute.side_effect = None
+    compute.return_value = []
+    assert len(run(setup)["succeeded"]) == 2
+    assert all(c.object_labels == [] for c in Project.load(path).clips)
 
 
 def test_force_refresh_starts_new_generation_and_preserves_failed_save(setup):

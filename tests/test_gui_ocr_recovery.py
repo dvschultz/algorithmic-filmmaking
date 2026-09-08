@@ -121,7 +121,9 @@ def test_changed_output_or_path_is_not_checkpointed(setup, change):
 
 
 def test_pipeline_skips_saved_empty_observations(setup):
+    import time
     from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
     from core.settings import Settings
     from ui.workers.clip_analysis import ClipAnalysisController
 
@@ -131,13 +133,19 @@ def test_pipeline_skips_saved_empty_observations(setup):
     provider.side_effect = None
     provider.return_value = []
     extract_text(project)
+    app = QApplication.instance() or QApplication([])
     window = QObject()
     window.project = project
-    window.settings = Settings()
+    window.settings = Settings(text_extraction_method="hybrid", text_extraction_vlm_model="test", description_model_cloud="test")
     controller = ClipAnalysisController(window, project.clips, ["extract_text"])
     controller.start()
+    deadline = time.monotonic() + 10
+    while not controller.finished and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.002)
     assert controller.finished and not controller.workers
     assert set(controller.plan.results["extract_text"].values()) == {"skipped"}
+    assert provider.call_count == 2
 
 
 def test_clip_frame_id_collision_keeps_recovery_and_checkpoints_separate(

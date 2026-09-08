@@ -55,6 +55,15 @@ def test_verified_empty_ocr_is_complete(tmp_path):
     assert compute_disabled_operations([clip], ["extract_text"]) == {"extract_text"}
 
 
+def test_classification_needs_provenance_even_for_empty_labels(tmp_path):
+    from tests.analysis_fixtures import verify_clip_analysis
+
+    clip = make_test_clip("clip-1", object_labels=[])
+    assert compute_disabled_operations([clip], ["classify"]) == set()
+    verify_clip_analysis(clip, tmp_path, classify=True)
+    assert compute_disabled_operations([clip], ["classify"]) == {"classify"}
+
+
 def test_embedding_projection_alone_does_not_establish_completion():
     clip_with = make_test_clip("with")
     clip_with.embedding = [0.1] * 768

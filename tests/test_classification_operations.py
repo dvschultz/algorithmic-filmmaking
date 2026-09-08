@@ -15,6 +15,87 @@ from tests.test_description_operations import project_with_thumbnails
 from ui.workers.classification_worker import ClassificationWorker
 
 
+def test_verified_empty_classification_is_reused(tmp_path, monkeypatch):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", provider)
+    assert classify_content(project)["result"]["succeeded"]
+    record = project.clips[0].analysis_records["classify"]
+    assert record.state == "succeeded" and record.value == {"object_labels": []}
+    assert classify_content(project)["result"]["skipped"]
+    assert provider.call_count == 1
+
+
+def test_relocated_identical_image_reuses_without_inventing_confidence(
+    tmp_path, monkeypatch
+):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[("person", 0.8)])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", provider)
+    classify_content(project)
+    original = project.clips[0].analysis_records["classify"]
+    moved = tmp_path / "moved.jpg"
+    moved.write_bytes(project.clips[0].thumbnail_path.read_bytes())
+    project.clips[0].thumbnail_path = moved
+    assert classify_content(project)["result"]["skipped"]
+    current = project.clips[0].analysis_records["classify"]
+    assert current.identity == original.identity
+    assert current.input_json != original.input_json
+    assert provider.call_count == 1
+
+
+def test_runtime_change_invalidates_classification(tmp_path, monkeypatch):
+    from core.analysis_model_identity import classification_runtime
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", provider)
+    classify_content(project)
+    runtime = {**classification_runtime(), "weights": "next-version"}
+    monkeypatch.setattr(
+        "core.operations.classification.classification_runtime", lambda: runtime
+    )
+    assert classify_content(project)["result"]["succeeded"]
+    assert provider.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["range", "source", "image", "options", "labels"])
+def test_classification_changes_require_recomputation(tmp_path, monkeypatch, change):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[("person", 0.9)])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", provider)
+    classify_content(project)
+    kwargs = {}
+    if change == "range":
+        project.clips[0].end_frame -= 1
+    elif change == "source":
+        project.sources[0].file_path.write_bytes(b"new source")
+    elif change == "image":
+        project.clips[0].thumbnail_path.write_bytes(b"new image")
+    elif change == "options":
+        kwargs["top_k"] = 2
+    else:
+        project.clips[0].object_labels = ["edited"]
+    assert classify_content(project, **kwargs)["result"]["succeeded"]
+    assert provider.call_count == 2
+
+
+def test_failed_classification_records_attempt_without_erasing_labels(
+    tmp_path, monkeypatch
+):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[("person", 0.9)])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", provider)
+    classify_content(project)
+    provider.side_effect = RuntimeError("model failed")
+    assert classify_content(project, skip_existing=False)["result"]["failed"]
+    assert project.clips[0].object_labels == ["person"]
+    assert project.clips[0].analysis_records["classify"].state == "failed"
+    provider.side_effect = None
+    assert classify_content(project)["result"]["succeeded"]
+    assert provider.call_count == 3
+
+
 def test_gui_spine_share_inputs_and_detached_results(tmp_path, monkeypatch):
     project = project_with_thumbnails(tmp_path, 1)
     raw = [["person", 0.9]]

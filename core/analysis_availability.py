@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+# These operations verify complete input identities on the worker path.
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "detect_objects", "extract_text", "classify"})
+
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
     "colors": ("dominant_colors",),
@@ -60,6 +63,21 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "classify":
+        from core.analysis_records import current_record
+        from core.analysis_model_identity import classification_runtime
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None or clip.object_labels is None:
+            return False
+        data = record.identity.to_dict()
+        return bool(
+            data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == (runtime if runtime is not None else classification_runtime())
+            and data["parameters"] == {"top_k": 5, "threshold": 0.1}
+            and data["sampling"] == {"policy": "single-image/v1"}
+            and record.value == {"object_labels": clip.object_labels}
+        )
     if op_key == "extract_text":
         from dataclasses import asdict
         from hashlib import sha256
@@ -140,7 +158,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "extract_text":
+        if op_key == "classify":
+            from core.analysis_model_identity import classification_runtime
+
+            runtime = classification_runtime()
+        elif op_key == "extract_text":
             from core.analysis_model_identity import ocr_runtime
 
             runtime = ocr_runtime()

@@ -597,7 +597,7 @@ class TestTranscriptionWorkerErrors:
 # --- ClassificationWorker ---
 
 class TestClassificationWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_labels(self, thumbnail_path):
+    def test_unverified_labels_are_submitted_for_recomputation(self, thumbnail_path):
         from ui.workers.classification_worker import ClassificationWorker
 
         clip_with = _make_clip_with_thumb(
@@ -606,8 +606,7 @@ class TestClassificationWorkerTaskBuilding:
         clip_without = _make_clip_with_thumb("c2", thumbnail_path)
 
         worker = ClassificationWorker([clip_with, clip_without])
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "c2"
+        assert [task.clip_id for task in worker.tasks] == ["c1", "c2"]
 
     def test_skip_existing_false_includes_all(self, thumbnail_path):
         from ui.workers.classification_worker import ClassificationWorker

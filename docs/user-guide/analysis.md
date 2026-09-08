@@ -20,7 +20,7 @@ There are three ways to run analyses:
 
 Analyses that have already been completed for a clip are skipped automatically. To re-run an analysis, clear the existing data first.
 
-Color palettes, thumbnail embeddings, object detections, and extracted text are reused only when their saved analysis
+Color palettes, thumbnail embeddings, object detections, content labels, and extracted text are reused only when their saved analysis
 details match the current media and settings. Values from older projects remain
 visible, but these analyses may need to run again to verify them. Changing
 the source, trim, or thumbnail can also require reanalysis. If an embedding cache

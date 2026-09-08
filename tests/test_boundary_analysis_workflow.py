@@ -142,7 +142,7 @@ def test_availability_distinguishes_missing_empty_and_complete_pairs(setup):
     project, _ = setup
     clip = project.clips[0]
     clip.extracted_texts = []
-    assert operation_is_complete_for_clip("extract_text", clip)
+    assert not operation_is_complete_for_clip("extract_text", clip)
     clip.first_frame_embedding = [1.0] * 768
     assert not operation_is_complete_for_clip("boundary_embeddings", clip)
     clip.last_frame_embedding = [2.0] * 768

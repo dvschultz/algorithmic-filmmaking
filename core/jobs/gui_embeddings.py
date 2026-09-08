@@ -52,6 +52,11 @@ class GuiEmbeddingCache(GuiResultJournal):
         )
         self.reused_outcomes: dict[str, dict] = {}
 
+    @property
+    def transient_outcomes(self) -> dict[str, dict]:
+        """Expose exact reuse outcomes to shared controller publication."""
+        return self.reused_outcomes
+
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
         data = json.loads(request.spec.identity_json)["inputs"]["task"]

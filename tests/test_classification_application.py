@@ -135,7 +135,7 @@ def test_publication_requires_owner_thread(tmp_path):
     assert clip.object_labels is None
 
 
-def test_empty_frame_result_is_saved_and_skipped_on_next_run(tmp_path):
+def test_unverified_empty_frame_result_is_saved_but_requires_recomputation(tmp_path):
     from core.project import Project
     from ui.workers.classification_worker import ClassificationWorker
 
@@ -152,4 +152,5 @@ def test_empty_frame_result_is_saved_and_skipped_on_next_run(tmp_path):
     worker = ClassificationWorker(
         [], analysis_targets=[AnalysisTarget.from_frame(restored.frames[0])]
     )
-    assert worker.tasks == ()
+    assert len(worker.tasks) == 1
+    assert worker.tasks[0].clip_id == frame.id

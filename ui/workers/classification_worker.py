@@ -30,6 +30,7 @@ from core.operations.classification import (
     ClassificationOptions,
     ClassificationOutcome,
     compute_classification,
+    classification_task,
     run_classification,
 )
 
@@ -60,6 +61,7 @@ class ClassificationWorker(CancellableWorker):
 
     progress = Signal(int, int)  # current, total
     labels_ready = Signal(str, list)  # clip_id, [(label, confidence), ...]
+    outcome_ready = Signal(object)
     classification_completed = Signal()
 
     def __init__(
@@ -79,6 +81,7 @@ class ClassificationWorker(CancellableWorker):
         self._threshold = threshold
         self._parallelism = 1
         self.options = ClassificationOptions(top_k, threshold)
+        self.project = project
         self.result: tuple[ClassificationOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
@@ -123,7 +126,7 @@ class ClassificationWorker(CancellableWorker):
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="classification",
-                version=1,
+                version=2,
                 arguments={"clip_ids": [task.clip_id for task in self.tasks]},
                 inputs={
                     "tasks": [_task_data(task) for task in self.tasks],
@@ -160,15 +163,16 @@ class ClassificationWorker(CancellableWorker):
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
-            if skip_existing and clip.object_labels is not None:
-                continue
             if not clip.thumbnail_path or not clip.thumbnail_path.exists():
                 logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
                 continue
             tasks.append(
-                ClassificationTask(
-                    clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
+                classification_task(
+                    clip,
+                    self.project.sources_by_id.get(clip.source_id)
+                    if self.project
+                    else None,
+                    skip_existing=skip_existing,
                 )
             )
         return tasks
@@ -179,17 +183,17 @@ class ClassificationWorker(CancellableWorker):
         """Build immutable task list from AnalysisTarget objects."""
         tasks = []
         for target in targets:
-            if skip_existing and target.object_labels is not None:
-                continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
                 logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
-                ClassificationTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
-                    target_type=target.target_type,
+                classification_task(
+                    target,
+                    self.project.sources_by_id.get(target.source_id)
+                    if self.project
+                    else None,
+                    skip_existing=skip_existing,
                 )
             )
         return tasks
@@ -236,12 +240,18 @@ class ClassificationWorker(CancellableWorker):
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
-                self.labels_ready.emit(value.clip_id, list(value.labels))
-            elif value.status == "failed":
-                errors.append(
-                    (value.clip_id, value.message or value.code or "Analysis failed")
-                )
+            else:
+                if value.can_apply:
+                    self.outcome_ready.emit(value)
+                if value.status == "succeeded":
+                    self.labels_ready.emit(value.clip_id, list(value.labels))
+                elif value.status == "failed":
+                    errors.append(
+                        (
+                            value.clip_id,
+                            value.message or value.code or "Analysis failed",
+                        )
+                    )
 
         def compute(progress, cancel):
             collected = {}

@@ -1,6 +1,7 @@
 """Owner-thread classification publication bound to its launch context."""
 
 from typing import Any
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
@@ -26,17 +27,35 @@ class ClassificationDelivery(RetiringQObject):
         self.window = window
         self.worker = worker
         self.worker_attribute = worker_attribute
-        self.application = ClassificationApplication(window.project, worker.tasks)
+        self.application = ClassificationApplication(
+            window.project, worker.tasks, getattr(worker, "options", None)
+        )
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.delivered: set[str] = set()
         worker.finished.connect(self.retire)
-        worker.labels_ready.connect(self.result)
+        if hasattr(worker, "outcome_ready"):
+            worker.outcome_ready.connect(self.receive)
+        else:
+            worker.labels_ready.connect(self.result)
 
     @Slot(str, list)
     def result(self, target_id: str, labels: list) -> None:
+        self.receive(
+            ClassificationOutcome(
+                target_id,
+                "succeeded",
+                tuple((label, float(confidence)) for label, confidence in labels),
+            )
+        )
+
+    @Slot(object)
+    def receive(self, outcome: ClassificationOutcome) -> None:
         window = self.window
+        if not isinstance(outcome, ClassificationOutcome) or not outcome.can_apply:
+            return
+        target_id = outcome.clip_id
         if (
             getattr(window, self.worker_attribute, None) is not self.worker
             or window.project is not self.application.project
@@ -55,11 +74,7 @@ class ClassificationDelivery(RetiringQObject):
             return
         self.delivered.add(target_id)
         try:
-            outcome = ClassificationOutcome(
-                target_id,
-                "succeeded",
-                tuple((label, float(confidence)) for label, confidence in labels),
-            )
+            outcome = ClassificationOutcome.from_dict(asdict(outcome))
             receipt = None
             cache = getattr(self.worker, "cache", None)
             if cache is not None:
@@ -70,8 +85,11 @@ class ClassificationDelivery(RetiringQObject):
                     raise ValueError(
                         "Project save location changed during classification"
                     )
-                receipt = cache.results[target_id]
-                if not receipt.matches(outcome):
+                receipt = cache.results.get(target_id)
+                if (receipt is not None and not receipt.matches(outcome)) or (
+                    receipt is None
+                    and cache.transient_outcomes.get(target_id) != asdict(outcome)
+                ):
                     raise ValueError(
                         "Queued classification differs from its recorded result"
                     )

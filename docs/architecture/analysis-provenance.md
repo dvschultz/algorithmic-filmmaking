@@ -1,7 +1,7 @@
 # Analysis provenance and derived artifacts
 
 The U10 implementation covers color palettes, thumbnail DINOv2 embeddings,
-object detection, and OCR across the desktop, shared spine, CLI, MCP jobs, and embedding
+object detection, OCR, and classification across the desktop, shared spine, CLI, MCP jobs, and embedding
 prerequisites used by sequencing. This document describes that bounded scope.
 The complete U10 contract remains in the shared editing engine plan.
 
@@ -51,6 +51,20 @@ reusable after job-cache removal. Failed attempts retain the previous displayed
 text but invalidate automatic reuse; the next request can retry. GUI and saved
 jobs publish those failure records without creating successful job receipts.
 
+ImageNet classification records the MobileNet weight identity, source and image
+content, clip range, label limit, and confidence threshold. Reuse restores label
+names without inventing confidence scores absent from the saved projection.
+Failed refreshes keep displayed labels while invalidating completion. CLI image
+binding and cache-independent reuse follow the same rules as object detection.
+Combined clip/frame controllers publish successful, reused, and failed records
+through their owner-bound applications. They verify transient reuse/failure
+outcomes against the worker, and only successful journal receipts enter project
+job history. Frame completion checks require provenance for migrated operations.
+Reuse checks run with the requested settings, including people-only detection.
+Reused embeddings publish refreshed input bindings without a new inference call.
+Frame classification depends on its image and can run with the original video
+offline.
+
 ## Storage and ownership
 
 The configured cache directory contains `artifacts/`, with a SQLite reference
@@ -82,7 +96,8 @@ without stopping analysis of valid neighboring clips.
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families, including boundary embeddings, to
-  semantic reuse. Extend operation-owned failure records beyond object detection and OCR.
+  semantic reuse. Extend operation-owned failure records beyond object detection,
+  OCR, and classification.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Move preview/prerender media and durable job array payloads into managed

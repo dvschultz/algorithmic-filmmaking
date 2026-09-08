@@ -53,6 +53,21 @@ def worker_for(project):
     )
 
 
+def test_semantic_reuse_survives_gui_job_cache_removal(setup):
+    project, compute = setup
+    run(project, apply=True)
+    assert project.save()
+    (project.path.parent / "jobs.db").unlink()
+    reopened = Project.load(project.path)
+    worker = ClassificationWorker(
+        reopened.clips, top_k=OPTIONS.top_k, threshold=OPTIONS.threshold, project=reopened,
+        analysis_targets=[AnalysisTarget.from_frame(f) for f in reopened.frames] or None,
+    )
+    worker.run()
+    assert all(o.status == "skipped" and o.label_names == ["person"] for o in worker.result)
+    assert compute.call_count == 2
+
+
 def run(project, *, apply=False, prepare=lambda: True, cancel=None, limit=None):
     worker = worker_for(project)
     tasks = worker.tasks[:limit]

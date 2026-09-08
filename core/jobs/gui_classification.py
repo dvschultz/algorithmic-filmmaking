@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
+from core.analysis_records import AnalysisFingerprints
+
 from core.jobs.classification import _runtime, _task_data
 from core.jobs.commits import StaleJobResult
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
@@ -44,6 +46,7 @@ class GuiClassificationCache(GuiResultJournal):
         self.previous_json = json.dumps(
             previous_results, sort_keys=True, allow_nan=False
         )
+        self.transient_outcomes: dict[str, dict] = {}
 
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
@@ -77,7 +80,7 @@ class GuiClassificationCache(GuiResultJournal):
             progress(len(outcomes), len(tasks))
 
         try:
-            self.start(cancel)
+            self.start(cancel, allow_missing_receipts=True)
             for task in tasks:
                 if cancel.is_set():
                     break
@@ -107,6 +110,8 @@ class GuiClassificationCache(GuiResultJournal):
                     def record(outcome: ClassificationOutcome) -> None:
                         if outcome.status == "succeeded":
                             self.record(requests[outcome.clip_id], outcome)
+                        elif outcome.can_apply:
+                            self.transient_outcomes[outcome.clip_id] = asdict(outcome)
                         publish(outcome)
 
                     computed = run_classification(
@@ -114,6 +119,10 @@ class GuiClassificationCache(GuiResultJournal):
                         self.options,
                         cancel_event=cancel,
                         on_outcome=record,
+                        fingerprints=AnalysisFingerprints(
+                            cancel, media_fingerprints=self.fingerprints
+                        ),
+                        runtime=self.runtime,
                     )
                     for outcome in computed:
                         outcomes.setdefault(outcome.clip_id, outcome)

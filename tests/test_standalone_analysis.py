@@ -178,16 +178,23 @@ def test_object_summaries_keep_zero_results_and_detection_mode(detect_all):
     assert reply.send.call_args.args[1]["result"]["analyzed_clips"] == 1
 
 
-def test_person_only_request_skips_existing_zero_count(tmp_path, monkeypatch):
+def test_person_only_request_recomputes_unverified_zero_count(tmp_path, monkeypatch):
+    import time
     from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
     from core.operations.clip_analysis import ClipAnalysisOptions
     from ui.workers.clip_analysis import ClipAnalysisController
+    from ui.workers.clip_analysis_work import create_clip_analysis_worker
 
+    app = QApplication.instance() or QApplication([])
     window = QObject()
     window.project = project = Project.new()
     window.settings = Settings()
     source = Source(file_path=tmp_path / "source.mp4")
+    source.file_path.write_bytes(b"source")
     clip = Clip(source_id=source.id, start_frame=0, end_frame=30, person_count=0)
+    clip.thumbnail_path = tmp_path / "thumb.jpg"
+    clip.thumbnail_path.write_bytes(b"image")
     project.add_source(source)
     project.add_clips([clip])
     for name in (
@@ -201,9 +208,9 @@ def test_person_only_request_skips_existing_zero_count(tmp_path, monkeypatch):
         setattr(window, name, Mock())
     window._dispatch_gui_reply = Mock()
     window._build_agent_analysis_result = lambda clips, ops, message, extra: extra
-    factory = Mock(
-        side_effect=AssertionError("Existing person count should skip inference")
-    )
+    provider = Mock(return_value=0)
+    monkeypatch.setattr("core.analysis.detection.count_people", provider)
+    factory = Mock(wraps=create_clip_analysis_worker)
     monkeypatch.setattr("ui.workers.clip_analysis.create_clip_analysis_worker", factory)
     controller = ClipAnalysisController(
         window,
@@ -213,8 +220,14 @@ def test_person_only_request_skips_existing_zero_count(tmp_path, monkeypatch):
         options=ClipAnalysisOptions(detect_all=False),
     )
     controller.start()
+    deadline = time.monotonic() + 10
+    while not controller.finished and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.002)
     assert controller.finished
-    factory.assert_not_called()
+    factory.assert_called_once()
+    provider.assert_called_once()
+    assert clip.analysis_records["detect_objects"].state == "succeeded"
     payload = window._dispatch_gui_reply.send.call_args.args[1]["result"]
     assert payload["success"] and payload["analyzed_clips"] == 1
     assert payload["total_people_detected"] == 0 and "object_counts" not in payload

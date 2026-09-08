@@ -43,6 +43,15 @@ def object_detection_runtime() -> dict:
     }
 
 
+def classification_runtime() -> dict:
+    return {
+        "model": "mobilenet_v3_small",
+        "weights": "IMAGENET1K_V1",
+        "vocabulary": "weight_metadata",
+        "packages": model_runtime("mobilenet", ("torch", "torchvision"))["packages"],
+    }
+
+
 DINOV2_NAME = "facebook/dinov2-base"
 # https://huggingface.co/facebook/dinov2-base/commits/main
 DINOV2_REVISION = "f9e44c814b77203eaa57a6bdbbd535f21ede1415"

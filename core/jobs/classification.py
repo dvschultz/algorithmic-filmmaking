@@ -7,6 +7,14 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
+from core.analysis_records import (
+    AnalysisFingerprints,
+    AnalysisSnapshot,
+    recorded_image_path,
+)
+from core.analysis_model_identity import classification_runtime
+from models.analysis_record import AnalysisRecord
+
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
@@ -16,6 +24,8 @@ from core.operations.classification import (
     ClassificationOptions,
     ClassificationOutcome,
     ClassificationTask,
+    classification_task,
+    classification_identity,
     run_classification,
 )
 from core.project import Project
@@ -23,20 +33,7 @@ from core.project_revision import ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    from importlib.metadata import PackageNotFoundError, version
-
-    packages: dict[str, str | None] = {}
-    for package in ("torch", "torchvision"):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    return {
-        "model": "mobilenet_v3_small",
-        "weights": "IMAGENET1K_V1",
-        "vocabulary": "weight_metadata",
-        "packages": packages,
-    }
+    return classification_runtime()
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -51,14 +48,25 @@ def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
 
 
 def _task(
-    project: Project, cid: str, thumbnails: dict[str, Path] | None = None
+    project: Project,
+    cid: str,
+    thumbnails: dict[str, Path] | None = None,
+    *,
+    force: bool = False,
 ) -> ClassificationTask:
     clip = project.clips_by_id[cid]
-    return ClassificationTask(cid, (thumbnails or {}).get(cid, clip.thumbnail_path))
+    source = project.sources_by_id.get(clip.source_id)
+    image = (thumbnails or {}).get(cid)
+    if image is None and not force:
+        image = recorded_image_path(clip, source, "classify")
+    return classification_task(clip, source, image_path=image, skip_existing=False)
 
 
 def _task_data(task: ClassificationTask) -> dict:
     data = asdict(task)
+    data.pop("analysis_json")
+    data["skip"] = False
+    data["analysis_version"] = 2 if task.analysis_json is not None else 1
     data["thumbnail_path"] = str(task.thumbnail_path) if task.thumbnail_path else None
     return data
 
@@ -84,7 +92,7 @@ def classification_job_spec(
 ) -> OperationSpec:
     targets = []
     for cid in _ids(project, clip_ids):
-        task = _task(project, cid)
+        task = _task(project, cid, force=bool(arguments.get("force", False)))
         source = _source_data(project, cid)
         source_path = source["actual_source_path"]
         targets.append(
@@ -100,7 +108,7 @@ def classification_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="classification",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={
             "targets": targets,
@@ -142,7 +150,9 @@ def run_classification_job(
         force = bool(operation.arguments.get("force", False))
     thumbnails = dict(thumbnail_paths or {})
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -165,7 +175,7 @@ def run_classification_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue  # Project provenance can outlive the computation journal.
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -183,7 +193,7 @@ def run_classification_job(
         def inputs(
             current: Project, cid: str, task: ClassificationTask | None = None
         ) -> dict:
-            task = task or _task(current, cid, thumbnails)
+            task = task or _task(current, cid, thumbnails, force=force)
             display = current.clips_by_id[cid].thumbnail_path
             source = _source_data(current, cid)
             source_path = source["actual_source_path"]
@@ -198,9 +208,26 @@ def run_classification_job(
             }
 
         def is_output(current: Project, cid: str, payload: dict) -> bool:
+            record = current.clips_by_id[cid].analysis_records.get("classify")
+            if not isinstance(record, AnalysisRecord) or record.to_dict() != json.loads(
+                payload.get("record_json") or "null"
+            ):
+                return False
             return current.clips_by_id[cid].object_labels == [
                 label for label, _ in payload["labels"]
             ]
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "classify", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("classify")
+                == record,
+            )
 
         result: dict = {
             "succeeded": [],
@@ -217,51 +244,36 @@ def run_classification_job(
                 break
             clip = project.clips_by_id[cid]
             existing = clip.object_labels is not None
-            if existing and not force and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
-                # CLI retries do not regenerate images for populated targets. Recover
-                # the original analysis image only when its complete receipt still
-                # matches the current target, media, options, and saved output.
-                if (
-                    existing
-                    and not force
-                    and cid not in thumbnails
-                    and operation is None
-                ):
-                    for _, identity, payload in known.get(cid, []):
-                        if (
-                            identity["project_path"] != str(path)
-                            or identity["arguments"] != asdict(options)
-                            or not is_output(project, cid, payload)
-                        ):
-                            continue
-                        image = identity["inputs"]["basis"]["task"]["thumbnail_path"]
-                        if image is None:
-                            continue
-                        candidate_task = ClassificationTask(cid, Path(image))
-                        if (
-                            inputs(project, cid, candidate_task)
-                            == identity["inputs"]["basis"]
-                        ):
-                            thumbnails[cid] = Path(image)
-                            break
                 basis = inputs(project, cid)
                 if basis["runtime"] != runtime:
                     raise StaleJobResult("Classification runtime changed")
-                task = _task(project, cid, thumbnails)
-                identity_inputs: dict = {"basis": basis}
+                task = _task(project, cid, thumbnails, force=force)
+                assert task.analysis_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                semantic = (
+                    classification_identity(snapshot, options, fingerprints, runtime)
+                    if snapshot.inputs.unchanged()
+                    else None
+                )
+                reused = (
+                    snapshot.reusable_record(semantic)
+                    if semantic is not None and not force
+                    else None
+                )
+                prior_record = clip.analysis_records.get("classify")
+                identity_inputs: dict = {
+                    "basis": basis,
+                    "previous_labels": clip.object_labels,
+                    "previous_record": prior_record.to_dict() if prior_record else None,
+                }
                 if force:
                     identity_inputs["generation"] = len(known.get(cid, []))
-                    identity_inputs["previous_labels"] = clip.object_labels
                 arguments = asdict(options)
                 spec = ResultSpec.build(
                     path,
                     kind="classification",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs=identity_inputs,
@@ -281,28 +293,38 @@ def run_classification_job(
                 if existing and not force:
                     matches = [
                         row
-                        for row, identity, payload in known[cid]
+                        for row, identity, payload in known.get(cid, [])
                         if identity["project_path"] == str(path)
                         and identity["inputs"]["basis"] == basis
                         and identity["arguments"] == arguments
                         and is_output(project, cid, payload)
                     ]
-                    if not matches:
+                    if matches:
+                        specs = [ResultSpec(path, row["spec_json"]) for row in matches]
+                    elif reused is not None:
+                        if reused != prior_record:
+                            stage_record(cid, reused, basis)
                         result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
+                            {"clip_id": cid, "reason": "valid_analysis"}
                         )
                         continue
-                    specs = [ResultSpec(path, row["spec_json"]) for row in matches]
 
-                application = ClassificationApplication(project, (task,))
+                application = ClassificationApplication(project, (task,), options)
 
                 def compute(task=task):
-                    outcome = run_classification((task,), options, cancel_event=cancel)[
-                        0
-                    ]
+                    outcome = run_classification(
+                        (task,),
+                        options,
+                        cancel_event=cancel,
+                        fingerprints=fingerprints,
+                        runtime=runtime,
+                    )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(outcome)
-                    return {"labels": [list(label) for label in outcome.labels]}
+                    return {
+                        "labels": [list(label) for label in outcome.labels],
+                        "record_json": outcome.record_json,
+                    }
 
                 def apply(current, payload, cid=cid, application=application):
                     outcome = ClassificationOutcome(
@@ -312,6 +334,7 @@ def run_classification_job(
                             (label, confidence)
                             for label, confidence in payload["labels"]
                         ),
+                        record_json=payload.get("record_json"),
                     )
                     if not application.apply(current, outcome):
                         raise StaleJobResult(
@@ -350,6 +373,16 @@ def run_classification_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult(
+                        "Classification inputs changed during computation"
+                    )
+                if outcome.can_apply and outcome.record_json is not None:
+                    stage_record(
+                        cid,
+                        AnalysisRecord.from_dict(json.loads(outcome.record_json)),
+                        basis,
+                    )
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )

@@ -312,7 +312,7 @@ def classify_content(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Classify thumbnail content with ImageNet labels."""
-    from core.operations.classification import ClassificationApplication, ClassificationTask, ClassificationOptions, run_classification
+    from core.operations.classification import ClassificationApplication, classification_task, ClassificationOptions, run_classification
 
     clips = _resolve_clip_ids(project, clip_ids)
     succeeded: list[dict] = []
@@ -320,15 +320,19 @@ def classify_content(
     skipped: list[dict] = []
     total = len(clips)
 
-    tasks = tuple(ClassificationTask(clip.id, _thumbnail_for_clip(clip), skip=skip_existing and clip.object_labels is not None) for clip in clips)
-    application = ClassificationApplication(project, tasks)
+    tasks = tuple(classification_task(clip, project.sources_by_id.get(clip.source_id), image_path=_thumbnail_for_clip(clip), skip_existing=skip_existing) for clip in clips)
+    options = ClassificationOptions(top_k, threshold)
+    application = ClassificationApplication(project, tasks, options)
 
     def report(current: int, count: int) -> None:
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0, f"Content classification ({current}/{count})")
 
-    outcomes = run_classification(tasks, ClassificationOptions(top_k, threshold), cancel_event=cancel_event, progress=report)
+    outcomes = run_classification(tasks, options, cancel_event=cancel_event, progress=report)
     for clip, outcome, accepted in zip(clips, outcomes, application.apply_batch(project, outcomes)):
+        if outcome.can_apply and not accepted:
+            failed.append({"clip_id": clip.id, "code": "stale_result"})
+            continue
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
         elif outcome.status == "failed":

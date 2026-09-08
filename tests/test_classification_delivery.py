@@ -3,6 +3,71 @@
 import os
 import subprocess
 import sys
+import pytest
+
+
+@pytest.mark.parametrize("kind", ["clip", "frame"])
+def test_worker_delivers_records_for_reuse_and_failure(tmp_path, monkeypatch, kind):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
+    from core.analysis_target import AnalysisTarget
+    from core.settings import Settings
+    from models.frame import Frame
+    from tests.test_description_operations import project_with_thumbnails
+    from ui.workers.classification_worker import ClassificationWorker
+    from ui.workers.classification_delivery import ClassificationDelivery
+
+    app = QApplication.instance() or QApplication([])
+    window = QObject()
+    assert window.thread() == app.thread()
+    window.project = project_with_thumbnails(tmp_path, 1)
+    target = window.project.clips[0]
+    if kind == "frame":
+        target = Frame(id="frame", file_path=target.thumbnail_path)
+        window.project.add_frames([target])
+    assert window.project.save(tmp_path / "project.json")
+    window._on_classification_error = Mock()
+    window.analyze_tab = SimpleNamespace()
+    monkeypatch.setattr(
+        "core.settings.load_settings", lambda: Settings(cache_dir=tmp_path / "cache")
+    )
+    provider = Mock(return_value=[("person", 0.9)])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", provider)
+    deliveries = []
+    try:
+        for attempt in ("compute", "reuse", "fail"):
+            if attempt == "fail":
+                provider.side_effect = RuntimeError("provider failed")
+            worker = ClassificationWorker(
+                window.project.clips,
+                project=window.project,
+                analysis_targets=[AnalysisTarget.from_frame(target)]
+                if kind == "frame"
+                else None,
+                skip_existing=attempt != "fail",
+            )
+            window.classification_worker = worker
+            deliveries.append(ClassificationDelivery(window, worker))
+            worker.run()
+            assert target.analysis_records["classify"].state == (
+                "failed" if attempt == "fail" else "succeeded"
+            )
+            assert (
+                worker.result[0].status
+                == {"compute": "succeeded", "reuse": "skipped", "fail": "failed"}[
+                    attempt
+                ]
+            )
+            if attempt == "reuse":
+                assert worker.result[0].labels == ()  # No invented confidence scores.
+                assert worker.result[0].label_names == ["person"]
+        assert provider.call_count == 2
+        assert target.object_labels == ["person"]
+        window._on_classification_error.assert_not_called()
+    finally:
+        window.project.close_writer()
 
 
 def test_queued_classification_delivery_guards():

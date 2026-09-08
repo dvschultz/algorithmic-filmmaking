@@ -93,6 +93,10 @@ class EmbeddingOutcome:
     message: str | None = None
     record_json: str | None = None
 
+    @property
+    def can_apply(self) -> bool:
+        return self.status == "succeeded" or (self.status == "skipped" and self.record_json is not None)
+
     @classmethod
     def from_dict(cls, data: dict) -> "EmbeddingOutcome":
         outcome = cls(**{**data, "vector": tuple(data.get("vector", ()))})

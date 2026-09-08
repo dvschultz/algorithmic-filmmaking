@@ -1,14 +1,17 @@
 """Run-owned clip analysis; publish and advance after native thread exit."""
 
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any
 
 from PySide6.QtCore import QTimer, Signal, Slot
 
 from ui.workers.qt_lifetime import RetiringQObject
 
-from core.analysis_availability import operation_is_complete_for_clip
+from core.analysis_availability import (
+    VERIFIED_ANALYSIS_OPERATIONS,
+    operation_is_complete_for_clip,
+)
 from core.operations.analysis_inputs import clip_input
 from core.operations.clip_analysis import ClipAnalysisOptions, ClipAnalysisPlan
 from core.operations.contracts import OutcomeStatus
@@ -126,8 +129,9 @@ class ClipAnalysisController(RetiringQObject):
         )
 
     def _has_result(self, operation: str, clip: Any) -> bool:
-        if operation == "detect_objects" and not self.options.detect_all:
-            return clip.person_count is not None
+        if operation in VERIFIED_ANALYSIS_OPERATIONS:
+            # The worker checks full content and the requested options before reuse.
+            return False
         return operation_is_complete_for_clip(operation, clip)
 
     def start(self) -> None:
@@ -328,7 +332,9 @@ class ClipAnalysisController(RetiringQObject):
             if cid not in self.clips or not self._same_clip(cid):
                 continue
             outcomes[cid] = outcome.status
-            if outcome.status != "succeeded":
+            if outcome.status != "succeeded" and not getattr(
+                outcome, "can_apply", False
+            ):
                 continue
             try:
                 receipt = None
@@ -342,11 +348,18 @@ class ClipAnalysisController(RetiringQObject):
                     receipt = (
                         cache.receipt(outcome)
                         if operation == "shots"
-                        else cache.results[("clip", cid)]
+                        else cache.results.get(("clip", cid))
                         if operation == "extract_text"
-                        else cache.results[cid]
+                        else cache.results.get(cid)
                     )
-                    if not receipt.matches(outcome):
+                    key = ("clip", cid) if operation == "extract_text" else cid
+                    matches = (
+                        receipt.matches(outcome)
+                        if receipt is not None
+                        else getattr(cache, "transient_outcomes", {}).get(key)
+                        == asdict(outcome)
+                    )
+                    if not matches:
                         raise ValueError("Analysis differs from its recorded result")
                 if not application.apply(self.project, outcome):
                     outcomes[cid] = "failed"

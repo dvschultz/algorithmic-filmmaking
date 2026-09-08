@@ -1,6 +1,6 @@
 """Owner-thread coordination of shared frame-analysis workers."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from copy import deepcopy
 from typing import Any
 
@@ -9,6 +9,7 @@ from PySide6.QtCore import Signal, Slot, QTimer
 from ui.workers.qt_lifetime import RetiringQObject
 
 from core.analysis_target import AnalysisTarget
+from core.analysis_availability import VERIFIED_ANALYSIS_OPERATIONS
 from core.jobs.media import media_stamp
 from core.operations.frame_analysis import FrameAnalysisPlan
 
@@ -22,7 +23,7 @@ def create_frame_analysis_worker(
         "clips": [],
         "analysis_targets": targets,
         "project": project,
-        "skip_existing": False,
+        "skip_existing": operation in VERIFIED_ANALYSIS_OPERATIONS,
     }
     if operation == "colors":
         from ui.workers.color_worker import ColorAnalysisWorker
@@ -49,7 +50,7 @@ def create_frame_analysis_worker(
         worker = ClassificationWorker(
             **common, parallelism=settings.local_model_parallelism
         )
-        return worker, ClassificationApplication(project, worker.tasks)
+        return worker, ClassificationApplication(project, worker.tasks, worker.options)
     if operation == "detect_objects":
         from ui.workers.object_detection_worker import ObjectDetectionWorker
         from core.operations.object_detection import ObjectDetectionApplication
@@ -64,7 +65,6 @@ def create_frame_analysis_worker(
 
         method = settings.text_extraction_method
         use_vlm = method in ("vlm", "hybrid")
-        common.pop("skip_existing")
         worker = TextExtractionWorker(
             **common,
             sources_by_id={},
@@ -73,7 +73,7 @@ def create_frame_analysis_worker(
             vlm_model=settings.text_extraction_vlm_model if use_vlm else None,
             options=options,
         )
-        return worker, OcrApplication(project, worker.tasks)
+        return worker, OcrApplication(project, worker.tasks, worker.options)
     if operation == "describe":
         from ui.workers.description_worker import DescriptionWorker
         from core.operations.description import DescriptionApplication
@@ -233,7 +233,9 @@ class FrameAnalysisController(RetiringQObject):
         for fid in self.plan.frame_ids:
             if not self._same_frame(fid):
                 self._outcomes[fid] = "failed"
-            elif _has_result(self.frames[fid], operation):
+            elif operation not in VERIFIED_ANALYSIS_OPERATIONS and _has_result(
+                self.frames[fid], operation
+            ):
                 self._outcomes[fid] = "skipped"
             else:
                 targets.append(AnalysisTarget.from_frame(self.frames[fid]))
@@ -308,7 +310,9 @@ class FrameAnalysisController(RetiringQObject):
             if fid not in self.frames or not self._same_frame(fid):
                 continue
             self._outcomes[fid] = outcome.status
-            if outcome.status != "succeeded":
+            if outcome.status != "succeeded" and not getattr(
+                outcome, "can_apply", False
+            ):
                 continue
             try:
                 receipt = None
@@ -322,11 +326,18 @@ class FrameAnalysisController(RetiringQObject):
                     receipt = (
                         cache.receipt(outcome)
                         if operation == "shots"
-                        else cache.results[("frame", fid)]
+                        else cache.results.get(("frame", fid))
                         if operation == "extract_text"
-                        else cache.results[fid]
+                        else cache.results.get(fid)
                     )
-                    if not receipt.matches(outcome):
+                    key = ("frame", fid) if operation == "extract_text" else fid
+                    matches = (
+                        receipt.matches(outcome)
+                        if receipt is not None
+                        else getattr(cache, "transient_outcomes", {}).get(key)
+                        == asdict(outcome)
+                    )
+                    if not matches:
                         raise ValueError(
                             "Frame outcome differs from its recorded result"
                         )
