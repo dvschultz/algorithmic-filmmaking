@@ -13,17 +13,38 @@ from core.jobs.description import _runtime
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
+from core.analysis_records import AnalysisFingerprints
 from core.operations.custom_query import (
     CustomQueryApplication,
     CustomQueryOptions,
     CustomQueryOutcome,
-    CustomQueryTask,
+    custom_query_record_key,
+    custom_query_runtime,
+    custom_query_task,
     resolve_options,
     run_custom_query,
 )
 from core.operations.description import DescriptionOptions
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
+
+
+def _arguments(options: CustomQueryOptions) -> dict:
+    return {
+        "tier": {"cpu": "local", "gpu": "cloud"}.get(options.tier, options.tier),
+        "model": options.model,
+    }
+
+
+def _entry(payload: dict) -> dict:
+    return {key: payload[key] for key in ("query", "match", "confidence", "model")}
+
+
+def _record(project: Project, cid: str, query: str) -> dict | None:
+    record = project.clips_by_id[cid].analysis_records.get(
+        custom_query_record_key(query)
+    )
+    return record.to_dict() if record is not None else None
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -86,12 +107,12 @@ def custom_query_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="custom_query",
-        version=1,
+        version=2,
         arguments={**arguments, "query": query},
         inputs={
             "targets": targets,
             "options": asdict(options),
-            "runtime": _provenance(options),
+            "runtime": custom_query_runtime(options),
         },
         persistence="job_history",
         session_id=project.session.session_id,
@@ -122,9 +143,11 @@ def run_custom_query_job(
     if not query:
         raise ValueError("query is required")
     options = options or resolve_options()
-    fingerprint = MediaFingerprints(cancel).get
-    runtime = _provenance(options)
-    arguments = {**asdict(options), "query": query}
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
+    runtime = custom_query_runtime(options)
+    arguments = {**_arguments(options), "query": query}
     with result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -147,7 +170,7 @@ def run_custom_query_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -173,8 +196,30 @@ def run_custom_query_job(
                 "source": fingerprint(
                     Path(target["source_path"]) if target["source_path"] else None
                 ),
-                "runtime": _provenance(options),
+                "runtime": custom_query_runtime(options),
             }
+
+        def stage_failure(
+            cid: str,
+            outcome: CustomQueryOutcome,
+            application: CustomQueryApplication,
+            basis: dict,
+            previous: list,
+        ) -> None:
+            record = json.loads(outcome.record_json or "null")
+
+            def apply(current: Project) -> None:
+                if not application.apply(current, outcome):
+                    raise StaleJobResult("Custom-query failure target changed")
+
+            batch.stage_analysis(
+                apply=apply,
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: (
+                    _record(current, cid, query) == record
+                    and (current.clips_by_id[cid].custom_queries or []) == previous
+                ),
+            )
 
         result: dict = {
             "succeeded": [],
@@ -198,12 +243,13 @@ def run_custom_query_job(
                 spec = ResultSpec.build(
                     path,
                     kind="custom_query",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs={
                         "basis": basis,
                         "previous_queries": previous,
+                        "previous_record": _record(project, cid, query),
                         "generation": len(known.get(cid, [])),
                     },
                 )
@@ -212,28 +258,30 @@ def run_custom_query_job(
                 for row, identity, payload in known.get(cid, []):
                     if (
                         not row["committed"]
+                        and identity["version"] == 2
                         and identity["project_path"] == str(path)
                         and identity["arguments"] == arguments
                         and identity["inputs"]["basis"] == basis
                         and previous
-                        == [*identity["inputs"]["previous_queries"], payload]
+                        == [*identity["inputs"]["previous_queries"], _entry(payload)]
+                        and _record(project, cid, query)
+                        == json.loads(payload.get("record_json") or "null")
                     ):
                         spec = ResultSpec(path, row["spec_json"])
                         previous = identity["inputs"]["previous_queries"]
                         break
-                task = CustomQueryTask(cid, clip.thumbnail_path, query)
-                application = CustomQueryApplication(project, (task,))
+                task = custom_query_task(
+                    clip, project.sources_by_id.get(clip.source_id), query
+                )
+                application = CustomQueryApplication(project, (task,), options)
 
                 def compute(task=task):
-                    outcome = run_custom_query((task,), options, cancel_event=cancel)[0]
+                    outcome = run_custom_query(
+                        (task,), options, cancel_event=cancel, fingerprints=fingerprints
+                    )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(outcome)
-                    return {
-                        "query": query,
-                        "match": outcome.match,
-                        "confidence": round(outcome.confidence or 0.0, 4),
-                        "model": outcome.model,
-                    }
+                    return {**outcome.value, "record_json": outcome.record_json}
 
                 def apply(current, payload, cid=cid, application=application):
                     if not application.apply(
@@ -245,6 +293,7 @@ def run_custom_query_job(
                             payload["match"],
                             payload["confidence"],
                             payload["model"],
+                            record_json=payload["record_json"],
                         ),
                     ):
                         raise StaleJobResult(
@@ -257,8 +306,10 @@ def run_custom_query_job(
                 def is_applied(current, payload, cid=cid, previous=previous):
                     return current.clips_by_id[cid].custom_queries == [
                         *previous,
-                        payload,
-                    ]
+                        _entry(payload),
+                    ] and _record(current, cid, query) == json.loads(
+                        payload["record_json"]
+                    )
 
                 receipt = batch.commit(
                     spec,
@@ -268,7 +319,9 @@ def run_custom_query_job(
                     is_applied=is_applied,
                 )
                 if receipt["applied"]:
-                    result["succeeded"].append({"clip_id": cid, **receipt["payload"]})
+                    result["succeeded"].append(
+                        {"clip_id": cid, **_entry(receipt["payload"])}
+                    )
                 else:
                     result["skipped"].append(
                         {"clip_id": cid, "reason": "already_committed"}
@@ -280,6 +333,12 @@ def run_custom_query_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult(
+                        "Custom-query inputs changed during computation"
+                    )
+                if outcome.can_apply and outcome.record_json is not None:
+                    stage_failure(cid, outcome, application, basis, previous)
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )

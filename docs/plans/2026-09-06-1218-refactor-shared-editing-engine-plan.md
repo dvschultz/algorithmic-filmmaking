@@ -395,9 +395,10 @@ the complete retention/recovery audit. See
 scope and its limitations. U10 is not complete.
 
 Custom queries now retain independent records through shared operations, direct
-headless calls, and GUI worker delivery/recovery. GUI reuse verifies saved records
-without duplicate history or local weight loading. Durable headless query jobs
-remain the next migration step.
+headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
+verifies saved records without duplicate history or local weight loading. Durable
+query retries recover records with their answers; later explicit requests still
+append new history. Cinematography is the next analysis-family migration.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

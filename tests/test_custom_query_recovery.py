@@ -1,6 +1,7 @@
 """Saved custom-query requests recover computation without duplicate appends."""
 
 from threading import Event
+from dataclasses import replace
 import json
 from unittest.mock import Mock, patch
 
@@ -9,7 +10,7 @@ import pytest
 from core.jobs.commits import StaleJobResult
 from core.jobs.custom_query import custom_query_job_spec, run_custom_query_job
 from core.jobs.store import JobStore
-from core.operations.custom_query import CustomQueryOptions
+from core.operations.custom_query import CustomQueryOptions, custom_query_record_key
 from core.project import Project
 from tests.test_description_operations import project_with_thumbnails
 
@@ -25,7 +26,7 @@ def setup(tmp_path, monkeypatch):
     return project.path, JobStore(tmp_path / "jobs.db"), provider
 
 
-def run(setup, **kwargs):
+def run(setup, *, options=OPTIONS, **kwargs):
     path, store, _ = setup
     return run_custom_query_job(
         store,
@@ -34,7 +35,7 @@ def run(setup, **kwargs):
         lambda *_: None,
         Event(),
         query="person",
-        options=OPTIONS,
+        options=options,
         **kwargs,
     )["result"]
 
@@ -54,17 +55,17 @@ def test_valid_negative_results_are_saved_but_invalid_results_are_not(setup):
 
 
 def test_legacy_parser_receipt_is_not_reused(setup, monkeypatch):
-    from core.jobs.custom_query import _provenance
+    from core.operations.custom_query import custom_query_runtime
 
     path, _, provider = setup
 
     def legacy_runtime(options):
-        data = _provenance(options)
+        data = custom_query_runtime(options)
         data.pop("response_schema")
         return data
 
     with monkeypatch.context() as old:
-        old.setattr("core.jobs.custom_query._provenance", legacy_runtime)
+        old.setattr("core.jobs.custom_query.custom_query_runtime", legacy_runtime)
         with patch(
             "core.jobs.commits.save_with_mtime_check",
             side_effect=RuntimeError("save failed"),
@@ -119,14 +120,14 @@ def test_manual_edit_is_preserved_as_input_to_new_append(setup):
     assert provider.call_count == 4
 
 
-def test_missing_committed_payload_never_recomputes(setup):
+def test_missing_old_payload_does_not_block_explicit_new_request(setup):
     path, store, provider = setup
     run(setup)
     with store._connect() as connection:
         connection.execute("DELETE FROM job_results")
-    with pytest.raises(StaleJobResult, match="missing"):
-        run(setup)
-    assert provider.call_count == 2
+    assert len(run(setup)["succeeded"]) == 2
+    assert provider.call_count == 4
+    assert all(len(c.custom_queries) == 2 for c in Project.load(path).clips)
 
 
 def test_corrupt_committed_identity_blocks_further_inference(setup):
@@ -145,6 +146,124 @@ def test_corrupt_committed_identity_blocks_further_inference(setup):
     with pytest.raises(StaleJobResult, match="identity is corrupt"):
         run(setup)
     assert provider.call_count == 2
+
+
+def test_durable_query_records_are_verified_and_failures_preserve_history(setup):
+    path, _, provider = setup
+    run(setup)
+    key = custom_query_record_key("person")
+    saved = Project.load(path)
+    assert all(c.analysis_records[key].provenance == "verified" for c in saved.clips)
+    assert all(
+        c.analysis_records[key].value == {"result": c.custom_queries[-1]}
+        for c in saved.clips
+    )
+    provider.side_effect = ValueError("Invalid answer")
+    assert len(run(setup)["failed"]) == 2
+    saved = Project.load(path)
+    assert all(c.analysis_records[key].state == "failed" for c in saved.clips)
+    assert all(len(c.custom_queries) == 1 for c in saved.clips)
+
+
+def test_failed_save_recovers_records_after_parallelism_change(setup):
+    path, _, provider = setup
+    with patch(
+        "core.jobs.commits.save_with_mtime_check",
+        side_effect=RuntimeError("save failed"),
+    ):
+        with pytest.raises(RuntimeError, match="save failed"):
+            run(setup)
+    provider.side_effect = AssertionError("Must reuse inference")
+    assert len(run(setup, options=replace(OPTIONS, parallelism=4))["succeeded"]) == 2
+    assert provider.call_count == 2
+    assert all(
+        c.analysis_records[custom_query_record_key("person")].provenance == "verified"
+        for c in Project.load(path).clips
+    )
+
+
+def test_runtime_change_invalidates_durable_query_receipt(setup, monkeypatch):
+    with patch(
+        "core.jobs.commits.save_with_mtime_check",
+        side_effect=RuntimeError("save failed"),
+    ):
+        with pytest.raises(RuntimeError):
+            run(setup)
+    monkeypatch.setattr(
+        "core.operations.description.model_runtime",
+        lambda *args: {"packages": {"test": "changed"}},
+    )
+    assert len(run(setup)["succeeded"]) == 2
+    assert setup[2].call_count == 4
+
+
+def test_durable_record_can_be_reused_by_direct_headless_query(setup, monkeypatch):
+    from core.spine.analyze import custom_query
+
+    path, _, provider = setup
+    run(setup)
+    monkeypatch.setattr(
+        "core.operations.custom_query.resolve_options", lambda *args: OPTIONS
+    )
+    project = Project.load(path)
+    result = custom_query(project, query="person", skip_existing=True)["result"]
+    assert result["skipped"] == [
+        {"clip_id": c.id, "reason": "valid_analysis"} for c in project.clips
+    ]
+    assert provider.call_count == 2
+    assert all(len(c.custom_queries) == 1 for c in project.clips)
+
+
+def test_checkpoint_recovery_requires_the_saved_record(setup):
+    path, store, provider = setup
+    with patch.object(
+        store, "checkpoint_results", side_effect=RuntimeError("checkpoint")
+    ):
+        with pytest.raises(RuntimeError):
+            run(setup)
+    project = Project.load(path)
+    for clip in project.clips:
+        clip.analysis_records.pop(custom_query_record_key("person"))
+    assert project.save()
+    assert len(run(setup)["succeeded"]) == 2
+    assert provider.call_count == 4
+
+
+def test_media_change_during_query_does_not_publish_failure_or_answer(setup):
+    path, _, provider = setup
+    source = Project.load(path).sources[0].file_path
+
+    def mutate(**kwargs):
+        source.write_bytes(b"changed during inference")
+        return True, 0.9, "model"
+
+    provider.side_effect = mutate
+    with pytest.raises(StaleJobResult, match="inputs changed"):
+        run(setup)
+    saved = Project.load(path)
+    assert not saved.metadata.job_results
+    assert all(c.custom_queries is None for c in saved.clips)
+    assert all(
+        custom_query_record_key("person") not in c.analysis_records for c in saved.clips
+    )
+
+
+def test_failure_save_error_preserves_previously_saved_records(setup):
+    path, _, provider = setup
+    run(setup)
+    provider.side_effect = ValueError("Invalid answer")
+    with patch(
+        "core.jobs.commits.save_with_mtime_check",
+        side_effect=RuntimeError("save failed"),
+    ):
+        with pytest.raises(RuntimeError, match="save failed"):
+            run(setup)
+    saved = Project.load(path)
+    assert all(
+        c.analysis_records[custom_query_record_key("person")].state == "succeeded"
+        for c in saved.clips
+    )
+    assert all(len(c.custom_queries) == 1 for c in saved.clips)
 
 
 def test_queued_media_change_rejected_before_provider(setup):

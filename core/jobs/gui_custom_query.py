@@ -8,6 +8,7 @@ from typing import Callable
 
 from core.jobs.commits import StaleJobResult
 from core.analysis_records import AnalysisFingerprints
+from core.jobs.custom_query import _arguments
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
 from core.operations.custom_query import (
@@ -38,7 +39,7 @@ class GuiCustomQueryCache(GuiResultJournal):
             source_ids,
             receipts,
             kind="gui_custom_query",
-            arguments={"tier": options.tier, "model": options.model},
+            arguments=_arguments(options),
             media_stamps=media_stamps,
         )
         self.options = options

@@ -284,8 +284,19 @@ present corrupt rows still fail validation. Reused and failed outcomes use an
 exact delivery guard without creating successful computation receipts. Explicit
 save acknowledges a query receipt only when both its history prefix and its
 per-query record are present. A superseded record's receipt stays uncommitted and
-retained. Durable headless custom-query jobs still need this record migration;
-the custom-query family and U10 remain incomplete.
+retained.
+
+Durable headless query jobs now publish the same verified records and save failed
+attempts without adding successful receipts or changing query history. Receipt
+identity includes the full runtime, previous query history, and previous per-query
+record; scheduling parallelism is excluded. A failed project save recovers the
+cached answer and its record. A failed receipt checkpoint is reconciled only when
+the saved history and record match; a later explicit request computes and appends
+again. Missing old receipt rows do not block new requests, while corrupt present
+rows still fail validation. Saved headless records can be reused by the direct
+query operation with `skip_existing=True`. Public job results keep their existing
+query-answer fields. The remaining cross-consumer and legacy-reuse audit applies
+to custom queries as well; U10 remains incomplete.
 
 ## Remaining U10 work
 
