@@ -17,10 +17,10 @@ Start with U11. Use the order below by default, delivering one algorithm or runt
 - [x] **U11:** Algorithm registry and recipe model; prove shuffle and color first. Evidence recorded below.
 - [x] **U12:** Migrate every sequencer and expose variation commands. Evidence recorded below.
 - [x] **U13:** Prove managed native-worker isolation with transcription on all supported packaged platforms. Source-mode proof, CI gates and a packaged macOS run landed; Windows/Linux packaged evidence pending the next release builds (see evidence below).
-- [x] **U14:** Every native family has an isolation seam, profile and packaged smoke gate; install/repair is unified across surfaces; per-family cutover flags flip as CI evidence lands.
+- [x] **U14:** Every native family has an isolation seam, profile, worker health probe and packaged smoke gate; install/repair is unified across surfaces; Torch/MLX startup workarounds are gated on isolation. Per-family cutover flags (default: transcription) flip as each platform's `native-analysis` CI evidence lands.
 - [x] **U15:** Shared clip/frame item models with measured large-library performance.
 - [x] **U16:** Recipe inspection and A/B variation comparison in the existing workspace.
-- [x] **U17 (gates, contracts, wrapper removal; final sign-off pending Windows/Linux packaged evidence):** Enforce quality gates, dependency contracts, and remove superseded paths.
+- [x] **U17 (gates, contracts, wrapper removal; the only open item is the Windows/Linux packaged evidence CI must produce):** Enforce quality gates, dependency contracts, and remove superseded paths.
 
 Check off a unit only after its acceptance evidence is recorded. For each completed family, record the commit, exact validation commands/results, applicable interface coverage, and remaining compatibility wrappers with removal conditions.
 
