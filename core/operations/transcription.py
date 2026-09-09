@@ -121,6 +121,7 @@ def _compute_task(
     options: TranscriptionOptions,
     on_execution: Callable[[dict[str, str | None]], None] | None = None,
     prepare: Callable[[], bool] | None = None,
+    cancel_event: Event | None = None,
 ) -> TranscriptionOutcome:
     from core.transcription_models import (
         FFmpegNotFoundError,
@@ -163,17 +164,26 @@ def _compute_task(
             segment_max_seconds=options.segment_max_seconds,
             cloud_model=options.cloud_model,
             on_execution=on_execution,
+            cancel_event=cancel_event,
         )
         return TranscriptionOutcome(
             task.clip_id, "succeeded", tuple(deepcopy(segments))
         )
     except Exception as exc:
+        from core.runtime_supervisor import WorkerCancelled, WorkerCrashed
+
+        if isinstance(exc, WorkerCancelled):
+            return TranscriptionOutcome(task.clip_id, "unprocessed", code="cancelled")
+        if isinstance(exc, (FFmpegNotFoundError, FasterWhisperNotInstalledError)):
+            code = "dependency_missing"
+        elif isinstance(exc.__cause__, WorkerCrashed) or isinstance(exc, WorkerCrashed):
+            code = "worker_crashed"
+        else:
+            code = "transcription_failed"
         return TranscriptionOutcome(
             task.clip_id,
             "failed",
-            code="dependency_missing"
-            if isinstance(exc, (FFmpegNotFoundError, FasterWhisperNotInstalledError))
-            else "transcription_failed",
+            code=code,
             message=str(exc),
             critical=isinstance(
                 exc,
@@ -192,16 +202,17 @@ def compute_task(
     *,
     fingerprints: AnalysisFingerprints | None = None,
     prepare: Callable[[], bool] | None = None,
+    cancel_event: Event | None = None,
 ) -> TranscriptionOutcome:
     """Verify detached records before inference and retain failed execution state."""
     if task.analysis_json is None:
-        return _compute_task(task, options, prepare=prepare)
+        return _compute_task(task, options, prepare=prepare, cancel_event=cancel_event)
     if (
         task.error is not None
         or task.source_path is None
         or not task.source_path.is_file()
     ):
-        return _compute_task(replace(task, skip=False), options)
+        return _compute_task(replace(task, skip=False), options, cancel_event=cancel_event)
     from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
     from core.operations.transcription_records import (
         transcription_identity,
@@ -260,6 +271,7 @@ def compute_task(
             options,
             report,
             prepare if runtime["execution"]["backend"] != "audio-probe" else None,
+            cancel_event=cancel_event,
         )
         if outcome.status == "unprocessed":
             return outcome
@@ -362,6 +374,7 @@ def run_transcription(
                         options,
                         fingerprints=fingerprints,
                         prepare=prepare_once,
+                        cancel_event=cancelled,
                     )
                 ] = next_index
                 next_index += 1

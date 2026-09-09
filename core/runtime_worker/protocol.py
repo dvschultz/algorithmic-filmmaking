@@ -51,8 +51,31 @@ def decode(line: bytes, *, expected_types: tuple[str, ...]) -> dict[str, Any]:
         raise ProtocolError(f"Line exceeds {MAX_MESSAGE_BYTES} bytes")
     try:
         message = json.loads(line.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ProtocolError(f"Malformed message: {exc}") from exc
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise ProtocolError(f"Malformed message: {type(exc).__name__}") from exc
     if not isinstance(message, dict) or message.get("type") not in expected_types:
         raise ProtocolError(f"Unexpected message: {str(message)[:120]}")
     return message
+
+
+# --- shared task result schemas ------------------------------------------
+
+TRANSCRIPT_SCHEMA_VERSION = 1
+
+
+def validate_transcript_payload(payload: Any) -> dict[str, Any]:
+    """Check the transcript JSON the ``transcribe`` task writes; both sides use this."""
+    if not isinstance(payload, dict) or payload.get("schema_version") != TRANSCRIPT_SCHEMA_VERSION:
+        raise ProtocolError("Transcript payload has an unknown schema version")
+    segments = payload.get("segments")
+    if not isinstance(segments, list):
+        raise ProtocolError("Transcript payload must list segments")
+    for item in segments:
+        if not isinstance(item, dict) or not all(k in item for k in ("start", "end", "text")):
+            raise ProtocolError("Transcript segment is missing start/end/text")
+        words = item.get("words")
+        if words is not None and (
+            not isinstance(words, list) or not all(isinstance(w, dict) and {"start", "end", "text"} <= set(w) for w in words)
+        ):
+            raise ProtocolError("Transcript words are malformed")
+    return payload

@@ -1,5 +1,7 @@
 """Tests for frozen runtime smoke helpers."""
 
+import os
+
 import pytest
 
 from core.runtime_smoke import (
@@ -97,4 +99,9 @@ def test_native_worker_runtime_smoke_passes_in_source_mode(monkeypatch):
 
         pytest.skip("faster-whisper not installed in this environment")
     monkeypatch.delenv("SCENE_RIPPER_WORKER_PYTHON", raising=False)
+    # faster-whisper resolves model revisions through the Hub; offline runs need
+    # network only when the tiny.en snapshot is not cached yet.
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    before = dict(os.environ)
     assert run_runtime_smoke_target("native-worker") == "native-worker"
+    assert os.environ.get("SCENE_RIPPER_NATIVE_WORKERS") == before.get("SCENE_RIPPER_NATIVE_WORKERS")

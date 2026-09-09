@@ -842,6 +842,8 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     # Transcription section
     # Note: auto_transcribe is deprecated and ignored
     if transcription := data.get("transcription"):
+        if "native_worker_isolation" in transcription:
+            settings.native_worker_isolation = bool(transcription["native_worker_isolation"])
         if val := transcription.get("model"):
             settings.transcription_model = val
         if val := transcription.get("language"):
@@ -875,8 +877,6 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if updates := data.get("updates"):
         if "check_for_updates" in updates:
             settings.check_for_updates = bool(updates["check_for_updates"])
-        if "native_worker_isolation" in updates:
-            settings.native_worker_isolation = bool(updates["native_worker_isolation"])
         if "automatically_download_updates" in updates:
             settings.automatically_download_updates = bool(updates["automatically_download_updates"])
         if "skipped_update_version" in updates:
@@ -1063,6 +1063,7 @@ def _settings_to_json(settings: Settings) -> dict:
             "custom_classes": settings.detection_custom_classes,
         },
         "transcription": {
+            "native_worker_isolation": settings.native_worker_isolation,
             "model": settings.transcription_model,
             "language": settings.transcription_language,
             "backend": settings.transcription_backend,
@@ -1081,7 +1082,6 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "updates": {
             "check_for_updates": settings.check_for_updates,
-            "native_worker_isolation": settings.native_worker_isolation,
             "automatically_download_updates": settings.automatically_download_updates,
             "skipped_update_version": settings.skipped_update_version,
             "last_prompted_update_version": settings.last_prompted_update_version,

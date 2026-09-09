@@ -15,6 +15,7 @@ from core.settings import load_settings
 SAFE_SETTINGS: dict[str, tuple] = {
     "default_sensitivity": (float, 1.0, 10.0),
     "min_scene_length_seconds": (float, 0.1, 10.0),
+    "native_worker_isolation": (bool,),
     "export_quality": (str, ["low", "medium", "high"]),
     "export_resolution": (str, ["original", "1080p", "720p", "480p"]),
     "export_fps": (str, ["original", "24", "30", "60"]),
@@ -45,6 +46,7 @@ def get_settings() -> dict:
             "export_fps": settings.export_fps,
             "transcription_model": settings.transcription_model,
             "transcription_language": settings.transcription_language,
+            "native_worker_isolation": settings.native_worker_isolation,
             "theme_preference": settings.theme_preference,
             "youtube_results_count": settings.youtube_results_count,
             "youtube_parallel_downloads": settings.youtube_parallel_downloads,
@@ -103,6 +105,15 @@ def update_settings(setting_name: str, value) -> dict:
                     f"{min_val} and {max_val}"
                 ),
             }
+    elif expected_type is bool:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("true", "1", "yes", "on"):
+                value = True
+            elif lowered in ("false", "0", "no", "off"):
+                value = False
+        if not isinstance(value, bool):
+            return {"success": False, "error": f"Setting '{setting_name}' requires true or false"}
     elif expected_type is str:
         value = str(value)
         allowed_values = spec[1]

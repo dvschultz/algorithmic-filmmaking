@@ -16,6 +16,7 @@ import contextlib
 import importlib.util
 import logging
 import os
+import shutil
 import platform
 import subprocess
 import tempfile
@@ -381,6 +382,7 @@ def transcribe_video(
     *,
     cloud_model: str | None = None,
     on_execution: ExecutionCallback | None = None,
+    cancel_event=None,
 ) -> list[TranscriptSegment]:
     """Transcribe audio from a video file.
 
@@ -439,6 +441,7 @@ def transcribe_video(
         segmentation_mode,
         segment_max_seconds,
         progress_callback,
+        cancel_event=cancel_event,
     )
 
 
@@ -483,7 +486,7 @@ def native_worker_enabled() -> bool:
     try:
         from core.settings import load_settings
 
-        return bool(getattr(load_settings(), "native_worker_isolation", True))
+        return bool(getattr(load_settings(read_keyring=False), "native_worker_isolation", True))
     except Exception:  # noqa: BLE001 - settings problems must not disable transcription
         return True
 
@@ -520,12 +523,25 @@ def _transcribe_in_worker(
             f"Transcription worker crashed (exit {exc.returncode}); the editor is unaffected. {tail}".strip()
         ) from exc
     except WorkerTaskError as exc:
+        if exc.kind == "dependency_missing":
+            raise FasterWhisperNotInstalledError() from exc
+        if exc.kind == "model":
+            raise ModelDownloadError(f"Transcription worker: {exc}") from exc
         raise TranscriptionError(f"Transcription failed in worker: {exc}") from exc
     except WorkerError as exc:
         raise TranscriptionError(f"Transcription worker error: {exc}") from exc
-    payload = json.loads(Path(result["result_path"]).read_text())
-    if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
-        raise TranscriptionError("Transcription worker returned a malformed result")
+    result_path = Path(result["result_path"])
+    try:
+        payload = json.loads(result_path.read_text())
+    finally:
+        # The task staging directory holds a full PCM copy of the media; drop it now.
+        shutil.rmtree(result_path.parent, ignore_errors=True)
+    from core.runtime_worker.protocol import ProtocolError, validate_transcript_payload
+
+    try:
+        validate_transcript_payload(payload)
+    except ProtocolError as exc:
+        raise TranscriptionError(f"Transcription worker returned a malformed result: {exc}") from exc
     detected = payload.get("language")
     segments = []
     for item in payload["segments"]:
@@ -549,11 +565,13 @@ def _transcribe_video_faster_whisper(
     segmentation_mode: str,
     segment_max_seconds: float,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    cancel_event=None,
 ) -> list[TranscriptSegment]:
     """Transcribe using faster-whisper backend."""
     if native_worker_enabled():
         results, _language = _transcribe_in_worker(
             video_path, model_name, language, progress_callback, extract_audio=True,
+            cancel_event=cancel_event,
         )
         return refine_transcript_segments(results, mode=segmentation_mode, max_seconds=segment_max_seconds)
 
@@ -684,6 +702,7 @@ def transcribe_clip(
     *,
     cloud_model: str | None = None,
     on_execution: ExecutionCallback | None = None,
+    cancel_event=None,
 ) -> list[TranscriptSegment]:
     """Transcribe a specific clip range from a video.
 
@@ -771,7 +790,7 @@ def transcribe_clip(
         # faster-whisper backend
         if native_worker_enabled():
             results, _language = _transcribe_in_worker(
-                tmp_path, model_name, language, extract_audio=False,
+                tmp_path, model_name, language, extract_audio=False, cancel_event=cancel_event,
             )
             return refine_transcript_segments(
                 results, mode=segmentation_mode, max_seconds=segment_max_seconds,

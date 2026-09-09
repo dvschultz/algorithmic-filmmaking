@@ -735,15 +735,20 @@ def _run_native_worker_smoke() -> None:
                 for index in range(16000):
                     value = int(8000 * math.sin(2 * math.pi * 220 * index / 16000))
                     handle.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
-            os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
             import core.runtime_supervisor as supervisor_module
 
+            previous_env = os.environ.get("SCENE_RIPPER_NATIVE_WORKERS")
+            os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
             previous = supervisor_module._default
             supervisor_module._default = supervisor
             try:
                 segments, language = _transcribe_in_worker(wav, "tiny.en", "en", None, extract_audio=True)
             finally:
                 supervisor_module._default = previous
+                if previous_env is None:
+                    os.environ.pop("SCENE_RIPPER_NATIVE_WORKERS", None)
+                else:
+                    os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = previous_env
             logger.info("Native worker transcription OK: %d segments, language=%s", len(segments), language)
     finally:
         supervisor.shutdown()

@@ -12,6 +12,7 @@ This module is Qt-free and imports no model runtimes.
 
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass, field
 import json
 import logging
@@ -73,6 +74,10 @@ class WorkerUnavailable(WorkerError):
     """No interpreter or worker package could be resolved."""
 
 
+class WorkerPollTimeout(WorkerError):
+    """No message arrived within one polling interval (not a failure)."""
+
+
 @dataclass(frozen=True)
 class WorkerLaunch:
     """Everything needed to start a worker: an explicit interpreter, not the app binary."""
@@ -86,7 +91,8 @@ class WorkerLaunch:
     family: str = "default"
 
     def command(self) -> list[str]:
-        return [str(self.interpreter), "-X", "utf8", "-m", "runtime_worker"]
+        # -s: no user site-packages; -P: do not prepend cwd (the staging dir) to sys.path.
+        return [str(self.interpreter), "-X", "utf8", "-s", "-P", "-m", "runtime_worker"]
 
     def environment(self) -> dict[str, str]:
         env = {
@@ -100,7 +106,11 @@ class WorkerLaunch:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         # Never inherit credentials into workers; providers run in the host.
         for key in list(env):
-            if key.endswith(("_API_KEY", "_TOKEN", "_SECRET")):
+            upper = key.upper()
+            if (
+                upper.endswith(("_API_KEY", "_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIALS", "_ACCESS_KEY_ID"))
+                or upper.startswith(("AWS_", "AZURE_", "GOOGLE_APPLICATION"))
+            ):
                 env.pop(key, None)
         return env
 
@@ -165,15 +175,44 @@ def default_launch(family: str = "default", *, ensure_interpreter: bool = False)
 
     interpreter = resolve_worker_interpreter(ensure=ensure_interpreter)
     managed = managed_interpreter_path()
+    managed_paths = tuple(path for path in get_managed_package_search_paths() if path.is_dir())
+    if (
+        managed is not None
+        and not os.environ.get("SCENE_RIPPER_WORKER_PYTHON")
+        and interpreter.resolve() != managed.resolve()
+        and _runtime_lives_in_managed_packages(family, managed_paths)
+    ):
+        # Source runs (and the AppImage) install on-demand runtimes with the managed
+        # pip; those wheels belong to the managed interpreter, so it hosts the worker.
+        interpreter = managed
     packages: tuple[Path, ...] = ()
     if managed is not None and interpreter.resolve() == managed.resolve():
-        packages = tuple(path for path in get_managed_package_search_paths() if path.is_dir())
+        packages = managed_paths
     return WorkerLaunch(
         interpreter=interpreter,
         worker_root=worker_package_root(),
         package_paths=packages,
         family=family,
     )
+
+
+def _runtime_lives_in_managed_packages(family: str, managed_paths: tuple[Path, ...]) -> bool:
+    """Whether the family's runtime module resolves from a managed package directory."""
+    import importlib.util
+
+    from core.runtime_profiles import family_probe_module
+
+    module = family_probe_module(family)
+    if module is None or not managed_paths:
+        return False
+    try:
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError):
+        return False
+    origin = Path(spec.origin).resolve() if spec is not None and spec.origin else None
+    if origin is None:
+        return False
+    return any(root.resolve() in origin.parents for root in managed_paths)
 
 
 def _terminate_tree(process: subprocess.Popen, grace: float) -> None:
@@ -282,22 +321,29 @@ class ManagedWorker:
             )
         except OSError as exc:
             raise WorkerUnavailable(f"Could not launch worker: {exc}") from exc
-        threading.Thread(target=self._drain_stdout, daemon=True, name="worker-stdout").start()
-        threading.Thread(target=self._drain_stderr, daemon=True, name="worker-stderr").start()
-        self._send({
-            "type": "hello", "protocol": PROTOCOL_VERSION, "worker_id": self.worker_id,
-            "staging_dir": str(self.staging_dir), "allow_test_tasks": self._allow_test_tasks,
-        })
-        message = self._next(self._handshake_timeout)
-        if message.get("type") == "error":
-            raise WorkerProtocolViolation(f"Worker refused handshake: {message.get('error')}")
-        if message.get("type") != "ready":
-            raise WorkerProtocolViolation(f"Expected ready, got {message.get('type')!r}")
-        if message.get("protocol") != PROTOCOL_VERSION:
+        threading.Thread(target=self._drain_stdout, daemon=True, name=f"worker-stdout-{self.launch.family}").start()
+        threading.Thread(target=self._drain_stderr, daemon=True, name=f"worker-stderr-{self.launch.family}").start()
+        try:
+            self._send({
+                "type": "hello", "protocol": PROTOCOL_VERSION, "worker_id": self.worker_id,
+                "staging_dir": str(self.staging_dir), "allow_test_tasks": self._allow_test_tasks,
+            })
+            try:
+                message = self._next(self._handshake_timeout)
+            except WorkerPollTimeout as exc:
+                raise WorkerError(f"Worker did not answer the handshake within {self._handshake_timeout}s") from exc
+            if message.get("type") == "error":
+                raise WorkerProtocolViolation(f"Worker refused handshake: {message.get('error')}")
+            if message.get("type") != "ready":
+                raise WorkerProtocolViolation(f"Expected ready, got {message.get('type')!r}")
+            if message.get("protocol") != PROTOCOL_VERSION:
+                raise WorkerProtocolViolation(
+                    f"Worker protocol {message.get('protocol')!r} differs from host {PROTOCOL_VERSION}"
+                )
+        except Exception:
+            # Every failed handshake tears down the interpreter and its staging root.
             self.close()
-            raise WorkerProtocolViolation(
-                f"Worker protocol {message.get('protocol')!r} differs from host {PROTOCOL_VERSION}"
-            )
+            raise
         self.capabilities = tuple(str(c) for c in message.get("capabilities", []))
         self.python = message.get("python")
         self.pid = message.get("pid")
@@ -345,7 +391,12 @@ class ManagedWorker:
             if not line:
                 self._inbox.put(None)
                 return
-            if len(line) > MAX_MESSAGE_BYTES or not line.endswith(b"\n"):
+            if not line.endswith(b"\n") and len(line) <= MAX_MESSAGE_BYTES:
+                # A short partial line means the worker died mid-write: report the
+                # crash (with its exit code and stderr) rather than an oversize violation.
+                self._inbox.put(None)
+                return
+            if len(line) > MAX_MESSAGE_BYTES:
                 self._inbox.put(WorkerProtocolViolation(f"Worker sent a line over {MAX_MESSAGE_BYTES} bytes"))
                 # Skip the remainder of the oversized line without buffering it.
                 while line and not line.endswith(b"\n"):
@@ -355,17 +406,28 @@ class ManagedWorker:
                 self._inbox.put(decode(line, expected_types=WORKER_TYPES))
             except ProtocolError as exc:
                 self._inbox.put(WorkerProtocolViolation(str(exc)))
+            except Exception as exc:  # noqa: BLE001 - the reader thread must never die silently
+                self._inbox.put(WorkerProtocolViolation(f"Unreadable worker output: {type(exc).__name__}"))
 
     def _drain_stderr(self) -> None:
         process = self._process
         assert process is not None and process.stderr is not None
-        for raw in process.stderr:
-            text = raw.decode("utf-8", "replace").rstrip()
-            logger.debug("worker[%s] %s", self.worker_id[:8], text)
-            with self._lock:
-                self._stderr.append(text)
-                if len(self._stderr) > MAX_STDERR_LINES:
-                    del self._stderr[: len(self._stderr) - MAX_STDERR_LINES]
+        stream = process.stderr
+        try:
+            for raw in stream:
+                text = raw.decode("utf-8", "replace").rstrip()
+                logger.debug("worker[%s] %s", self.worker_id[:8], text)
+                with self._lock:
+                    self._stderr.append(text)
+                    if len(self._stderr) > MAX_STDERR_LINES:
+                        del self._stderr[: len(self._stderr) - MAX_STDERR_LINES]
+        except (OSError, ValueError) as exc:
+            logger.debug("worker[%s] stderr drain stopped: %s", self.worker_id[:8], exc)
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
 
     def stderr_tail(self, lines: int = 20) -> str:
         with self._lock:
@@ -379,7 +441,7 @@ class ManagedWorker:
                 item = self._inbox.get(timeout=min(remaining, 0.5) if remaining is not None else 0.5)
             except queue.Empty:
                 if deadline is not None and time.monotonic() >= deadline:
-                    raise WorkerError("Timed out waiting for the worker")
+                    raise WorkerPollTimeout("Timed out waiting for the worker")
                 if not self.alive and self._inbox.empty():
                     raise WorkerCrashed(
                         "Worker exited unexpectedly", self._process.returncode if self._process else None, self.stderr_tail(),
@@ -410,6 +472,7 @@ class ManagedWorker:
             raise WorkerCrashed("Worker is not running", self._process.returncode if self._process else None, self.stderr_tail())
         task_id = uuid.uuid4().hex
         task_staging = self.staging_dir / task_id
+        task_staging.mkdir(parents=True, exist_ok=True)  # host-owned; the worker writes inside it
         self._send({"type": "task", "id": task_id, "kind": kind, "args": json.loads(json.dumps(args))})
         cancel_sent_at: float | None = None
         deadline = time.monotonic() + timeout if timeout is not None else None
@@ -433,18 +496,25 @@ class ManagedWorker:
                     raise WorkerError(f"Task {kind} timed out after {timeout}s; worker terminated")
                 try:
                     message = self._next(0.25)
-                except WorkerError as exc:
-                    if isinstance(exc, WorkerCrashed) or "Timed out" not in str(exc):
-                        if cancel_sent_at is not None and isinstance(exc, WorkerCrashed):
-                            raise WorkerCancelled("Task cancelled") from exc
-                        raise
+                except WorkerPollTimeout:
                     continue
-                if message.get("id") != task_id and message.get("type") != "error":
-                    continue
+                except WorkerCrashed as exc:
+                    if cancel_sent_at is not None:
+                        raise WorkerCancelled("Task cancelled") from exc
+                    raise
+                if message.get("id") not in (task_id, None):
+                    continue  # stale message from an earlier task
                 kind_ = message["type"]
                 if kind_ == "progress":
                     if progress is not None:
-                        progress(float(message.get("fraction", 0.0)), str(message.get("message", "")))
+                        try:
+                            progress(float(message.get("fraction", 0.0)), str(message.get("message", "")))
+                        except Exception:
+                            # A failing observer must not abandon an in-flight task.
+                            if cancel_sent_at is None:
+                                cancel_sent_at = time.monotonic()
+                                self._send({"type": "cancel", "id": task_id})
+                            raise
                 elif kind_ == "result":
                     if cancel_sent_at is not None:
                         raise WorkerCancelled("Task cancelled before its result was accepted")
@@ -483,7 +553,10 @@ class RuntimeSupervisor:
     def worker(self, family: str = "default") -> ManagedWorker:
         with self._guard:
             worker = self._workers.get(family)
-            if worker is None or not worker.alive:
+            if worker is not None and not worker.alive:
+                worker.close()  # reap the dead process and its staging before replacing it
+                worker = None
+            if worker is None:
                 worker = ManagedWorker(
                     self.launch_factory(family), staging_root=self._staging_root,
                     allow_test_tasks=self._allow_test_tasks,
@@ -493,10 +566,18 @@ class RuntimeSupervisor:
             self._locks.setdefault(family, threading.Lock())
             return worker
 
+    def _family_lock(self, family: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault(family, threading.Lock())
+
     def run(self, family: str, kind: str, args: dict[str, Any], **options: Any) -> dict[str, Any]:
-        """Run one task on the family's worker; accelerator access is serialized per family."""
-        worker = self.worker(family)
-        with self._locks[family]:
+        """Run one task on the family's worker; accelerator access is serialized per family.
+
+        The worker is resolved inside the family lock, so callers queued behind a
+        crash get a fresh worker instead of the retired one.
+        """
+        with self._family_lock(family):
+            worker = self.worker(family)
             try:
                 return worker.run(kind, args, **options)
             except (WorkerCrashed, WorkerProtocolViolation):
@@ -532,3 +613,6 @@ def shutdown_default_supervisor() -> None:
         supervisor, _default = _default, None
     if supervisor is not None:
         supervisor.shutdown()
+
+
+atexit.register(shutdown_default_supervisor)

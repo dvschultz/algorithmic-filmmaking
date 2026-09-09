@@ -599,6 +599,18 @@ before the edit, so malformed transcript input cannot partially change a clip.
   list sequences with algorithm and recipe ids, and switch the active sequence.
 
 
+## Native worker isolation
+
+faster-whisper transcription runs in a separate managed worker process
+(`core/runtime_worker`, supervised by `core/runtime_supervisor.py`). A worker
+crash surfaces as a failed item with code `worker_crashed` and the editor or
+server keeps running; a missing runtime is `dependency_missing`. Toggle the
+behaviour with the `native_worker_isolation` setting (`get_settings` /
+`update_settings`) or, for one process, `SCENE_RIPPER_NATIVE_WORKERS=0|1`.
+Set `SCENE_RIPPER_WORKER_PYTHON` to point workers at a specific interpreter for
+diagnosis. Worker runtimes are installed only through allowlisted profiles
+(`transcription-whisper`); callers cannot name packages or executables.
+
 ## Shared job lifecycle
 
 The MCP job API and existing task IDs are unchanged. Runtime, store, and project

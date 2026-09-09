@@ -17,9 +17,15 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from .protocol import TRANSCRIPT_SCHEMA_VERSION, validate_transcript_payload
+
 
 class TaskCancelled(Exception):
     """Raised by a handler when it stops because the host cancelled."""
+
+
+class ModelLoadError(RuntimeError):
+    """A model could not be loaded or downloaded (reported with kind='model')."""
 
 
 class WorkerContext:
@@ -61,6 +67,25 @@ class WorkerContext:
 
 # --- transcription -----------------------------------------------------------
 
+_whisper_cache: dict[tuple[str, str, str], Any] = {}
+
+
+def _whisper_model(model_name: str, device: str, compute_type: str):
+    """One loaded model per worker; batch transcription must not reload per clip."""
+    from faster_whisper import WhisperModel  # heavy runtime, imported only here
+
+    key = (model_name, device, compute_type)
+    model = _whisper_cache.get(key)
+    if model is None:
+        _whisper_cache.clear()  # one warm model per family keeps memory bounded
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        except Exception as exc:  # noqa: BLE001 - download/load failures are a distinct kind
+            raise ModelLoadError(f"Could not load model {model_name!r}: {exc}") from exc
+        _whisper_cache[key] = model
+    return model
+
+
 
 def transcribe(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     """Transcribe a media file with faster-whisper and write segments to staging."""
@@ -71,9 +96,7 @@ def transcribe(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     language = args.get("language") or None
     ffmpeg = args.get("ffmpeg")
     context.progress(0.05, "Loading transcription model...")
-    from faster_whisper import WhisperModel  # heavy runtime, imported only here
-
-    model = WhisperModel(model_name, device=str(args.get("device", "cpu")), compute_type=str(args.get("compute_type", "int8")))
+    model = _whisper_model(model_name, str(args.get("device", "cpu")), str(args.get("compute_type", "int8")))
     context.check_cancelled()
 
     source: Path = media
@@ -107,15 +130,22 @@ def transcribe(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
         })
         context.progress(0.2 + 0.7 * min(1.0, float(segment.end) / max(1.0, float(getattr(info, "duration", 0) or 1.0))), "Transcribing...")
     output = context.staging_dir / "transcript.json"
-    output.write_text(json.dumps({
+    output.write_text(json.dumps(validate_transcript_payload({
+        "schema_version": TRANSCRIPT_SCHEMA_VERSION,
         "language": getattr(info, "language", None), "duration": float(getattr(info, "duration", 0.0) or 0.0),
         "model": model_name, "segments": results,
-    }))
+    })))
     context.progress(1.0, f"Transcribed {len(results)} segments")
     return {"result_path": str(output), "segment_count": len(results), "language": getattr(info, "language", None)}
 
 
 # --- test-only handlers (enabled by the host's hello.allow_test_tasks) --------
+#
+# These ship in the worker on purpose: the protocol tests and the packaged
+# `native-worker` smoke target need deterministic crash, oversize, and
+# staging-escape behaviour from the *real* worker binary. They are inert
+# unless the host's hello message sets allow_test_tasks, which only the smoke
+# target and tests do; the production supervisor never sets it.
 
 
 def echo(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:

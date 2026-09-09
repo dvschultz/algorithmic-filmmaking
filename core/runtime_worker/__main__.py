@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .protocol import HOST_TYPES, PROTOCOL_VERSION, ProtocolError, decode, encode
-from .tasks import HANDLERS, TEST_HANDLERS, TaskCancelled, WorkerContext
+from .tasks import HANDLERS, TEST_HANDLERS, ModelLoadError, TaskCancelled, WorkerContext
 
 _out_lock = threading.Lock()
 
@@ -120,6 +120,10 @@ def main() -> int:
             _send({"type": "cancelled", "id": task_id})
         except ProtocolError as exc:
             _send({"type": "error", "id": task_id, "error": str(exc), "kind": "protocol"})
+        except ImportError as exc:
+            _send({"type": "error", "id": task_id, "error": f"{type(exc).__name__}: {exc}"[:2000], "kind": "dependency_missing"})
+        except ModelLoadError as exc:
+            _send({"type": "error", "id": task_id, "error": str(exc)[:2000], "kind": "model"})
         except MemoryError:
             _send({"type": "error", "id": task_id, "error": "Out of memory", "kind": "resource"})
         except BaseException as exc:  # noqa: BLE001 - report, keep the worker alive

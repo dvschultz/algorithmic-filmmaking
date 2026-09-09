@@ -21,6 +21,8 @@ class RuntimeProfile:
     """Feature-registry names whose manifest pins this profile installs."""
     task_kinds: tuple[str, ...]
     description: str
+    probe_module: str = ""
+    """Top-level runtime module whose install location decides which interpreter hosts the family."""
 
 
 PROFILES: dict[str, RuntimeProfile] = {
@@ -30,8 +32,16 @@ PROFILES: dict[str, RuntimeProfile] = {
         features=("transcribe",),
         task_kinds=("transcribe",),
         description="faster-whisper transcription in an isolated worker",
+        probe_module="faster_whisper",
     ),
 }
+
+
+def family_probe_module(family: str) -> str | None:
+    for profile in PROFILES.values():
+        if profile.family == family and profile.probe_module:
+            return profile.probe_module
+    return None
 
 
 def get_profile(profile_id: Any) -> RuntimeProfile:
