@@ -343,7 +343,7 @@ def test_try_generate_missing_word_data_shows_error(qapp, monkeypatch):
     clip, source = _make_aligned_clip()
     dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
     monkeypatch.setattr(
-        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        "core.remix.word_sequencer.generate_word_sequence",
         lambda *args, **kwargs: (_ for _ in ()).throw(MissingWordDataError(["clip-1"])),
     )
 
@@ -359,7 +359,7 @@ def test_try_generate_empty_result_shows_error(qapp, monkeypatch):
     clip, source = _make_aligned_clip()
     dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
     monkeypatch.setattr(
-        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        "core.remix.word_sequencer.generate_word_sequence",
         lambda *args, **kwargs: [],
     )
 
@@ -375,7 +375,7 @@ def test_try_generate_value_error_shows_error(qapp, monkeypatch):
     clip, source = _make_aligned_clip()
     dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
     monkeypatch.setattr(
-        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        "core.remix.word_sequencer.generate_word_sequence",
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad fps")),
     )
 
@@ -521,10 +521,13 @@ def test_accept_loop_does_not_redrive_alignment_for_already_attempted_clips(
     def fake_generate(clips, **kwargs):
         sequencer_calls.append([c.id for c, _ in clips])
         from models.sequence import SequenceClip
-        return [SequenceClip(source_clip_id=clips[0][0].id, source_id=clips[0][1].id)]
+        return [SequenceClip(
+            source_clip_id=clips[0][0].id, source_id=clips[0][1].id,
+            in_point=clips[0][0].start_frame, out_point=clips[0][0].end_frame,
+        )]
 
     monkeypatch.setattr(
-        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        "core.remix.word_sequencer.generate_word_sequence",
         fake_generate,
     )
 
@@ -586,7 +589,7 @@ def test_accept_with_all_clips_failed_alignment_shows_error_and_does_not_loop(
 
     sequencer_calls: list = []
     monkeypatch.setattr(
-        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        "core.remix.word_sequencer.generate_word_sequence",
         lambda *a, **kw: sequencer_calls.append(True) or [],
     )
 

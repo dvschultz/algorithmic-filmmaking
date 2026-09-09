@@ -41,8 +41,6 @@ from core.remix.cassette_tape import (
     SLIDER_DEFAULT,
     SLIDER_MAX,
     SLIDER_MIN,
-    build_sequence_data,
-    flatten_matches_in_phrase_order,
     match_phrases,
     safe_fps,
 )
@@ -269,6 +267,7 @@ class CassetteTapeDialog(QDialog):
         self._project = project
         self.worker: Optional[CassetteTapeWorker] = None
         self.matches_by_phrase: dict[str, list[MatchResult]] = {}
+        self.recipe = None  # SequenceRecipe of the emitted sequence
         self._match_rows: list[_MatchRow] = []
 
         # Filter to clips that have a transcript and aren't disabled.
@@ -675,13 +674,35 @@ class CassetteTapeDialog(QDialog):
     # ---------- Final emit ----------
 
     def _finish_with_sequence(self):
-        enabled_keys = {
-            (r.match.phrase, r.match.clip_id, r.match.segment_index)
+        excluded = [
+            [r.match.phrase, r.match.clip_id, r.match.segment_index]
             for r in self._match_rows
-            if r.is_enabled()
-        }
-        flat = flatten_matches_in_phrase_order(self.matches_by_phrase, enabled_keys)
-        sequence_data = build_sequence_data(flat, self._clips_by_id, self.sources_by_id)
+            if not r.is_enabled()
+        ]
+        from core.remix import run_registry_algorithm
+
+        pairs = [
+            (clip, self.sources_by_id[clip.source_id])
+            for clip in self._clips_by_id.values()
+            if clip.source_id in self.sources_by_id
+        ]
+        # Replay the phrases that produced the reviewed matches, not the live form.
+        requested = getattr(self.worker, "phrases_with_counts", None) or [
+            (phrase, max(len(matches), 1)) for phrase, matches in self.matches_by_phrase.items()
+        ]
+        run = run_registry_algorithm(
+            "cassette_tape", pairs,
+            parameters={
+                "phrases": [{"phrase": p, "count": c} for p, c in requested],
+                "excluded_matches": excluded,
+            },
+        )
+        self.recipe = run.recipe if run is not None else None
+        by_id = {clip.id: (clip, source) for clip, source in run.inputs} if run is not None else {}
+        sequence_data = [
+            (*by_id[entry.clip_id], entry.in_offset, entry.out_offset)
+            for entry in (run.recipe.realized if run is not None else ())
+        ]
 
         if not sequence_data:
             logger.warning("Cassette Tape: no enabled matches to emit")

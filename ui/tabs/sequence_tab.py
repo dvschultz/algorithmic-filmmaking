@@ -1346,6 +1346,7 @@ class SequenceTab(BaseTab):
         algorithm_key: str,
         display_label: str,
         allow_repeats: bool,
+        recipe=None,
     ) -> bool:
         """Apply a dialog sequence emitted as ``(Clip, Source, in_point, out_point)`` tuples.
 
@@ -1403,6 +1404,7 @@ class SequenceTab(BaseTab):
             sequence = self.timeline.get_sequence()
             sequence.algorithm = algorithm_key
             sequence.allow_repeats = allow_repeats
+            sequence.recipe = recipe
             self._apply_chromatic_bar_to_sequence(algorithm_key)
             self._update_chromatic_bar_controls(algorithm_key)
             self._emit_chromatic_bar_setting_changed()
@@ -1440,17 +1442,20 @@ class SequenceTab(BaseTab):
             parent=self,
         )
 
-        dialog.sequence_ready.connect(self._apply_cassette_tape_sequence)
+        dialog.sequence_ready.connect(
+            lambda data, owner=dialog: self._apply_cassette_tape_sequence(data, recipe=owner.recipe)
+        )
         dialog.exec()
 
     @Slot(list)
-    def _apply_cassette_tape_sequence(self, sequence_data: list):
+    def _apply_cassette_tape_sequence(self, sequence_data: list, recipe=None):
         """Apply the sequence from the Cassette Tape dialog."""
         return self._apply_dialog_sequence_trimmed(
             sequence_data,
             algorithm_key="cassette_tape",
             display_label="Cassette Tape",
             allow_repeats=False,
+            recipe=recipe,
         )
 
     def _show_rose_hobart_dialog(self, clips: list):
@@ -1495,12 +1500,12 @@ class SequenceTab(BaseTab):
 
         def apply_result(seq_clips):
             if self._project is owner_project:
-                self._apply_staccato_sequence(seq_clips, dialog.music_path)
+                self._apply_staccato_sequence(seq_clips, dialog.music_path, recipe=dialog.recipe)
 
         dialog.sequence_ready.connect(apply_result)
         dialog.exec()
 
-    def _apply_staccato_sequence(self, sequence_clips: list, music_path=None) -> bool:
+    def _apply_staccato_sequence(self, sequence_clips: list, music_path=None, recipe=None) -> bool:
         """Apply the sequence from Staccato dialog.
 
         Staccato emits (Clip, Source, slot_duration_seconds) tuples.
@@ -1569,6 +1574,7 @@ class SequenceTab(BaseTab):
             sequence.algorithm = "staccato"
             if music_path:
                 sequence.music_path = music_path
+            sequence.recipe = recipe
             self._apply_chromatic_bar_to_sequence("staccato")
             self._update_chromatic_bar_controls("staccato")
 
@@ -1598,8 +1604,8 @@ class SequenceTab(BaseTab):
 
         dialog = WordSequencerDialog(clips=clips, project=self._project, parent=self)
         dialog.sequence_ready.connect(
-            lambda seq_clips: self._apply_word_sequence(
-                seq_clips, clips, "word_sequencer", "Word Sequencer"
+            lambda seq_clips, owner=dialog: self._apply_word_sequence(
+                seq_clips, clips, "word_sequencer", "Word Sequencer", recipe=owner.recipe,
             )
         )
         dialog.exec()
@@ -1614,8 +1620,8 @@ class SequenceTab(BaseTab):
 
         dialog = WordLLMComposerDialog(clips=clips, project=self._project, parent=self)
         dialog.sequence_ready.connect(
-            lambda seq_clips: self._apply_word_sequence(
-                seq_clips, clips, "word_llm_composer", "LLM Word Composer"
+            lambda seq_clips, owner=dialog: self._apply_word_sequence(
+                seq_clips, clips, "word_llm_composer", "LLM Word Composer", recipe=owner.recipe,
             )
         )
         dialog.exec()
@@ -1626,6 +1632,7 @@ class SequenceTab(BaseTab):
         clips: list,
         algorithm_key: str,
         display_label: str,
+        recipe=None,
     ):
         """Apply a sequence emitted by a word-based dialog.
 
@@ -1694,6 +1701,7 @@ class SequenceTab(BaseTab):
 
             sequence = self.timeline.get_sequence()
             sequence.algorithm = algorithm_key
+            sequence.recipe = recipe
             self._apply_chromatic_bar_to_sequence(algorithm_key)
             self._update_chromatic_bar_controls(algorithm_key)
             self._emit_chromatic_bar_setting_changed()

@@ -64,6 +64,7 @@ class LLMComposerWorker(CancellableWorker):
         system_prompt: Optional[str] = None,
         think: bool = False,
         parent=None,
+        compose_fn=None,
     ) -> None:
         super().__init__(parent)
         self._clips = list(clips or [])
@@ -78,6 +79,8 @@ class LLMComposerWorker(CancellableWorker):
         self._timeout = float(timeout)
         self._system_prompt = system_prompt
         self._think = think
+        self._compose_fn = compose_fn
+        self.recipe = None  # SequenceRecipe once composition has run
 
     @Slot()
     def run(self) -> None:
@@ -91,26 +94,33 @@ class LLMComposerWorker(CancellableWorker):
             # underlying composer doesn't expose intermediate progress.
             self.progress.emit(0, 1)
 
-            from core.remix.word_llm_composer import generate_llm_word_sequence
+            from core.remix import run_registry_algorithm
+            from core.remix.word_sequencer import sequence_clips_from_run
 
-            sequence_clips = generate_llm_word_sequence(
-                self._clips,
-                prompt=self._prompt,
-                target_length=self._target_length,
-                repeat_policy=self._repeat_policy,
+            run = run_registry_algorithm(
+                "word_llm_composer", self._clips,
                 seed=self._seed,
-                handle_frames=self._handle_frames,
-                model=self._model,
-                api_base=self._api_base,
-                temperature=self._temperature,
-                timeout=self._timeout,
-                system_prompt=self._system_prompt,
-                think=self._think,
+                parameters={
+                    "prompt": self._prompt,
+                    "target_length": self._target_length,
+                    "repeat_policy": self._repeat_policy,
+                    "handle_frames": self._handle_frames,
+                    "model": self._model or "",
+                    "temperature": self._temperature,
+                    "think": self._think,
+                },
+                cancel_event=self._cancel_event,
+                resources={
+                    "api_base": self._api_base, "timeout": self._timeout,
+                    "system_prompt": self._system_prompt, "compose_fn": self._compose_fn,
+                },
             )
 
-            if self.is_cancelled():
+            if run is None or self.is_cancelled():
                 self._log_cancelled()
                 return
+            self.recipe = run.recipe
+            sequence_clips = sequence_clips_from_run(run)
 
             self.progress.emit(1, 1)
             # PySide6 marshals ``list`` over queued connections by value;

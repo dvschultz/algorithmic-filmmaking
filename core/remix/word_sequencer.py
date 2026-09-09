@@ -48,8 +48,29 @@ __all__ = [
     "MissingWordDataError",
     "generate_word_sequence",
     "instances_to_sequence_clips",
+    "sequence_clips_from_run",
     "validate_word_data",
 ]
+
+
+def sequence_clips_from_run(run) -> list["SequenceClip"]:
+    """Project a registry run's realized entries onto ``SequenceClip`` values.
+
+    Keeps the ``list[SequenceClip]`` contract the word dialogs emit while the
+    recipe remains the source of truth for what was placed.
+    """
+    from models.sequence import SequenceClip
+
+    by_id = {clip.id: clip for clip, _ in run.inputs}
+    entries = []
+    for realized in run.recipe.realized:
+        clip = by_id[realized.clip_id]
+        entries.append(SequenceClip(
+            source_clip_id=clip.id, source_id=realized.source_id,
+            in_point=clip.start_frame + realized.in_offset,
+            out_point=clip.start_frame + realized.out_offset,
+        ))
+    return entries
 
 
 # ---------------------------------------------------------------------------

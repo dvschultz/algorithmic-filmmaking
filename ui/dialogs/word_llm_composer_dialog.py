@@ -640,6 +640,11 @@ class WordLLMComposerDialog(QDialog):
             self._progress_bar.setValue(int(current / total * 100))
 
     @Slot(list)
+    @property
+    def recipe(self):
+        """Recipe of the emitted sequence, or None."""
+        return getattr(self, "_recipe", None)
+
     def _on_compose_ready(self, sequence_clips: list) -> None:
         if self._compose_finished_handled:
             return
@@ -650,6 +655,7 @@ class WordLLMComposerDialog(QDialog):
         self._prompt_input.setReadOnly(False)
         worker = self._compose_worker
         self._compose_worker = None
+        self._recipe = getattr(worker, "recipe", None)
         if worker is not None:
             try:
                 worker.wait(50)

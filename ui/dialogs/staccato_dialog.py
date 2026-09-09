@@ -41,7 +41,6 @@ from core.analysis.audio import (
     make_onset_detection_config,
 )
 from core.audio_formats import AUDIO_FILE_DIALOG_FILTER as _AUDIO_FORMATS
-from core.remix.staccato import generate_staccato_sequence
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.widgets.waveform_widget import WaveformWidget
 from ui.workers.base import CancellableWorker
@@ -187,6 +186,7 @@ class StaccatoGenerateWorker(CancellableWorker):
         parent=None,
         *,
         project: "Project | None" = None,
+        music_path: "Path | None" = None,
     ):
         super().__init__(parent)
         self._clips = deepcopy(clips)
@@ -195,6 +195,8 @@ class StaccatoGenerateWorker(CancellableWorker):
         self._audio_analysis = audio_analysis
         self._strategy = strategy
         self._cut_times = cut_times
+        self._music_path = music_path
+        self.recipe = None  # SequenceRecipe once generation has run
 
     def run(self):
         self._log_start()
@@ -207,20 +209,26 @@ class StaccatoGenerateWorker(CancellableWorker):
                 self._log_cancelled()
                 return
 
-            # Step 2: Generate beat-driven sequence
+            # Step 2: Generate beat-driven sequence through the registry
             self.progress_message.emit("Matching clips to beats...")
-            result = generate_staccato_sequence(
-                clips=self._clips,
-                audio_analysis=self._audio_analysis,
-                strategy=self._strategy,
-                cut_times=self._cut_times,
-                progress_cb=self._on_progress,
-            )
+            from core.remix import run_registry_algorithm
 
-            if self.is_cancelled():
+            run = run_registry_algorithm(
+                "staccato", self._clips,
+                parameters={
+                    "music_path": str(self._music_path) if self._music_path else "",
+                    "strategy": self._strategy,
+                    "cut_times": list(self._cut_times or []),
+                },
+                cancel_event=self._cancel_event,
+                resolve_prerequisites=False,
+                resources={"audio_analysis": self._audio_analysis},
+            )
+            if run is None or self.is_cancelled():
                 self._log_cancelled()
                 return
-
+            self.recipe = run.recipe
+            result = self._legacy_result(run)
             self.finished_sequence.emit(result)
         except Exception as e:
             if not self.is_cancelled():
@@ -231,6 +239,31 @@ class StaccatoGenerateWorker(CancellableWorker):
     def _auto_compute_embeddings(self) -> None:
         """Resolve prerequisites on the worker's private clip snapshot."""
         self.prerequisite_job.populate(self._clips, self._cancel_event, require_all=True)
+
+    def _legacy_result(self, run):
+        """Project a registry run back onto the (clip, source, slot_duration) shape."""
+        from core.remix.staccato import StaccatoDebugInfo, StaccatoResult, StaccatoSlotDebug
+
+        by_id = {clip.id: (clip, source) for clip, source in run.inputs}
+        slots = run.recipe.provider_outputs.get("slots", [])
+        sequence = []
+        for slot in slots:
+            clip, source = by_id[slot["clip_id"]]
+            sequence.append((clip, source, float(slot["end"]) - float(slot["start"])))
+        debug = StaccatoDebugInfo(
+            strategy=self._strategy, total_slots=len(slots), total_clips_available=len(self._clips),
+        )
+        for slot in slots:
+            clip, source = by_id[slot["clip_id"]]
+            debug.slots.append(StaccatoSlotDebug(
+                slot_index=slot["index"], start_time=slot["start"], end_time=slot["end"],
+                onset_strength=slot["onset_strength"], clip_id=clip.id,
+                clip_name=str(getattr(clip, "name", None) or clip.id),
+                source_filename=Path(source.file_path).name if source.file_path else "",
+                cosine_distance=slot.get("cosine_distance"), target_distance=slot["onset_strength"],
+                distance_score=slot.get("distance_score") or 0.0, needs_loop=slot["needs_loop"],
+            ))
+        return StaccatoResult(sequence, debug=debug)
 
     def _on_progress(self, current: int, total: int):
         self.progress_update.emit(current, total)
@@ -288,6 +321,11 @@ class StaccatoDialog(QDialog):
     def music_path(self) -> Path | None:
         """The music file used for this staccato sequence."""
         return self._music_path
+
+    @property
+    def recipe(self):
+        """Recipe of the generated sequence, or None."""
+        return getattr(self._generate_worker, "recipe", None)
 
     def showEvent(self, event):
         """Prompt for an audio file when Staccato opens with no audio library."""
@@ -1049,6 +1087,7 @@ class StaccatoDialog(QDialog):
             cut_times=cut_times,
             parent=self,
             project=self._project,
+            music_path=self._music_path,
         )
         self._generate_worker.progress_update.connect(self._on_progress_update)
         self._generate_worker.progress_message.connect(self._on_progress_message)

@@ -66,7 +66,7 @@ def test_generate_uses_preview_filtered_markers(qapp, monkeypatch):
     captured = {}
 
     class FakeWorker:
-        def __init__(self, clips, audio_analysis, strategy, cut_times=None, parent=None, *, project=None):
+        def __init__(self, clips, audio_analysis, strategy, cut_times=None, parent=None, *, project=None, music_path=None):
             captured["clips"] = clips
             captured["audio_analysis"] = audio_analysis
             captured["strategy"] = strategy

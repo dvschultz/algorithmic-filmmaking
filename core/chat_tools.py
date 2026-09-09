@@ -4015,38 +4015,30 @@ def generate_cassette_tape(
             "error": "No transcribed clips available. Run Transcribe analysis on clips first.",
         }
 
-    from core.remix.cassette_tape import (
-        build_sequence_data,
-        flatten_matches_in_phrase_order,
-        match_phrases,
+    from core.spine.sequences import generate_sequence as _generate
+
+    result = _generate(
+        project, "cassette_tape",
+        clip_ids=[c.id for c in transcribed],
+        parameters={"phrases": [{"phrase": p, "count": c} for p, c in phrases_with_counts]},
+        name="Cassette Tape",
     )
-
-    try:
-        results = match_phrases(phrases_with_counts, transcribed)
-        if not results:
+    if not result.get("success"):
+        if "empty" in str(result.get("error", "")):
             return {"success": False, "error": "No matches found for the supplied phrases."}
-
-        flat = flatten_matches_in_phrase_order(results)  # all matches enabled
-        sequence_data = build_sequence_data(flat, project.clips_by_id, project.sources_by_id)
-        if not sequence_data:
-            return {"success": False, "error": "Could not resolve matches to project clips."}
-
-        seq_tab = main_window.sequence_tab
-        if not seq_tab._apply_cassette_tape_sequence(sequence_data):
-            return {"success": False, "error": "Could not commit the generated Cassette Tape sequence"}
-
-        return _add_sequence_summary_for_agent(project, {
-            "success": True,
-            "algorithm": "cassette_tape",
-            "clip_count": len(sequence_data),
-            "phrases": [
-                {"phrase": p, "match_count": len(results.get(p, []))}
-                for p, _ in phrases_with_counts
-            ],
-        }, sequence_data)
-    except Exception as e:
-        logger.exception("generate_cassette_tape failed")
-        return {"success": False, "error": str(e)}
+        return result
+    sequence = next((s for s in project.sequences if s.id == result["sequence_id"]), None)
+    matches = sequence.readable_recipe.provider_outputs.get("matches", []) if sequence and sequence.readable_recipe else []
+    result["algorithm"] = "cassette_tape"
+    result["phrases"] = [
+        {"phrase": p, "match_count": sum(1 for m in matches if m["phrase"] == p)}
+        for p, _ in phrases_with_counts
+    ]
+    entries = [
+        (project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id])
+        for c in result["clip_ids"]
+    ]
+    return _add_sequence_summary_for_agent(project, result, entries)
 
 
 @tools.register(
@@ -4595,7 +4587,7 @@ def generate_staccato(
         Dict with success status, clip count, and slot count
     """
     from core.analysis.audio import analyze_music_file
-    from core.remix.staccato import generate_staccato_sequence
+    from types import SimpleNamespace
 
     # Validate strategy
     valid_strategies = ("beats", "downbeats", "onsets")
@@ -4662,33 +4654,51 @@ def generate_staccato(
             ),
         }
 
-    # Generate the staccato sequence
+    # Generate the staccato sequence through the registry (embeddings already verified)
     try:
-        result = generate_staccato_sequence(
-            clips=clips,
-            audio_analysis=audio_analysis,
-            strategy=strategy,
+        from core.remix import run_registry_algorithm
+
+        run = run_registry_algorithm(
+            "staccato", clips,
+            parameters={"music_path": str(validated_path), "strategy": strategy, "cut_times": []},
+            resolve_prerequisites=False,
+            resources={"audio_analysis": audio_analysis},
         )
     except Exception as e:
         return {"success": False, "error": f"Staccato generation failed: {e}"}
 
-    if not result:
+    slots = run.recipe.provider_outputs.get("slots", []) if run is not None else []
+    if run is None or not slots:
         return {
             "success": False,
             "error": "No sequence generated. Check that the audio has detectable beats."
         }
 
-    # Apply to the sequence tab
-    sequence_clips = list(result)
+    # Apply to the sequence tab in the (clip, source, slot_duration) shape
+    by_id = {clip.id: (clip, source) for clip, source in clips}
+    sequence_clips = [
+        (*by_id[slot["clip_id"]], float(slot["end"]) - float(slot["start"])) for slot in slots
+    ]
     if not main_window.sequence_tab._apply_staccato_sequence(
-        sequence_clips, str(validated_path)
+        sequence_clips, str(validated_path), recipe=run.recipe,
     ):
         return {"success": False, "error": "Could not commit the generated Staccato sequence"}
+
+    result = SimpleNamespace(debug=SimpleNamespace(
+        total_slots=len(slots), total_clips_available=len(clips),
+        slots=[SimpleNamespace(
+            slot_index=s["index"], start_time=s["start"], end_time=s["end"], clip_id=s["clip_id"],
+            source_filename=Path(by_id[s["clip_id"]][1].file_path).name,
+            onset_strength=s["onset_strength"], cosine_distance=s.get("cosine_distance"),
+            needs_loop=s["needs_loop"],
+        ) for s in slots],
+    ))
 
     response = {
         "success": True,
         "clip_count": len(sequence_clips),
         "slot_count": result.debug.total_slots if result.debug else len(sequence_clips),
+        "recipe_id": run.recipe.id,
         "strategy": strategy,
         "audio_file": str(validated_path),
         "tempo_bpm": round(audio_analysis.tempo_bpm, 1),

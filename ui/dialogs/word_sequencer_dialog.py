@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 
 from core.remix.word_sequencer import (
     MissingWordDataError,
-    generate_word_sequence,
+    sequence_clips_from_run,
 )
 from core.spine.words import normalize_word
 from ui.dialogs._word_source_picker import (
@@ -103,6 +103,7 @@ class WordSequencerDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.recipe = None  # SequenceRecipe of the emitted sequence
         self._clips = list(clips or [])
         self._project = project
 
@@ -611,12 +612,14 @@ class WordSequencerDialog(QDialog):
             return
 
         try:
-            sequence_clips = generate_word_sequence(
-                ready_clips,
-                mode=self._selected_mode_key(),
-                mode_params=self._collect_mode_params(),
-                handle_frames=self._handle_spin.value(),
-            )
+            from core.remix import run_registry_algorithm
+
+            mode = self._selected_mode_key()
+            parameters = {"mode": mode, "handle_frames": self._handle_spin.value()}
+            parameters.update(self._collect_mode_params())
+            run = run_registry_algorithm("word_sequencer", ready_clips, parameters=parameters)
+            self.recipe = run.recipe
+            sequence_clips = sequence_clips_from_run(run)
         except MissingWordDataError as exc:
             # Defensive: partition should have filtered these out. If we
             # still hit this, surface and break out instead of looping.

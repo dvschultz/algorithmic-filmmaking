@@ -49,11 +49,14 @@ registry = AlgorithmRegistry()
 
 def _register_builtin() -> None:
     from core.remix.arrange import ARRANGE_DEFINITIONS
+    from core.remix.cassette_tape import CassetteTapeDefinition
     from core.remix.chromatics import ChromaticsDefinition
     from core.remix.gaze import EyesWithoutAFaceDefinition
     from core.remix.match_cut import MatchCutDefinition
     from core.remix.reference_match import ReferenceGuidedDefinition
     from core.remix.rose_hobart import RoseHobartDefinition
+    from core.remix.staccato import StaccatoDefinition
+    from core.remix.word_definitions import WordLLMComposerDefinition, WordSequencerDefinition
     from core.remix.shuffle import ShuffleDefinition
     from core.remix.similarity_chain import SimilarityChainDefinition
 
@@ -66,6 +69,10 @@ def _register_builtin() -> None:
     registry.register(EyesWithoutAFaceDefinition())
     registry.register(ReferenceGuidedDefinition())
     registry.register(RoseHobartDefinition())
+    registry.register(StaccatoDefinition())
+    registry.register(CassetteTapeDefinition())
+    registry.register(WordSequencerDefinition())
+    registry.register(WordLLMComposerDefinition())
 
 
 _register_builtin()

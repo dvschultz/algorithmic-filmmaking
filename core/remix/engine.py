@@ -412,9 +412,11 @@ def run_algorithm(
         raise ValueError("Algorithm inputs must not repeat a clip")
     if cancel_event is not None and cancel_event.is_set():
         return None
+    run_resources = dict(resources or {})
+    run_resources.setdefault("seed", resolved_seed)
     outcome = (
         definition.prepare(
-            selected, normalized, cancel_event=cancel_event, progress=progress, resources=resources,
+            selected, normalized, cancel_event=cancel_event, progress=progress, resources=run_resources,
         )
         if resolve_prerequisites else list(selected)
     )
@@ -427,6 +429,7 @@ def run_algorithm(
     if prepared is not None:
         prepared(inputs)
     rng = random.Random(resolved_seed) if definition.seeded else None
+    context.setdefault("seed", resolved_seed)
     proposal = definition.generate(inputs, normalized, rng, context)
     if proposal.kind != definition.kind:
         raise ValueError(f"Algorithm {definition.key!r} produced a {proposal.kind} proposal")
