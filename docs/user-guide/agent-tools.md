@@ -157,6 +157,8 @@ History lasts until the project is cleared or replaced and is not saved in the p
 | `gaze_sort` | Gaze Sort | "Sort clips by gaze direction, left to right" |
 | `gaze_consistency` | Gaze Consistency | "Group clips by gaze direction" |
 
+`shuffle` and `color` run through the shared algorithm registry: the generated sequence stores a recipe (parameters, seed, inputs, realized order and transforms) and the tool result includes `recipe_id` and `seed`. For `shuffle`, `seed: 0` keeps its legacy meaning of "pick a random seed"; the drawn seed is recorded so the result can be repeated. `list_sorting_algorithms` shows the registry schema under `engine` for these algorithms.
+
 `generate_remix` is the right tool for these 12 direct arrange/connect algorithms. Dialog-heavy sequencers with extra parameters use their own tools instead: `generate_reference_guided`, `generate_staccato`, `generate_rose_hobart`, `generate_eyes_without_a_face`, `generate_cassette_tape`, `generate_signature_style`, `generate_exquisite_corpus`, and `generate_storyteller`. Free Association, Word Sequencer, and LLM Word Composer are currently GUI-only — agent-tool parity for the word sequencers is tracked separately.
 
 **Reference Guide parameters:**

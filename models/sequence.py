@@ -12,6 +12,7 @@ from models.media_time import (
     StillHold, TimelineRange, VideoRange, frame_boundary, frame_rate, rational,
 )
 from models.analysis_record import ArtifactRef
+from models.recipe import SequenceRecipe, StoredRecipe, load_recipe
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +293,7 @@ class Sequence:
     allow_repeats: bool = False  # Allow same clip matched to multiple positions
     show_chromatic_color_bar: bool = False  # Optional Chromatic Flow bottom bar
     music_path: Optional[str] = None  # Path to music file (staccato sequences)
+    recipe: Optional[StoredRecipe] = None  # Generation inputs and realized decisions
 
     def __post_init__(self):
         """Ensure at least one track exists."""
@@ -374,7 +376,14 @@ class Sequence:
                     data["music_path"] = self.music_path
             else:
                 data["music_path"] = self.music_path
+        if self.recipe is not None:
+            data["recipe"] = self.recipe.to_dict()
         return data
+
+    @property
+    def readable_recipe(self) -> Optional[SequenceRecipe]:
+        """The recipe when this build can interpret it; unreadable documents are kept but hidden."""
+        return self.recipe if isinstance(self.recipe, SequenceRecipe) else None
 
     @classmethod
     def from_dict(cls, data: dict, base_path: Optional[Path] = None) -> "Sequence":
@@ -406,6 +415,7 @@ class Sequence:
             allow_repeats=data.get("allow_repeats", False),
             show_chromatic_color_bar=data.get("show_chromatic_color_bar", False),
             music_path=music_path,
+            recipe=load_recipe(data.get("recipe")),
         )
         # If no tracks were loaded, ensure at least one exists
         if not seq.tracks:

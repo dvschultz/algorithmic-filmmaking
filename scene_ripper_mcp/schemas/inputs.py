@@ -235,3 +235,19 @@ class TranscribeInput(BaseModel):
         description="Whisper model size: tiny.en, small.en, medium.en, large-v3",
     )
     language: str = Field(default="en", description="Language code (en, auto, etc.)")
+
+
+class GenerateSequenceInput(BaseModel):
+    """Input for registry-backed sequence generation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    project_path: str = Field(..., description="Path to project file")
+    algorithm: str = Field(..., description="Registry algorithm key (see list_sequence_algorithms)")
+    clip_ids: Optional[list[str]] = Field(
+        default=None, description="Clip IDs to sequence, in candidate order; omit for all enabled clips",
+        min_length=1,
+    )
+    parameters: Optional[dict] = Field(default=None, description="Algorithm parameters; unknown keys are rejected")
+    seed: Optional[int] = Field(default=None, ge=0, description="Explicit seed for seeded algorithms (0 is a valid seed)")
+    name: Optional[str] = Field(default=None, description="Sequence name; defaults to the algorithm label")

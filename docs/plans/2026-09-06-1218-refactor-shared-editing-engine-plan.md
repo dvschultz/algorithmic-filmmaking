@@ -10,6 +10,9 @@ execution: code
 
 # Shared Editing Engine and Architecture Renewal - Plan
 
+**Remaining work:** Use the [U11–U17 execution plan](2026-09-09-shared-editing-engine-remaining-work-plan.md)
+for the current checklist, dependencies, and completion gates.
+
 **U8–U10 acceptance, 2026-09-08:** Complete. The full suite passed 6,108 tests
 with two documented opt-in skips. Subsequent typing cleanup passed the affected
 regression suites and the 141-file shared scope. All five final review findings

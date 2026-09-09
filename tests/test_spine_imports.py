@@ -133,6 +133,9 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.thumbnails",
     "core.spine.downloads",
     "core.spine.words",
+    "models.recipe",
+    "core.remix.engine",
+    "core.remix.registry",
 )
 
 

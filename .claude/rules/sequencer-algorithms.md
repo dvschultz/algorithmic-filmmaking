@@ -38,6 +38,18 @@ Source of truth: `ui/algorithm_config.py`. Dialog-based algorithms have `is_dial
 Algorithm implementations: `core/remix/` (one module per algorithm).
 Dialog UIs: `ui/dialogs/` (one file per dialog algorithm).
 
+## Registry (U11+)
+
+`core/remix/engine.py` holds the Qt-free `AlgorithmDefinition` base, `ParameterSpec`,
+`SequenceProposal`, `run_algorithm`, and the seed contract (explicit non-negative
+seed, `0` valid, `None` = draw and record). `core/remix/registry.py` registers
+definitions; `models/recipe.py` is the persisted `SequenceRecipe`. Migrated
+algorithms (`shuffle`, `color`) run through the registry on every surface and
+store a recipe on the sequence. `core.remix.generate_sequence` is a compatibility
+wrapper for those keys. New or migrated algorithms: add a definition, register it,
+keep labels/icons/dialog hints in `ui/algorithm_config.py`, and update
+`docs/architecture/surface-compatibility.md`.
+
 ## Dialog Pattern
 
 Dialog-based algorithms use modal `QDialog` subclasses in `ui/dialogs/`. They build their own sequence and set it on the project. **Watch for sequence overwrite** — dialog sequences can be clobbered by generic handlers if the algorithm isn't excluded from fallback paths.

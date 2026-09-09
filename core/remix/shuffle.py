@@ -1,7 +1,13 @@
 """Constrained shuffle algorithm for video clip remixing."""
 
+from __future__ import annotations
+
 import random
-from typing import TypeVar, Callable, List
+from typing import Any, Callable, List, Mapping, Sequence, TypeVar
+
+from core.remix.engine import (
+    AlgorithmDefinition, ClipInput, ParameterSpec, ProposedEntry, SequenceProposal,
+)
 
 T = TypeVar("T")
 
@@ -11,7 +17,7 @@ def constrained_shuffle(
     get_category: Callable[[T], str],
     max_consecutive: int = 1,
     max_attempts: int = 1000,
-    rng: random.Random = None,
+    rng: random.Random | None = None,
 ) -> List[T]:
     """
     Shuffle items with constraint: no more than max_consecutive
@@ -77,7 +83,7 @@ def _greedy_repair(
     items: List[T],
     get_category: Callable[[T], str],
     max_consecutive: int,
-    rng: random.Random = None,
+    rng: random.Random | None = None,
 ) -> List[T]:
     """
     Greedy algorithm when rejection sampling fails.
@@ -88,7 +94,7 @@ def _greedy_repair(
 
     remaining = items.copy()
     rng.shuffle(remaining)
-    result = []
+    result: List[T] = []
 
     while remaining:
         # Get recent categories
@@ -114,3 +120,53 @@ def _greedy_repair(
         remaining.remove(chosen)
 
     return result
+
+
+def assign_transforms(
+    count: int, options: Mapping[str, Any], rng: random.Random,
+) -> list[dict[str, bool]]:
+    """Draw per-entry transform flags; each enabled option applies with 50% odds."""
+    flags = []
+    for _ in range(count):
+        flags.append({
+            "hflip": bool(options.get("hflip")) and rng.random() < 0.5,
+            "vflip": bool(options.get("vflip")) and rng.random() < 0.5,
+            "reverse": bool(options.get("reverse")) and rng.random() < 0.5,
+        })
+    return flags
+
+
+class ShuffleDefinition(AlgorithmDefinition):
+    """Hatchet Job: seeded constrained shuffle with optional random transforms."""
+
+    key = "shuffle"
+    version = 1
+    seeded = True
+    parameters = (
+        ParameterSpec(
+            "max_consecutive_same_source", "integer", 1,
+            "Maximum adjacent clips from one source", minimum=1, maximum=1000,
+        ),
+        ParameterSpec("hflip", "boolean", False, "Randomly flip about half of the clips horizontally"),
+        ParameterSpec("vflip", "boolean", False, "Randomly flip about half of the clips vertically"),
+        ParameterSpec("reverse", "boolean", False, "Randomly reverse about half of the clips"),
+    )
+
+    def generate(
+        self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None,
+    ) -> SequenceProposal:
+        assert rng is not None
+        ordered = constrained_shuffle(
+            list(inputs),
+            get_category=lambda item: item[1].id,
+            max_consecutive=parameters["max_consecutive_same_source"],
+            rng=rng,
+        )
+        flags = assign_transforms(len(ordered), parameters, rng)
+        return SequenceProposal(
+            "ordering",
+            tuple(
+                ProposedEntry(clip.id, source.id, hflip=f["hflip"], vflip=f["vflip"], reverse=f["reverse"])
+                for (clip, source), f in zip(ordered, flags)
+            ),
+        )

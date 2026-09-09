@@ -93,6 +93,36 @@ currently Qt-owned. Recipe realization must move below these controls without
 requiring headless clients to instantiate dialogs. Paid model responses must
 be persisted as realized results for later replay.
 
+### Algorithm registry and recipes (U11 pilot)
+
+`core/remix/engine.py` defines Qt-free algorithm definitions, typed sequence
+proposals, parameter normalization, the explicit-seed contract, and
+`run_algorithm`, which returns a proposal plus a `models.recipe.SequenceRecipe`.
+`core/remix/registry.py` holds the registered definitions. `Sequence.recipe`
+persists the recipe (`"recipe"` key, recipe schema 1, project schema unchanged);
+unreadable or future recipe documents are preserved verbatim on save.
+
+| Algorithm key | Registry | GUI | Chat | MCP | CLI |
+| --- | --- | --- | --- | --- | --- |
+| shuffle | `ShuffleDefinition` v1 (seeded; `max_consecutive_same_source`, `hflip`, `vflip`, `reverse`) | Hatchet Job dialog and worker run the registry; prerender consumes realized transforms | `generate_remix` via `SequenceTab.generate_and_apply` | `generate_sequence` | not yet (U12) |
+| color | `ChromaticsDefinition` v1 (unseeded; `direction`, `no_color_handling`) | `SequenceWorker` runs the registry; chromatic bar stays a UI adapter setting | `generate_remix` | `generate_sequence` | not yet (U12) |
+
+Every surface above stores the recipe on the published sequence. Reconstruction
+(`core.spine.sequences.reconstruct_sequence`, MCP `reconstruct_sequence`) replays
+realized entries only; changed or missing inputs produce an itemized error and no
+edit. `get_sequence_recipe` reports reconstructability. `list_sequence_algorithms`
+and the chat `list_sorting_algorithms` `engine` field expose the same schemas.
+
+Compatibility wrappers: `core.remix.generate_sequence` routes `shuffle`/`color`
+through `run_registry_algorithm`, translating the legacy `seed=0`/`None`
+"random" convention to a drawn, recorded seed (removal condition: U12 migrates
+all callers to registry parameters). `SequenceTab._run_generation` is the GUI
+adapter for the same translation. MCP `shuffle_sequence` remains a timeline
+reorder of an existing sequence, not a recipe-producing generation. Unknown
+Chromatics directions now fail validation instead of silently sorting by hue.
+Remaining algorithms still dispatch through `generate_sequence` or dialogs
+until U12.
+
 ## Persistence and media-time defects
 
 `tests/fixtures/projects/v1.0.json` through `v1.4.json` exercise the currently

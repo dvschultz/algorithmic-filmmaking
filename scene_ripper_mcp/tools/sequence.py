@@ -293,3 +293,110 @@ async def shuffle_sequence(
         }
 
     return await _editorial_call(project_path, ctx, operation)
+
+
+# --- Registry-backed generation and recipes -------------------------------
+
+
+@mcp.tool()
+async def list_sequence_algorithms(ctx: Context = None) -> str:
+    """List sequencer algorithms available through the registry with their parameter schemas.
+
+    Returns:
+        JSON with one entry per algorithm: key, version, kind, seeded,
+        prerequisites, and parameters (name, type, default, choices, bounds).
+    """
+    from core.spine.sequences import list_algorithms
+
+    return json.dumps(list_algorithms())
+
+
+@mcp.tool()
+async def generate_sequence(
+    project_path: Annotated[str, "Path to project file"],
+    algorithm: Annotated[str, "Registry algorithm key (see list_sequence_algorithms)"],
+    clip_ids: Annotated[
+        Optional[list[str]], "Clip IDs to sequence, in candidate order; omit for all enabled clips"
+    ] = None,
+    parameters: Annotated[Optional[dict], "Algorithm parameters; unknown keys are rejected"] = None,
+    seed: Annotated[Optional[int], "Explicit seed for seeded algorithms (0 is a valid seed)"] = None,
+    name: Annotated[Optional[str], "Sequence name; defaults to the algorithm label"] = None,
+    ctx: Context = None,
+) -> str:
+    """Generate a new sequence with a registry algorithm and store its recipe.
+
+    The result is published as one reversible edit and becomes the active
+    sequence. The stored recipe records normalized parameters, the seed,
+    the ordered inputs, and every realized placement so the sequence can be
+    inspected and reconstructed without running the algorithm again.
+
+    Args:
+        project_path: Path to the project file
+        algorithm: Registry algorithm key
+        clip_ids: Optional clip IDs in candidate order
+        parameters: Optional algorithm parameters
+        seed: Optional explicit seed; omitted seeds are drawn and recorded
+        name: Optional sequence name
+
+    Returns:
+        JSON with sequence_id, recipe_id, seed, parameters, clip order and notes
+    """
+    from core.spine.sequences import generate_sequence as _generate
+
+    def operation(project):
+        return _generate(
+            project, algorithm, clip_ids=clip_ids, parameters=parameters, seed=seed, name=name,
+        )
+
+    return await _editorial_call(project_path, ctx, operation)
+
+
+@mcp.tool()
+async def get_sequence_recipe(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_id: Annotated[Optional[str], "Sequence ID; omit for the active sequence"] = None,
+    ctx: Context = None,
+) -> str:
+    """Inspect the stored recipe of a generated sequence.
+
+    Returns:
+        JSON with the recipe document, its generation fingerprint, whether it
+        can be reconstructed in the current project, and any input problems.
+    """
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        from core.spine.project_io import load_with_mtime
+        from core.spine.sequences import get_sequence_recipe as _inspect
+
+        project, _mtime = load_with_mtime(path)
+        return json.dumps(_inspect(project, sequence_id))
+    except Exception as exc:
+        from core.spine.project_io import project_error
+
+        return json.dumps({"success": False, "error": project_error(exc)})
+
+
+@mcp.tool()
+async def reconstruct_sequence(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_id: Annotated[Optional[str], "Sequence ID; omit for the active sequence"] = None,
+    name: Annotated[Optional[str], "Name for the rebuilt sequence"] = None,
+    ctx: Context = None,
+) -> str:
+    """Rebuild a sequence from its stored recipe without re-running the algorithm.
+
+    Replays the realized clip choices, trims and transforms as a new sequence.
+    Performs no provider calls. Fails with a list of changed inputs when the
+    project no longer matches the recipe, leaving existing sequences untouched.
+
+    Returns:
+        JSON with the new sequence's id, name, recipe_id and clip order
+    """
+    from core.spine.sequences import reconstruct_sequence as _reconstruct
+
+    def operation(project):
+        return _reconstruct(project, sequence_id, name=name)
+
+    return await _editorial_call(project_path, ctx, operation)

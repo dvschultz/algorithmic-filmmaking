@@ -560,6 +560,24 @@ word objects use `start`, `end`, and `text`. Times must be finite, nonnegative,
 and ordered. Use an empty list to clear a transcript. JSON conversion happens
 before the edit, so malformed transcript input cannot partially change a clip.
 
+### Registry generation and recipes
+
+- `list_sequence_algorithms()` lists the algorithms available headlessly with
+  their versions and parameter schemas (currently `shuffle` and `color`).
+- `generate_sequence(project_path, algorithm, clip_ids?, parameters?, seed?, name?)`
+  runs one algorithm on the given clips (default: all enabled clips, library
+  order) and publishes a new sequence as one undoable edit. Unknown parameters,
+  invalid choices, unknown clip IDs, and seeds for unseeded algorithms are
+  rejected without writing. Seeded algorithms treat `seed: 0` as an explicit
+  seed; an omitted seed is drawn and returned so the run can be repeated.
+- `get_sequence_recipe(project_path, sequence_id?)` returns the stored recipe:
+  normalized parameters, seed, ordered inputs with analysis identities, and
+  realized placements, plus `reconstructable` and any input `problems`.
+- `reconstruct_sequence(project_path, sequence_id?, name?)` rebuilds a sequence
+  from its realized entries as a new sequence. It never runs the algorithm or a
+  provider. If clips were removed or re-cut, it fails with the changed clip IDs
+  and leaves the project untouched.
+
 
 ## Shared job lifecycle
 

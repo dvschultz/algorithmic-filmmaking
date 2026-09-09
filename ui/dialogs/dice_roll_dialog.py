@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot
 
-from core.remix import generate_sequence, assign_random_transforms
+from core.remix import run_registry_algorithm
 from core.remix.prerender import prerender_batch, get_transform_cache_dir
 from ui.theme import theme, Spacing, TypeScale
 from ui.workers.base import CancellableWorker
@@ -48,27 +48,30 @@ class DiceRollWorker(CancellableWorker):
         self._hflip = hflip
         self._vflip = vflip
         self._reverse = reverse
+        self.recipe = None  # SequenceRecipe once the shuffle has run
 
     def run(self):
         """Run shuffle + pre-render pipeline."""
         self._log_start()
         try:
-            # Step 1: Shuffle clips
+            # Step 1: Shuffle and draw transforms through the registry so the
+            # recipe records the realized order and transform flags.
             self.progress_message.emit("Shuffling clips...")
-            sorted_clips = generate_sequence(
-                algorithm="shuffle",
-                clips=self._clips,
-                clip_count=len(self._clips),
+            run = run_registry_algorithm(
+                "shuffle", self._clips,
+                transform_options={"hflip": self._hflip, "vflip": self._vflip, "reverse": self._reverse},
+                cancel_event=self._cancel_event,
             )
-
-            if self.is_cancelled():
+            if run is None or self.is_cancelled():
                 self._log_cancelled()
                 return
+            self.recipe = run.recipe
+            sorted_clips = run.ordered_clips
+            realized = run.recipe.realized
 
-            has_transforms = self._hflip or self._vflip or self._reverse
+            has_transforms = any(entry.has_transform for entry in realized)
 
             if not has_transforms:
-                # No transforms — just emit shuffled clips with empty transform info
                 result = [
                     (clip, source, {"hflip": False, "vflip": False, "reverse": False, "prerendered_path": None})
                     for clip, source in sorted_clips
@@ -76,30 +79,11 @@ class DiceRollWorker(CancellableWorker):
                 self.finished_sequence.emit(result)
                 return
 
-            # Step 2: Create ephemeral SequenceClips and assign random transforms
-            transform_options = {
-                "hflip": self._hflip,
-                "vflip": self._vflip,
-                "reverse": self._reverse,
-            }
-            from fractions import Fraction
-            from core.sequence_time import video_entry
-
-            temp_seq_clips = [
-                video_entry(clip, source, timeline_fps=source.fps, start=Fraction(0))
-                for clip, source in sorted_clips
-            ]
-            assign_random_transforms(temp_seq_clips, transform_options)
-
-            if self.is_cancelled():
-                self._log_cancelled()
-                return
-
-            # Step 3: Pre-render clips with transforms
+            # Step 2: Pre-render clips with the realized transforms
             self.progress_message.emit("Pre-rendering transformed clips...")
             clips_with_transforms = [
-                (clip, source, {"hflip": sc.hflip, "vflip": sc.vflip, "reverse": sc.reverse})
-                for (clip, source), sc in zip(sorted_clips, temp_seq_clips)
+                (clip, source, {"hflip": entry.hflip, "vflip": entry.vflip, "reverse": entry.reverse})
+                for (clip, source), entry in zip(sorted_clips, realized)
             ]
 
             output_dir = get_transform_cache_dir()
@@ -117,9 +101,7 @@ class DiceRollWorker(CancellableWorker):
             # Detect total prerender failure: if transforms were requested but
             # every clip came back without a prerendered_path, something is wrong
             # (commonly: project folder is on a disconnected drive).
-            expected_prerender_count = sum(
-                1 for sc in temp_seq_clips if sc.hflip or sc.vflip or sc.reverse
-            )
+            expected_prerender_count = sum(1 for entry in realized if entry.has_transform)
             actual_prerender_count = sum(
                 1 for _, _, path in rendered if path is not None
             )
@@ -130,13 +112,12 @@ class DiceRollWorker(CancellableWorker):
                     f"(disconnected external drive?). See logs for details."
                 )
 
-            # Build result with transform info and prerendered paths
             result = []
-            for (clip, source, prerendered_path), sc in zip(rendered, temp_seq_clips):
+            for (clip, source, prerendered_path), entry in zip(rendered, realized):
                 result.append((clip, source, {
-                    "hflip": sc.hflip,
-                    "vflip": sc.vflip,
-                    "reverse": sc.reverse,
+                    "hflip": entry.hflip,
+                    "vflip": entry.vflip,
+                    "reverse": entry.reverse,
                     "prerendered_path": str(prerendered_path) if prerendered_path else None,
                 }))
 
@@ -160,7 +141,7 @@ class DiceRollDialog(QDialog):
     Page 2: Progress — progress bar during pre-rendering
     """
 
-    sequence_ready = Signal(list)  # list of (Clip, Source, dict)
+    sequence_ready = Signal(list)  # list of (Clip, Source, dict); see ``recipe``
 
     def __init__(self, clips: list, parent=None):
         """
@@ -170,6 +151,7 @@ class DiceRollDialog(QDialog):
         super().__init__(parent)
         self._clips = clips
         self._worker = None
+        self.recipe = None  # SequenceRecipe of the emitted sequence
         self.setWindowTitle("Hatchet Job")
         self.setMinimumWidth(400)
         self.setMinimumHeight(250)
@@ -326,6 +308,7 @@ class DiceRollDialog(QDialog):
 
     @Slot(list)
     def _on_finished(self, sequence_data: list):
+        self.recipe = self._worker.recipe if self._worker is not None else None
         self.sequence_ready.emit(sequence_data)
         self.accept()
 

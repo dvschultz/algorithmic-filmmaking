@@ -991,6 +991,7 @@ class SequenceTab(BaseTab):
             # Persist algorithm on the sequence for SRT export
             sequence = self.timeline.get_sequence()
             sequence.algorithm = algo_lower
+            sequence.recipe = getattr(worker, "recipe", None)
             self._apply_chromatic_bar_to_sequence(algo_lower)
             self._update_chromatic_bar_controls(algo_lower)
             self._emit_chromatic_bar_setting_changed()
@@ -1735,16 +1736,19 @@ class SequenceTab(BaseTab):
             clips: List of (Clip, Source) tuples to shuffle
         """
         dialog = DiceRollDialog(clips=clips, parent=self)
-        dialog.sequence_ready.connect(self._apply_dice_roll_sequence)
+        dialog.sequence_ready.connect(
+            lambda data, owner=dialog: self._apply_dice_roll_sequence(data, recipe=owner.recipe)
+        )
         dialog.exec()
 
     @Slot(list)
-    def _apply_dice_roll_sequence(self, sequence_data: list):
+    def _apply_dice_roll_sequence(self, sequence_data: list, recipe=None):
         """Apply the sequence from Dice Roll dialog.
 
         Args:
             sequence_data: List of (Clip, Source, dict) where dict has
                 hflip, vflip, reverse, prerendered_path keys.
+            recipe: SequenceRecipe describing the realized shuffle, if any.
         """
         if not sequence_data:
             logger.warning("No clips in Dice Roll sequence")
@@ -1792,6 +1796,7 @@ class SequenceTab(BaseTab):
             self._current_algorithm = "shuffle"
 
             sequence.algorithm = "shuffle"
+            sequence.recipe = recipe
             self._apply_chromatic_bar_to_sequence("shuffle")
             self._update_chromatic_bar_controls("shuffle")
             self._emit_chromatic_bar_setting_changed()
@@ -2658,6 +2663,39 @@ class SequenceTab(BaseTab):
                     f"Gaze filter active: {count}/{total} clips match '{_display_label}'"
                 )
 
+    @staticmethod
+    def _run_generation(
+        algorithm: str,
+        clips: list,
+        *,
+        direction: Optional[str] = None,
+        seed: Optional[int] = None,
+        no_color_handling: Optional[str] = None,
+        transform_options: Optional[dict] = None,
+    ) -> tuple[list, object]:
+        """Run synchronous generation, through the registry when the algorithm has a definition.
+
+        Returns the ordered (Clip, Source) list and the recipe (``None`` for
+        algorithms that have not been migrated to the registry yet).
+        """
+        from core.remix import run_registry_algorithm
+        from core.remix.registry import registry
+
+        if algorithm in registry:
+            run = run_registry_algorithm(
+                algorithm, clips, direction=direction, seed=seed,
+                no_color_handling=no_color_handling, transform_options=transform_options,
+            )
+            return run.ordered_clips, run.recipe
+        return generate_sequence(
+            algorithm=algorithm,
+            clips=clips,
+            clip_count=len(clips),
+            direction=direction,
+            seed=seed,
+            no_color_handling=no_color_handling,
+        ), None
+
     def generate_and_apply(
         self,
         algorithm: str,
@@ -2704,13 +2742,9 @@ class SequenceTab(BaseTab):
         try:
             proposal = self._prepare_sequence_draft(algorithm.lower()) if self._project else None
             # Generate sequence
-            sorted_clips = generate_sequence(
-                algorithm=algorithm.lower(),
-                clips=clips,
-                clip_count=len(clips),
-                direction=direction,
-                seed=seed,
-                no_color_handling=no_color_handling,
+            sorted_clips, recipe = self._run_generation(
+                algorithm.lower(), clips, direction=direction, seed=seed,
+                no_color_handling=no_color_handling, transform_options=transform_options,
             )
 
             # Create new sequence and apply to timeline
@@ -2719,6 +2753,7 @@ class SequenceTab(BaseTab):
 
             for clip, source in sorted_clips:
                 self.timeline.add_clip(clip, source, track_index=0)
+            generated_sequence.recipe = recipe
 
             # Update preview and dropdown
             self.timeline_preview.set_clips(sorted_clips, self._sources)
@@ -2737,7 +2772,14 @@ class SequenceTab(BaseTab):
                 from core.remix.prerender import prerender_batch
                 sequence = self.timeline.get_sequence()
                 if sequence.tracks and sequence.tracks[0].clips:
-                    assign_random_transforms(sequence.tracks[0].clips, transform_options, seed=seed)
+                    if recipe is not None:
+                        # The registry already drew transforms; apply the realized flags.
+                        for seq_clip, entry in zip(sequence.tracks[0].clips, recipe.realized):
+                            seq_clip.hflip, seq_clip.vflip, seq_clip.reverse = (
+                                entry.hflip, entry.vflip, entry.reverse,
+                            )
+                    else:
+                        assign_random_transforms(sequence.tracks[0].clips, transform_options, seed=seed)
 
                     # Pre-render clips with assigned transforms
                     clips_with_transforms = []
@@ -2793,6 +2835,9 @@ class SequenceTab(BaseTab):
                 "success": True,
                 "algorithm": algorithm,
                 "clip_count": len(sorted_clips),
+                "sequence_id": generated_sequence.id,
+                "recipe_id": recipe.id if recipe is not None else None,
+                "seed": recipe.seed if recipe is not None else None,
                 "clips": [
                     {
                         "id": clip.id,
@@ -2973,16 +3018,13 @@ class SequenceTab(BaseTab):
         generated_sequence = None
         try:
             # Generate sorted sequence
-            sorted_clips = generate_sequence(
-                algorithm=algorithm.lower(),
-                clips=clips_with_sources,
-                clip_count=len(clips_with_sources),
-                direction=direction,
-                seed=seed,
+            sorted_clips, recipe = self._run_generation(
+                algorithm.lower(), clips_with_sources, direction=direction, seed=seed,
             )
 
             # Create new sequence and populate timeline
             generated_sequence = self._create_and_activate_sequence(algorithm.lower())
+            generated_sequence.recipe = recipe
             self.timeline.clear_timeline()
 
             # Set FPS from first source

@@ -338,6 +338,15 @@ def list_sorting_algorithms(project) -> dict:
         },
     ]
 
+    # Registry-backed algorithms expose their engine schema (version, normalized
+    # parameters, seed contract) so agents can inspect and reproduce recipes.
+    from core.remix.registry import registry
+
+    for entry in algorithms:
+        definition = registry.get(str(entry["key"]))
+        if definition is not None:
+            entry["engine"] = definition.describe()
+
     return {
         "algorithms": algorithms,
         "clip_count": len(clips),

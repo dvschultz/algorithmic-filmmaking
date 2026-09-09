@@ -51,6 +51,7 @@ class SequenceWorker(CancellableWorker):
         self._clips = deepcopy(clips)
         self._direction = direction
         self._no_color_handling = no_color_handling
+        self.recipe = None  # SequenceRecipe for registry-backed algorithms
         self.prerequisite_job: "SequenceScalarJob | SequenceEmbeddingJob | None" = None
         if algorithm in ("brightness", "volume"):
             from core.jobs.sequence_scalars import SequenceScalarJob
@@ -71,7 +72,8 @@ class SequenceWorker(CancellableWorker):
     def run(self):
         self._log_start()
         try:
-            from core.remix import generate_sequence
+            from core.remix import generate_sequence, run_registry_algorithm
+            from core.remix.registry import registry
 
             self.progress_message.emit(f"Computing {self._algorithm} sequence...")
 
@@ -97,6 +99,17 @@ class SequenceWorker(CancellableWorker):
                     from core.remix.similarity_chain import similarity_chain
 
                     sorted_clips = similarity_chain(self._clips)
+            elif self._algorithm in registry:
+                run = run_registry_algorithm(
+                    self._algorithm, self._clips,
+                    direction=self._direction,
+                    no_color_handling=self._no_color_handling,
+                    cancel_event=self._cancel_event,
+                )
+                if run is None:
+                    return
+                self.recipe = run.recipe
+                sorted_clips = run.ordered_clips
             else:
                 sorted_clips = generate_sequence(
                     algorithm=self._algorithm,
