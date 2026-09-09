@@ -922,5 +922,5 @@ class TestGazeConsistencyAlgorithm:
         clips = [
             (_make_clip("a", gaze_yaw=5.0, gaze_category="at_camera"), source),
         ]
-        with pytest.raises(ValueError, match="Unknown gaze_sort direction"):
+        with pytest.raises(ValueError, match="must be one of"):
             generate_sequence("gaze_sort", clips, 1, direction="bad_value")

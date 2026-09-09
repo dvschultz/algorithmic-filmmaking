@@ -97,7 +97,9 @@ def generate_sequence(
         return []
     clips_to_use = clips[:clip_count]
 
-    if algorithm in ("shuffle", "color"):
+    from core.remix.registry import registry
+
+    if algorithm in registry:
         run = run_registry_algorithm(
             algorithm, clips_to_use, direction=direction, seed=seed,
             no_color_handling=no_color_handling, cancel_event=cancel_event,
@@ -274,6 +276,7 @@ def run_registry_algorithm(
     transform_options: Optional[dict[str, bool]] = None,
     parameters: Optional[dict[str, Any]] = None,
     cancel_event: Event | None = None,
+    resolve_prerequisites: bool = True,
 ):
     """Run a registry algorithm from legacy keyword arguments.
 
@@ -299,6 +302,7 @@ def run_registry_algorithm(
         definition, unique, merged,
         seed=legacy_seed(seed) if definition.seeded else None,
         cancel_event=cancel_event,
+        resolve_prerequisites=resolve_prerequisites,
     )
 
 

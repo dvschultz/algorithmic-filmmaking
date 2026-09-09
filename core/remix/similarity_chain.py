@@ -26,7 +26,7 @@ def _cosine_distance_matrix(embeddings: np.ndarray) -> np.ndarray:
     similarity = embeddings @ embeddings.T
     # Clip to valid range (floating point can cause >1.0)
     np.clip(similarity, -1.0, 1.0, out=similarity)
-    return 1.0 - similarity
+    return np.asarray(1.0 - similarity)
 
 
 def similarity_chain(
@@ -90,3 +90,34 @@ def similarity_chain(
     result.extend(without_emb)
 
     return result
+
+
+def _definition():
+    from threading import Event
+
+    from core.remix.engine import AlgorithmDefinition, ProposedEntry, SequenceProposal
+
+    class SimilarityChainDefinition(AlgorithmDefinition):
+        """Human Centipede: greedy nearest-neighbour chain over thumbnail embeddings."""
+
+        key = "similarity_chain"
+        version = 1
+        prerequisites = ("embeddings",)
+
+        def prepare(self, inputs, parameters, *, cancel_event: Event | None = None):
+            import core.remix as remix  # patchable prerequisite seam shared with the legacy dispatcher
+
+            return remix._auto_compute_embeddings(list(inputs), cancel_event=cancel_event)
+
+        def generate(self, inputs, parameters, rng):
+            ordered = similarity_chain(list(inputs), start_clip_id=None)
+            missing = sum(1 for clip, _ in inputs if clip.embedding is None)
+            notes = (f"{missing} clips lack embeddings (appended at end)",) if missing else ()
+            return SequenceProposal(
+                "ordering", tuple(ProposedEntry(c.id, s.id) for c, s in ordered), notes=notes,
+            )
+
+    return SimilarityChainDefinition
+
+
+SimilarityChainDefinition = _definition()

@@ -522,7 +522,121 @@ def list_sequences(project: Project) -> dict:
                 "name": s.name,
                 "active": i == project.active_sequence_index,
                 "clip_count": len(s.get_all_clips()),
+                "algorithm": s.algorithm,
+                "duration_seconds": s.duration_seconds,
+                "recipe_id": s.readable_recipe.id if s.readable_recipe else None,
+                "parent_recipe_id": s.readable_recipe.parent_id if s.readable_recipe else None,
             }
             for i, s in enumerate(project.sequences)
         ],
     }
+
+
+# --- Variation commands -----------------------------------------------------
+
+
+def activate_sequence(project: Project, sequence_id: str) -> dict:
+    """Make a sequence active without editing it (view state, not history)."""
+    index = next((i for i, s in enumerate(project.sequences) if s.id == sequence_id), None)
+    if index is None:
+        return {"success": False, "error": "Sequence not found"}
+    project.set_active_sequence(index)
+    return {"success": True, "sequence_id": sequence_id, "name": project.sequences[index].name, "sequence_index": index}
+
+
+def duplicate_sequence(project: Project, sequence_id: str | None = None, *, name: str | None = None) -> dict:
+    """Copy a sequence's timeline and recipe as a new sequence; nothing is recomputed."""
+    import uuid
+
+    sequence = _find_sequence(project, sequence_id)
+    if sequence is None:
+        return {"success": False, "error": "Sequence not found"}
+    copy = deepcopy(sequence)
+    copy.id = str(uuid.uuid4())
+    for track in copy.tracks:
+        track.id = str(uuid.uuid4())
+        for entry in track.clips:
+            entry.id = str(uuid.uuid4())
+    label = name.strip() if isinstance(name, str) and name.strip() else f"{sequence.name} copy"
+    copy.name = unique_sequence_name(project, label)
+    recipe = sequence.readable_recipe
+    copy.recipe = recipe.derive() if recipe is not None else sequence.recipe
+    try:
+        project.add_sequence(copy, activate=True)
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "error": str(exc)}
+    result = _sequence_result(copy, project)
+    result["source_sequence_id"] = sequence.id
+    return result
+
+
+def regenerate_sequence(
+    project: Project,
+    sequence_id: str | None = None,
+    *,
+    parameters: dict[str, Any] | None = None,
+    seed: int | None = None,
+    keep_seed: bool = False,
+    name: str | None = None,
+    cancel_event: Event | None = None,
+) -> dict:
+    """Run a recipe's algorithm again as a new variation.
+
+    Uses the recipe's ordered inputs and parameters with any ``parameters``
+    overrides. Seeded algorithms draw a fresh seed unless ``seed`` is given or
+    ``keep_seed`` is true. The original sequence is never modified. Provider-
+    assisted algorithms make new provider calls; use ``reconstruct_sequence``
+    to replay without them.
+    """
+    from core.remix.registry import registry
+
+    sequence = _find_sequence(project, sequence_id)
+    if sequence is None:
+        return {"success": False, "error": "Sequence not found"}
+    recipe = sequence.readable_recipe
+    if recipe is None:
+        return get_sequence_recipe(project, sequence.id)
+    definition = registry.get(recipe.algorithm)
+    if definition is None:
+        return {
+            "success": False,
+            "error": f"Algorithm {recipe.algorithm!r} is not available in this build; "
+                     "reconstruct_sequence can still replay the stored result",
+        }
+    if definition.version != recipe.algorithm_version:
+        return {
+            "success": False,
+            "error": (
+                f"Recipe was made with {recipe.algorithm} version {recipe.algorithm_version}; "
+                f"this build has version {definition.version}. Reconstruct to replay the stored "
+                "result, or generate_sequence to start a new recipe with the current version."
+            ),
+            "available_version": definition.version,
+        }
+    problems = recipe_input_problems(project, recipe)
+    missing = [item.clip_id for item in recipe.inputs if item.clip_id not in project.clips_by_id]
+    if problems or missing:
+        return {
+            "success": False,
+            "error": "Recipe inputs changed: " + "; ".join(problems + [f"clip {c} is no longer in the project" for c in missing]),
+        }
+    merged = dict(recipe.parameters)
+    if parameters is not None:
+        if not isinstance(parameters, dict):
+            return {"success": False, "error": "Parameters must be an object"}
+        merged.update(parameters)
+    if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
+        return {"success": False, "error": "Seed must be a non-negative integer"}
+    if definition.seeded and seed is None and keep_seed:
+        seed = recipe.seed
+    if not definition.seeded:
+        seed = None
+    label = name.strip() if isinstance(name, str) and name.strip() else f"{sequence.name} variation"
+    return generate_sequence(
+        project, recipe.algorithm,
+        clip_ids=[item.clip_id for item in recipe.inputs],
+        parameters=merged, seed=seed, name=label,
+        parent_recipe_id=recipe.id,
+        show_chromatic_color_bar=sequence.show_chromatic_color_bar,
+        cancel_event=cancel_event,
+    )

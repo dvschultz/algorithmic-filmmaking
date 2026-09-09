@@ -82,23 +82,18 @@ class SequenceWorker(CancellableWorker):
                 if self.is_cancelled():
                     return
                 # Prerequisites were resolved once, including per-clip failures.
-                # Invoke the pure sorter so missing results are not recomputed.
-                if self._algorithm in ("brightness", "volume"):
-                    from core.remix.scalar_inputs import sort_scalar_inputs
-
-                    sorted_clips = sort_scalar_inputs(
-                        self._clips,
-                        "brightness" if self._algorithm == "brightness" else "volume",
-                        direction=self._direction,
-                    )
-                elif self._algorithm == "match_cut":
-                    from core.remix.match_cut import match_cut_chain
-
-                    sorted_clips = match_cut_chain(self._clips)
-                else:
-                    from core.remix.similarity_chain import similarity_chain
-
-                    sorted_clips = similarity_chain(self._clips)
+                # Run the registry definition without re-resolving them so
+                # missing results are not recomputed and a recipe is recorded.
+                run = run_registry_algorithm(
+                    self._algorithm, self._clips,
+                    direction=self._direction,
+                    cancel_event=self._cancel_event,
+                    resolve_prerequisites=False,
+                )
+                if run is None:
+                    return
+                self.recipe = run.recipe
+                sorted_clips = run.ordered_clips
             elif self._algorithm in registry:
                 run = run_registry_algorithm(
                     self._algorithm, self._clips,

@@ -180,7 +180,8 @@ def test_chat_algorithm_listing_carries_engine_schema_for_registry_algorithms():
     listing = {a["key"]: a for a in list_sorting_algorithms(_project(2))["algorithms"]}
     assert listing["color"]["engine"]["version"] == 1
     assert listing["shuffle"]["engine"]["seeded"] is True
-    assert "engine" not in listing["sequential"]
+    assert listing["sequential"]["engine"]["parameters"] == []
+    assert "engine" not in listing["storyteller"]
 
 
 # --- Parameter normalization -------------------------------------------------
@@ -403,7 +404,7 @@ def test_sequence_worker_stores_recipe_for_registry_algorithms(qapp):
     assert worker.recipe.parameters["direction"] == "complementary"
     plain = SequenceWorker("sequential", _pairs(project), project=project)
     plain.run()
-    assert plain.recipe is None
+    assert plain.recipe.algorithm == "sequential" and plain.recipe.parameters == {}
 
 
 def test_sequence_tab_generate_and_apply_persists_recipe_with_realized_transforms(qapp, monkeypatch):

@@ -46,11 +46,18 @@ registry = AlgorithmRegistry()
 
 
 def _register_builtin() -> None:
+    from core.remix.arrange import ARRANGE_DEFINITIONS
     from core.remix.chromatics import ChromaticsDefinition
+    from core.remix.match_cut import MatchCutDefinition
     from core.remix.shuffle import ShuffleDefinition
+    from core.remix.similarity_chain import SimilarityChainDefinition
 
     registry.register(ShuffleDefinition())
     registry.register(ChromaticsDefinition())
+    for definition in ARRANGE_DEFINITIONS:
+        registry.register(definition())
+    registry.register(SimilarityChainDefinition())
+    registry.register(MatchCutDefinition())
 
 
 _register_builtin()

@@ -343,11 +343,14 @@ def run_algorithm(
     cancel_event: Event | None = None,
     parent_recipe_id: str | None = None,
     prepared: Callable[[Sequence[ClipInput]], None] | None = None,
+    resolve_prerequisites: bool = True,
 ) -> GenerationRun | None:
     """Select, prepare, generate, and describe one run.
 
     Returns ``None`` when ``cancel_event`` is set before generation. ``prepared``
     receives the prepared inputs so callers can observe prerequisite results.
+    Pass ``resolve_prerequisites=False`` when the caller already resolved them
+    on the given inputs (e.g. a GUI job that publishes results itself).
     """
     normalized = normalize_parameters(definition, parameters)
     resolved_seed = resolve_seed(definition, seed)
@@ -356,7 +359,10 @@ def run_algorithm(
         raise ValueError("Algorithm inputs must not repeat a clip")
     if cancel_event is not None and cancel_event.is_set():
         return None
-    inputs = definition.prepare(selected, normalized, cancel_event=cancel_event)
+    inputs = (
+        definition.prepare(selected, normalized, cancel_event=cancel_event)
+        if resolve_prerequisites else list(selected)
+    )
     if cancel_event is not None and cancel_event.is_set():
         return None
     if prepared is not None:

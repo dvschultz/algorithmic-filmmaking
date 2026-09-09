@@ -403,3 +403,83 @@ async def reconstruct_sequence(
         return _reconstruct(project, sequence_id, name=name)
 
     return await _editorial_call(project_path, ctx, operation)
+
+
+@mcp.tool()
+async def list_sequences(
+    project_path: Annotated[str, "Path to project file"],
+    ctx: Context = None,
+) -> str:
+    """List sequences with ids, names, algorithm, clip counts, recipe ids and the active flag."""
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        from core.spine.project_io import load_with_mtime
+        from core.spine.sequences import list_sequences as _impl
+
+        project, _mtime = load_with_mtime(path)
+        return json.dumps(_impl(project))
+    except Exception as exc:
+        from core.spine.project_io import project_error
+
+        return json.dumps({"success": False, "error": project_error(exc)})
+
+
+@mcp.tool()
+async def activate_sequence(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_id: Annotated[str, "Sequence ID to make active"],
+    ctx: Context = None,
+) -> str:
+    """Make a sequence active. Saved as project state; not an undoable edit."""
+    from core.spine.sequences import activate_sequence as _impl
+
+    def operation(project):
+        result = _impl(project, sequence_id)
+        if result.get("success"):
+            project.mark_dirty()
+        return result
+
+    return await _editorial_call(project_path, ctx, operation)
+
+
+@mcp.tool()
+async def duplicate_sequence(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_id: Annotated[Optional[str], "Sequence ID; omit for the active sequence"] = None,
+    name: Annotated[Optional[str], "Name for the copy"] = None,
+    ctx: Context = None,
+) -> str:
+    """Copy a sequence's timeline and recipe as a new active sequence; nothing is recomputed."""
+    from core.spine.sequences import duplicate_sequence as _impl
+
+    def operation(project):
+        return _impl(project, sequence_id, name=name)
+
+    return await _editorial_call(project_path, ctx, operation)
+
+
+@mcp.tool()
+async def regenerate_sequence(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_id: Annotated[Optional[str], "Sequence ID; omit for the active sequence"] = None,
+    parameters: Annotated[Optional[dict], "Parameter overrides merged over the recipe"] = None,
+    seed: Annotated[Optional[int], "Explicit seed; omitted seeds are drawn fresh"] = None,
+    keep_seed: Annotated[bool, "Reuse the recipe's seed instead of drawing a new one"] = False,
+    name: Annotated[Optional[str], "Name for the variation"] = None,
+    ctx: Context = None,
+) -> str:
+    """Run a recipe's algorithm again as a new variation without touching the original.
+
+    Fails without editing when the recipe's inputs changed, the algorithm is
+    unavailable, or its version differs from the recipe's. Provider-assisted
+    algorithms make new provider calls; use reconstruct_sequence to replay
+    offline.
+    """
+    from core.spine.sequences import regenerate_sequence as _impl
+
+    def operation(project):
+        return _impl(project, sequence_id, parameters=parameters, seed=seed, keep_seed=keep_seed, name=name)
+
+    return await _editorial_call(project_path, ctx, operation)

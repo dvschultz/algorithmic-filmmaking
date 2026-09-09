@@ -1271,6 +1271,47 @@ def list_sequences(project) -> dict:
 
 
 @tools.register(
+    description="Make a sequence active by its stable sequence ID (view state; not an edit).",
+    requires_project=True, modifies_gui_state=True,
+)
+def activate_sequence(project, sequence_id: str) -> dict:
+    from core.spine.sequences import activate_sequence as _impl
+    return _impl(project, sequence_id)
+
+
+@tools.register(
+    description="Duplicate a sequence (timeline and recipe) as a new active sequence without "
+                "recomputing anything. Defaults to the active sequence. This can be undone.",
+    requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+)
+def duplicate_sequence(project, sequence_id: Optional[str] = None, name: Optional[str] = None) -> dict:
+    from core.spine.sequences import duplicate_sequence as _impl
+    return _impl(project, sequence_id, name=name)
+
+
+@tools.register(
+    description="Regenerate a sequence's recipe as a new variation: same inputs and parameters "
+                "plus any overrides, a fresh seed unless keep_seed or seed is given. The original "
+                "sequence is untouched; provider-assisted algorithms make new calls. This can be undone.",
+    requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+)
+def regenerate_sequence(
+    project,
+    sequence_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    seed: Optional[int] = None,
+    keep_seed: bool = False,
+    name: Optional[str] = None,
+) -> dict:
+    from core.spine.sequences import regenerate_sequence as _impl
+
+    result = _impl(project, sequence_id, parameters=parameters, seed=seed, keep_seed=keep_seed, name=name)
+    if result.get("success"):
+        _add_sequence_summary_for_agent(project, result)
+    return result
+
+
+@tools.register(
     description="Delete a sequence by its stable sequence ID. This can be undone.",
     requires_project=True, modifies_gui_state=True, modifies_project_state=True,
 )
