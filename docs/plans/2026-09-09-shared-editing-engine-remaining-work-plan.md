@@ -93,7 +93,7 @@ This work does not add new creative algorithms, a new frontend, general composit
 
 **Evidence (2026-09-09):**
 
-- Commits: `cc4af8b` (arrange family, variation commands, CLI group), `9a0b1c4`/`7a143bf` (gaze, reference, Rose Hobart; audio and word families), and the text/drawing family commit that closes this unit. All 23 `ui/algorithm_config.py` keys are registered (`tests/test_recipe_reconstruction.py::test_every_matrix_algorithm_is_registered`).
+- Commits: `cc4af8b` (arrange family, variation commands, CLI group), `67c31ee` (gaze, reference, Rose Hobart), `7a143bf` (audio and word families), `95b9fec` (text, drawing, free association; cleanup). All 23 `ui/algorithm_config.py` keys are registered (`tests/test_recipe_reconstruction.py::test_every_matrix_algorithm_is_registered`).
 - Engine additions: object/array parameters, `Prepared` context, `sequence_settings`, `source_parameters`/`asset_parameters`, `provider` flag, `progress`/`resources` hooks, `resolve_prerequisites` for GUI-owned prerequisite jobs, definition-owned `legacy_parameters`.
 - Scenario 1 (discoverable/executable without dialogs): parametrized over every key with provider fakes in `tests/test_recipe_reconstruction.py`.
 - Scenario 2 (reconstruct without provider; regenerate records a new run): same file, provider call counters for Storyteller, Exquisite Corpus, Free Association, LLM Word Composer.
