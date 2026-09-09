@@ -16,6 +16,8 @@ from core.analysis_model_identity import (
     SHOT_TYPES, SHOT_TYPE_PROMPTS, SIGLIP_NAME as _SIGLIP_MODEL_NAME, SIGLIP_REVISION,
 )
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -180,6 +182,7 @@ def unload_model():
 load_clip_model = load_classification_model
 
 
+@isolated("vision", "shots.classify", decode=lambda v: (str(v[0]), float(v[1])))
 def classify_shot_type(
     image_path: Path,
     threshold: float = 0.0,

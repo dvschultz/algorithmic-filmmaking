@@ -16,6 +16,8 @@ SAFE_SETTINGS: dict[str, tuple] = {
     "default_sensitivity": (float, 1.0, 10.0),
     "min_scene_length_seconds": (float, 0.1, 10.0),
     "native_worker_isolation": (bool,),
+    # list of runtime family ids (see core.runtime_families.FAMILIES); comma string accepted
+    "native_worker_families": (list, None),
     "export_quality": (str, ["low", "medium", "high"]),
     "export_resolution": (str, ["original", "1080p", "720p", "480p"]),
     "export_fps": (str, ["original", "24", "30", "60"]),
@@ -47,6 +49,7 @@ def get_settings() -> dict:
             "transcription_model": settings.transcription_model,
             "transcription_language": settings.transcription_language,
             "native_worker_isolation": settings.native_worker_isolation,
+            "native_worker_families": list(settings.native_worker_families),
             "theme_preference": settings.theme_preference,
             "youtube_results_count": settings.youtube_results_count,
             "youtube_parallel_downloads": settings.youtube_parallel_downloads,
@@ -114,6 +117,20 @@ def update_settings(setting_name: str, value) -> dict:
                 value = False
         if not isinstance(value, bool):
             return {"success": False, "error": f"Setting '{setting_name}' requires true or false"}
+    elif expected_type is list:
+        from core.runtime_families import FAMILIES
+
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            return {"success": False, "error": f"Setting '{setting_name}' requires a list of names"}
+        unknown = sorted(set(value) - set(FAMILIES))
+        if unknown:
+            return {
+                "success": False,
+                "error": f"Unknown runtime families: {', '.join(unknown)}; known: {', '.join(sorted(FAMILIES))}",
+            }
+        value = sorted(set(value))
     elif expected_type is str:
         value = str(value)
         allowed_values = spec[1]

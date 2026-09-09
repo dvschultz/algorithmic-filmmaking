@@ -421,9 +421,21 @@ def test_collect_runtime_worker_datas_stages_the_worker_package_as_source(tmp_pa
     for name in ("__init__.py", "__main__.py", "protocol.py", "tasks.py"):
         (package / name).write_text("# stub\n")
     (package / "notes.txt").write_text("not python")
+    (root / "core" / "__init__.py").write_text("")
+    (root / "core" / "analysis").mkdir()
+    (root / "core" / "analysis" / "embeddings.py").write_text("# engine\n")
+    (root / "core" / "package_manifest.json").write_text("{}")
+    (root / "models").mkdir()
+    (root / "models" / "__init__.py").write_text("")
     collected = build_support.collect_runtime_worker_datas(root)
-    assert {Path(src).name for src, _ in collected} == {"__init__.py", "__main__.py", "protocol.py", "tasks.py"}
-    assert {dest for _, dest in collected} == {str(Path("runtime_worker_src") / "runtime_worker")}
+    worker_files = {Path(src).name for src, dest in collected if dest == str(Path("runtime_worker_src") / "runtime_worker")}
+    assert worker_files == {"__init__.py", "__main__.py", "protocol.py", "tasks.py"}
+    # The engine packages travel as source next to the worker (isolated analysis calls).
+    staged = {(Path(src).relative_to(root).as_posix(), dest) for src, dest in collected}
+    assert ("core/analysis/embeddings.py", str(Path("runtime_worker_src") / "core" / "analysis")) in staged
+    assert ("models/__init__.py", str(Path("runtime_worker_src") / "models")) in staged
+    assert ("core/package_manifest.json", str(Path("runtime_worker_src") / "core")) in staged
+    assert not any(Path(src).name == "notes.txt" for src, _ in collected)
     assert build_support.runtime_worker_staged_layout() == ("runtime_worker_src", "runtime_worker")
 
 

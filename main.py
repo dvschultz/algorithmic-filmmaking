@@ -122,11 +122,17 @@ import platform  # noqa: E402
 # Pre-import torch BEFORE PySide6 to prevent "function '_has_torch_function'
 # already has a docstring" RuntimeError. This conflict occurs when torch's C
 # extension init runs after PySide6's Shiboken import hooks are installed.
-# Importing torch first avoids the hook interference entirely.
-try:
-    import torch  # noqa: F401
-except (ImportError, RuntimeError):
-    pass
+# Importing torch first avoids the hook interference entirely. The workaround
+# is skipped once every torch-using runtime family runs in the isolated
+# worker (core.runtime_families.host_needs_runtime), which is the removal
+# condition recorded in docs/architecture/surface-compatibility.md.
+from core.runtime_families import host_needs_runtime  # noqa: E402
+
+if host_needs_runtime("torch"):
+    try:
+        import torch  # noqa: F401
+    except (ImportError, RuntimeError):
+        pass
 
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
@@ -140,7 +146,7 @@ locale.setlocale(locale.LC_NUMERIC, 'C')
 # first-import it. MLX initializes Metal resources on first import, and
 # PySide6's Shiboken import hook can enter infinite recursion if MLX is
 # first imported from a QThread background worker.
-if platform.system() == "Darwin" and platform.machine() == "arm64":
+if platform.system() == "Darwin" and platform.machine() == "arm64" and host_needs_runtime("mlx"):
     try:
         import mlx.core  # noqa: F401
     except ImportError:

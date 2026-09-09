@@ -68,3 +68,26 @@ def rollback(ctx: click.Context, profile: str) -> None:
     from core.spine.runtime import rollback_runtime_profile
 
     _finish(ctx, rollback_runtime_profile(profile))
+
+
+@runtime.command("isolate")
+@click.argument("families", nargs=-1)
+@click.option("--off", is_flag=True, help="Disable isolation for the given families instead of enabling it")
+@click.pass_context
+def isolate(ctx: click.Context, families: tuple[str, ...], off: bool) -> None:
+    """Enable (or disable) worker isolation for runtime families, e.g. `audio vision`.
+
+    The setting persists in settings.json; the transcription family is on by
+    default and other families are meant to be switched on once their packaged
+    worker smoke evidence has landed.
+    """
+    from core.runtime_families import FAMILIES
+    from core.settings import load_settings
+    from core.spine.settings_io import update_settings
+
+    if not families:
+        _finish(ctx, {"success": False, "error": "Name at least one family: " + ", ".join(sorted(FAMILIES))})
+        return
+    current = set(load_settings(read_keyring=False).native_worker_families)
+    wanted = (current - set(families)) if off else (current | set(families))
+    _finish(ctx, update_settings("native_worker_families", sorted(wanted)))

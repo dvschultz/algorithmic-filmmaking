@@ -601,7 +601,11 @@ before the edit, so malformed transcript input cannot partially change a clip.
 - Runtime profiles (isolated native workers): `list_runtime_profiles()`,
   `get_runtime_profile_status(profile, probe?)`, the durable job
   `start_install_runtime_profile(profile)` and `rollback_runtime_profile(profile)`.
-  Profiles are allowlisted ids (`transcription-whisper`), never package names.
+  Profiles are allowlisted ids (`transcription-whisper`, `vision-torch`,
+  `ocr-paddle`, `vlm-local`, `audio-librosa`, `alignment-ctc`), never package
+  names; `list_runtime_profiles` also reports the runtime `families` and which
+  are isolated (`update_settings("native_worker_families", [...])` switches a
+  family's inference into its worker).
   An install stages the packages, health-checks them in a fresh worker and
   only then promotes them; cancelling the job or a failed health check keeps
   the previous runtime, and rollback removes the newest promoted overlay.

@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     # Type-only import; the runtime import lives inside ``align_words``.
     from core.transcription import TranscriptSegment, WordTimestamp
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 _CTC_TARGET_TOO_LONG = "targets length is too long for ctc"
@@ -663,6 +665,7 @@ def _execute_alignment(
     return _run_alignment_engine(wav_path=wav_path, text=text, language=language, on_execution=report)
 
 
+@isolated("alignment", "alignment.engine")
 def _run_alignment_engine(
     wav_path: Path,
     text: str,

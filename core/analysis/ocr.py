@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Thread-safe PaddleOCR availability check
@@ -61,6 +63,45 @@ def _check_paddleocr() -> bool:
     return _paddleocr_available
 
 
+def _construct_paddle_engine(PaddleOCR):
+    """Build the engine for PaddleOCR 2.x (``use_angle_cls``/``show_log``) or 3.x."""
+    import inspect
+
+    try:
+        parameters = inspect.signature(PaddleOCR.__init__).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "show_log" in parameters or not parameters:
+        return PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+    # PaddleOCR 3.x: the document-orientation/unwarping stages are not needed
+    # for video frames and only add model downloads.
+    return PaddleOCR(
+        lang="en", use_textline_orientation=True,
+        use_doc_orientation_classify=False, use_doc_unwarping=False,
+    )
+
+
+def _paddle_lines(result) -> list[tuple[str, float]]:
+    """Normalize PaddleOCR 2.x (``ocr``) and 3.x (``predict``) outputs to (text, confidence)."""
+    lines: list[tuple[str, float]] = []
+    for page in result or []:
+        # 3.x: an OCRResult mapping with rec_texts/rec_scores; 2.x: a list of [bbox, (text, conf)]
+        texts = page.get("rec_texts") if hasattr(page, "get") else None
+        if texts is not None:
+            scores = page.get("rec_scores") or []
+            for index, text in enumerate(texts):
+                score = float(scores[index]) if index < len(scores) else 0.0
+                lines.append((str(text), score))
+            continue
+        for line in page or []:
+            try:
+                text, conf = line[1][0], line[1][1]
+            except (IndexError, TypeError, KeyError):
+                continue
+            lines.append((str(text), float(conf)))
+    return lines
+
+
 def _get_ocr_engine():
     """Get or create PaddleOCR engine (thread-safe singleton)."""
     global _ocr_engine
@@ -82,11 +123,7 @@ def _get_ocr_engine():
 
             logger.info("Initializing PaddleOCR engine...")
             try:
-                _ocr_engine = PaddleOCR(
-                    use_angle_cls=True,
-                    lang="en",
-                    show_log=False,
-                )
+                _ocr_engine = _construct_paddle_engine(PaddleOCR)
             except Exception as e:
                 from core.errors import ModelDownloadError
 
@@ -107,6 +144,31 @@ def is_paddleocr_available() -> bool:
 def is_tesseract_available() -> bool:
     """Check if local OCR is available. Now backed by PaddleOCR."""
     return _check_paddleocr()
+
+
+@isolated("ocr", "ocr.paddle", decode=lambda v: (str(v[0]), float(v[1])))
+def paddle_extract_text(frame_path: Path, *, cancel_event: Optional[threading.Event] = None) -> tuple[str, float]:
+    """Run PaddleOCR on one frame; returns (joined text, mean confidence).
+
+    ``cancel_event`` is checked between loading the engine and inference (in
+    the worker it is the task's cancel flag).
+    """
+    ocr = _get_ocr_engine()
+    if cancel_event is not None and cancel_event.is_set():
+        return "", 0.0
+    if hasattr(ocr, "predict") and not hasattr(ocr, "use_angle_cls"):
+        result = ocr.predict(str(frame_path))  # PaddleOCR 3.x
+    else:
+        result = ocr.ocr(str(frame_path), cls=True)  # PaddleOCR 2.x
+    words = []
+    confidences = []
+    for line_text, line_conf in _paddle_lines(result):
+        if line_text.strip():
+            words.append(line_text.strip())
+            confidences.append(line_conf)
+    if not words:
+        return "", 0.0
+    return " ".join(words), sum(confidences) / len(confidences)
 
 
 def extract_text_from_frame(
@@ -173,33 +235,15 @@ def extract_text_from_frame(
     source = "paddleocr"
     failure: Optional[Exception] = None
 
-    # Try PaddleOCR first
+    # Try PaddleOCR first (the local runtime; isolated to the ocr worker family)
     if _check_paddleocr():
         try:
             if cancel.is_set():
                 return ("", 0.0, "none")
-            ocr = _get_ocr_engine()
-            if cancel.is_set():
-                return ("", 0.0, "none")
-            result = ocr.ocr(str(frame_path), cls=True)
-
-            if result and result[0]:
-                words = []
-                confidences = []
-                for line in result[0]:
-                    # Each line: [bbox, (text, confidence)]
-                    line_text = line[1][0]
-                    line_conf = line[1][1]
-                    if line_text.strip():
-                        words.append(line_text.strip())
-                        confidences.append(line_conf)
-
-                if words:
-                    text = " ".join(words)
-                    confidence = sum(confidences) / len(confidences)
-                    source = "paddleocr"
-                    logger.debug(f"PaddleOCR extracted: '{text[:50]}...' (confidence: {confidence:.2f})")
-
+            text, confidence = paddle_extract_text(frame_path, cancel_event=cancel)
+            if text:
+                source = "paddleocr"
+                logger.debug(f"PaddleOCR extracted: '{text[:50]}...' (confidence: {confidence:.2f})")
         except Exception as e:
             failure = e
             logger.warning(f"PaddleOCR extraction failed: {e}")

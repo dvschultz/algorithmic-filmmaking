@@ -30,6 +30,12 @@ class RuntimeProfile:
     """Top-level runtime module whose install location decides which interpreter hosts the family."""
 
 
+def _apple_silicon() -> bool:
+    import platform
+
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
+
+
 PROFILES: dict[str, RuntimeProfile] = {
     "transcription-whisper": RuntimeProfile(
         id="transcription-whisper",
@@ -39,7 +45,59 @@ PROFILES: dict[str, RuntimeProfile] = {
         description="faster-whisper transcription in an isolated worker",
         probe_module="faster_whisper",
     ),
+    "vision-torch": RuntimeProfile(
+        id="vision-torch",
+        family="vision",
+        features=("embeddings", "shot_classify", "object_detect", "image_classify", "face_detect", "gaze_detect"),
+        task_kinds=("analysis",),
+        description="torch/transformers embeddings and shots, YOLO objects, InsightFace faces, MediaPipe gaze",
+        probe_module="torch",
+    ),
+    "ocr-paddle": RuntimeProfile(
+        id="ocr-paddle",
+        family="ocr",
+        features=("ocr",),
+        task_kinds=("analysis",),
+        description="PaddleOCR text extraction in an isolated worker",
+        probe_module="paddleocr",
+    ),
+    "vlm-local": RuntimeProfile(
+        id="vlm-local",
+        family="vlm",
+        features=("describe_local",) if _apple_silicon() else ("describe_local_cpu",),
+        task_kinds=("analysis",),
+        description="local vision-language model (mlx-vlm on Apple Silicon, transformers elsewhere)",
+        probe_module="mlx_vlm" if _apple_silicon() else "transformers",
+    ),
+    "audio-librosa": RuntimeProfile(
+        id="audio-librosa",
+        family="audio",
+        features=("audio_analysis", "stem_separation"),
+        task_kinds=("analysis",),
+        description="librosa audio analysis and Demucs stem separation",
+        probe_module="librosa",
+    ),
+    "alignment-ctc": RuntimeProfile(
+        id="alignment-ctc",
+        family="alignment",
+        features=("word_alignment",),
+        task_kinds=("analysis",),
+        description="CTC forced word alignment",
+        probe_module="ctc_forced_aligner",
+    ),
 }
+
+
+def profile_can_stage(profile: RuntimeProfile) -> bool:
+    """Whether every feature of the profile installs with ``pip --target``.
+
+    Features flagged ``native_install`` (torch, mlx, insightface, ...) need the
+    managed interpreter's site-packages; they install in place and are still
+    health-checked in a worker afterwards.
+    """
+    from core.feature_registry import FEATURE_DEPS
+
+    return all(not FEATURE_DEPS[f].native_install for f in profile.features if f in FEATURE_DEPS)
 
 
 def family_probe_module(family: str) -> str | None:
@@ -166,12 +224,23 @@ def install_profile(
     profile = get_profile(profile_id)
     with _profile_lock(profile.id):
         _probe_cache.pop((profile.id, _overlay_key(profile.id)), None)
+        if staged and not profile_can_stage(profile):
+            staged = False  # site-packages installs cannot be staged; still probed in a worker below
         if not staged:
             _retire_family_worker(profile.family)
             failed = [feature for feature in profile.features if not install_for_feature(feature, progress_callback)]
+            _probe_cache.clear()
+            _retire_family_worker(profile.family)
             status = profile_status(profile_id)
             status["failed_features"] = failed
+            status["staged"] = False
             status["success"] = not failed and status["installed"]
+            if status["success"] and profile.probe_module:
+                try:
+                    status["health"] = probe_profile_runtime(profile_id)
+                except RuntimeError as exc:
+                    status["success"] = False
+                    status["error"] = f"Health check failed after install: {exc}"
             return status
         outcome = _staged_install(profile, progress_callback, cancel_event)
         _probe_cache.clear()

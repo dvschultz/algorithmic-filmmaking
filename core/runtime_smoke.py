@@ -38,6 +38,7 @@ def get_runtime_smoke_targets() -> tuple[str, ...]:
         "render-short",
         "mcp-stdio",
         "native-worker",
+        "native-analysis",
     )
 
 
@@ -55,6 +56,7 @@ def run_runtime_smoke_target(target: str) -> str:
         "render-short": _run_render_short_smoke,
         "mcp-stdio": _run_mcp_stdio_smoke,
         "native-worker": _run_native_worker_smoke,
+        "native-analysis": _run_native_analysis_smoke,
     }
     handler = handlers.get(normalized)
     if handler is None:
@@ -752,3 +754,108 @@ def _run_native_worker_smoke() -> None:
             logger.info("Native worker transcription OK: %d segments, language=%s", len(segments), language)
     finally:
         supervisor.shutdown()
+
+
+# Per-family packaged proof (plan U14). Each runtime profile is health-checked
+# inside its worker; families with a model-free or tiny-model call also run a
+# real isolated analysis. Profiles that are not installed are reported as
+# "missing" (or installed when SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1), and
+# profiles unsupported on this platform as "unsupported"; both are explicit
+# results, never silent passes. The target fails when any installed family
+# cannot import or run.
+_ANALYSIS_SMOKE_FAMILIES = ("audio", "ocr", "vision", "vlm", "alignment")
+
+
+def _synthetic_frame(path: Path) -> Path:
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (320, 200), (245, 245, 245))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 20, 140, 120), fill=(30, 60, 200))
+    draw.text((40, 150), "SCENE RIPPER", fill=(0, 0, 0))
+    image.save(path)
+    return path
+
+
+def _run_native_analysis_smoke() -> None:
+    import platform
+    import tempfile
+
+    from core.runtime_families import FAMILIES
+    from core.runtime_profiles import PROFILES, install_profile, probe_profile_runtime, profile_status
+
+    install_allowed = os.environ.get("SCENE_RIPPER_SMOKE_INSTALL_PROFILES") == "1"
+    only = {f.strip() for f in os.environ.get("SCENE_RIPPER_SMOKE_FAMILIES", "").split(",") if f.strip()}
+    results: dict[str, str] = {}
+    failures: list[str] = []
+    previous = os.environ.get("SCENE_RIPPER_NATIVE_WORKER_FAMILIES")
+    os.environ["SCENE_RIPPER_NATIVE_WORKER_FAMILIES"] = ",".join(FAMILIES)
+    os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
+    try:
+        with tempfile.TemporaryDirectory(prefix="scene-ripper-native-analysis-") as tmp:
+            work = Path(tmp)
+            for profile_id, profile in PROFILES.items():
+                family = profile.family
+                if family not in _ANALYSIS_SMOKE_FAMILIES or (only and family not in only):
+                    continue
+                if profile.probe_module == "mlx_vlm" and not (platform.system() == "Darwin" and platform.machine() == "arm64"):
+                    results[profile_id] = "unsupported"
+                    continue
+                status = profile_status(profile_id)
+                if not status["installed"] and install_allowed:
+                    status = install_profile(profile_id)
+                if not status.get("installed"):
+                    results[profile_id] = "missing: " + ", ".join(status.get("missing") or []) or "missing"
+                    continue
+                try:
+                    health = probe_profile_runtime(profile_id)
+                    logger.info("Family %s probe OK: %s %s", family, profile.probe_module, health.get("version"))
+                    detail = _run_family_call(family, work)
+                    results[profile_id] = "ok" + (f" ({detail})" if detail else "")
+                except Exception as exc:  # noqa: BLE001 - report every family, then fail once
+                    results[profile_id] = f"failed: {exc}"
+                    failures.append(profile_id)
+    finally:
+        if previous is None:
+            os.environ.pop("SCENE_RIPPER_NATIVE_WORKER_FAMILIES", None)
+        else:
+            os.environ["SCENE_RIPPER_NATIVE_WORKER_FAMILIES"] = previous
+        from core.runtime_supervisor import shutdown_default_supervisor
+
+        shutdown_default_supervisor()
+    for profile_id, outcome in results.items():
+        logger.info("Native analysis family result: %s -> %s", profile_id, outcome)
+    if failures:
+        raise RuntimeError("Isolated analysis failed for: " + ", ".join(f"{p} ({results[p]})" for p in failures))
+    if not any(outcome.startswith("ok") for outcome in results.values()):
+        raise RuntimeError("No native analysis family ran; results: " + ", ".join(f"{k}={v}" for k, v in results.items()))
+
+
+def _run_family_call(family: str, work: Path) -> str:
+    """One cheap real call per family inside its worker (models stay small)."""
+    from core.runtime_families import run_isolated
+
+    if family == "audio":
+        wav = work / "tone.wav"
+        with wave.open(str(wav), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(22050)
+            for index in range(22050):
+                value = int(8000 * math.sin(2 * math.pi * 220 * index / 22050))
+                handle.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
+        value = run_isolated("audio", "audio.analyze", {"audio_path": str(wav), "include_onsets": False})
+        if not (0.9 < float(value["duration_seconds"]) < 1.1):
+            raise RuntimeError(f"audio analysis returned an unexpected duration: {value['duration_seconds']}")
+        return "analyze_audio"
+    if family == "ocr":
+        frame = _synthetic_frame(work / "frame.png")
+        value = run_isolated("ocr", "ocr.paddle", {"frame_path": str(frame)})
+        return f"paddle text={value[0][:20]!r}"
+    if family == "vision":
+        frame = _synthetic_frame(work / "frame.png")
+        value = run_isolated("vision", "objects.detect", {"image_path": str(frame), "confidence_threshold": 0.9})
+        if not isinstance(value, list):
+            raise RuntimeError("object detection returned no list")
+        return f"yolo detections={len(value)}"
+    return "probe only"

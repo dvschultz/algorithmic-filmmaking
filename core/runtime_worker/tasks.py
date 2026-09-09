@@ -196,6 +196,12 @@ def raw_stdout(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
 # an install never loads wheels built for another interpreter.
 PROBE_MODULES: dict[str, str] = {
     "faster_whisper": "WhisperModel",
+    "torch": "Tensor",
+    "transformers": "AutoModel",
+    "paddleocr": "PaddleOCR",
+    "mlx_vlm": "load",
+    "librosa": "beat",
+    "ctc_forced_aligner": "load_alignment_model",
 }
 
 
@@ -215,9 +221,126 @@ def probe(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     }
 
 
+# --- isolated engine calls -----------------------------------------------------
+
+def analysis(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
+    """Run one allowlisted engine call with JSON kwargs; result must be JSON.
+
+    The engine package (``core``) is on the worker path in source mode and
+    staged beside this package in frozen builds. Anything not in
+    ``ISOLATED_CALLS`` is refused before any import happens.
+    """
+    from .calls import ISOLATED_CALLS
+
+    name = str(args.get("call", ""))
+    target = ISOLATED_CALLS.get(name)
+    if target is None:
+        raise ValueError(f"Unknown isolated call {name!r}")
+    kwargs = args.get("kwargs") or {}
+    if not isinstance(kwargs, dict):
+        raise ValueError("kwargs must be an object")
+    os.environ["SCENE_RIPPER_WORKER_PROCESS"] = "1"  # the decorator must not re-forward
+    module_name, function_name = target
+    module = importlib.import_module(module_name)
+    function = getattr(module, function_name)
+    kwargs = _rebuild_arguments(function, kwargs)
+    executions: list[Any] = []
+    # Provenance/progress callbacks cannot cross the process boundary; the
+    # worker collects them and the host replays them to its own callbacks.
+    parameters = _signature_parameters(function)
+    if "on_execution" in parameters:
+        kwargs["on_execution"] = lambda info: executions.append(_jsonable(info))
+    if "progress_cb" in parameters:
+        kwargs["progress_cb"] = lambda message: context.progress(0.5, str(message))
+    if "cancel_event" in parameters:
+        kwargs["cancel_event"] = context.cancel
+    context.check_cancelled()
+    value = function(**kwargs)
+    return {"value": _jsonable(value), "call": name, "executions": executions}
+
+
+def _signature_parameters(function: Callable[..., Any]) -> dict[str, Any]:
+    import inspect
+
+    try:
+        return dict(inspect.signature(function).parameters)
+    except (TypeError, ValueError):
+        return {}
+
+
+def _rebuild_arguments(function: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Turn JSON kwargs back into what the engine function expects.
+
+    Paths are rebuilt from ``Path`` annotations, dataclass parameters from
+    dicts, and lists of objects with ``from_dict`` from their dicts. Anything
+    the host could not send (callables, events) is simply absent.
+    """
+    import typing
+
+    try:
+        hints = typing.get_type_hints(function)
+    except Exception:  # noqa: BLE001 - string annotations may not resolve; fall back to raw values
+        hints = {}
+    rebuilt: dict[str, Any] = {}
+    for name, value in kwargs.items():
+        hint = hints.get(name)
+        rebuilt[name] = _rebuild_value(hint, value)
+    return rebuilt
+
+
+def _rebuild_value(hint: Any, value: Any) -> Any:
+    import dataclasses
+    import typing
+
+    origin = typing.get_origin(hint)
+    if origin is typing.Union or (origin is not None and str(origin) == "<class 'types.UnionType'>"):
+        for candidate in typing.get_args(hint):
+            if candidate is type(None):
+                continue
+            rebuilt = _rebuild_value(candidate, value)
+            if rebuilt is not value:
+                return rebuilt
+        return value
+    if hint is Path and isinstance(value, str):
+        return Path(value)
+    if isinstance(hint, type) and dataclasses.is_dataclass(hint) and isinstance(value, dict):
+        if hasattr(hint, "from_dict"):
+            return hint.from_dict(value)
+        return hint(**value)
+    if origin in (list, tuple) and isinstance(value, list):
+        args = typing.get_args(hint)
+        if args:
+            return [_rebuild_value(args[0], item) for item in value]
+    return value
+
+
+def _jsonable(value: Any) -> Any:
+    """Coerce engine results to JSON: paths, tuples, dataclasses, numpy scalars/arrays."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        return _jsonable(value.to_dict())
+    if hasattr(value, "tolist") and callable(value.tolist):  # numpy scalar/array
+        return _jsonable(value.tolist())
+    if hasattr(value, "item") and callable(value.item):
+        return _jsonable(value.item())
+    if hasattr(value, "__dataclass_fields__"):
+        import dataclasses
+
+        return _jsonable(dataclasses.asdict(value))
+    return str(value)
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], WorkerContext], dict[str, Any]]] = {
     "transcribe": transcribe,
     "probe": probe,
+    "analysis": analysis,
 }
 
 TEST_HANDLERS: dict[str, Callable[[dict[str, Any], WorkerContext], dict[str, Any]]] = {

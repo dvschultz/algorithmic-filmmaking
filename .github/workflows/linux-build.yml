@@ -153,6 +153,25 @@ jobs:
             || { tail -200 "$LOG"; echo "native-worker success marker missing"; exit 1; }
           tail -20 "$LOG"
 
+      - name: Native analysis families runtime smoke (AppImage)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET: native-analysis
+          SCENE_RIPPER_SMOKE_INSTALL_PROFILES: "1"
+        run: |
+          # U14 gate: every runtime family is health-checked in its own worker and the
+          # model-free/tiny-model families run a real isolated analysis.
+          APPIMAGE="$(ls -1 ./*.AppImage packaging/linux/*.AppImage 2>/dev/null | head -n1)"
+          chmod +x "$APPIMAGE"
+          LOG="$(mktemp)"
+          if ! timeout 2400 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
+            tail -200 "$LOG"; echo "native-analysis smoke failed"; exit 1
+          fi
+          grep -q "Runtime smoke test 'native-analysis' completed successfully" "$LOG" \
+            || { tail -200 "$LOG"; echo "native-analysis success marker missing"; exit 1; }
+          grep "Native analysis family result" "$LOG" || true
+
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:

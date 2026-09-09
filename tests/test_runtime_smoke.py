@@ -23,6 +23,7 @@ def test_runtime_smoke_targets_are_stable():
         "render-short",
         "mcp-stdio",
         "native-worker",
+        "native-analysis",
     )
 
 
@@ -105,3 +106,15 @@ def test_native_worker_runtime_smoke_passes_in_source_mode(monkeypatch):
     before = dict(os.environ)
     assert run_runtime_smoke_target("native-worker") == "native-worker"
     assert os.environ.get("SCENE_RIPPER_NATIVE_WORKERS") == before.get("SCENE_RIPPER_NATIVE_WORKERS")
+
+
+def test_native_analysis_runtime_smoke_runs_the_audio_family_in_source_mode(monkeypatch):
+    """U14 packaged-proof target, exercised in source mode for the model-free audio family."""
+    import importlib.util
+
+    if importlib.util.find_spec("librosa") is None:
+        pytest.skip("librosa not installed")
+    monkeypatch.setenv("SCENE_RIPPER_SMOKE_FAMILIES", "audio")
+    monkeypatch.delenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", raising=False)
+    monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
+    assert run_runtime_smoke_target("native-analysis") == "native-analysis"

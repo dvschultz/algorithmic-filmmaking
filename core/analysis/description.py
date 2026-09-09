@@ -31,6 +31,8 @@ from core.analysis_model_identity import (
 )
 from core.settings import load_settings
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Thread-safe model loading
@@ -521,6 +523,7 @@ def _load_moondream_fallback(model_id: Optional[str] = None):
     logger.info(f"CPU vision model loaded: {model_id}")
 
 
+@isolated("vlm", "vlm.describe_local")
 def describe_frame_local(
     image_path: Path, prompt: str = "Describe this image.", *, model_name: Optional[str] = None
 ) -> str:
@@ -624,6 +627,7 @@ def _clear_stale_transformers_module_cache(error: Exception) -> bool:
 
 
 # Backward-compatible alias
+@isolated("vlm", "vlm.describe_cpu")
 def describe_frame_cpu(image_path: Path, prompt: str = "Describe this image.") -> str:
     """Generate description using local model. Alias for describe_frame_local."""
     return describe_frame_local(image_path, prompt)

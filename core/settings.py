@@ -562,6 +562,10 @@ class Settings:
     # Transcription settings
     transcription_model: str = "medium.en"  # tiny.en, small.en, medium.en, large-v3
     native_worker_isolation: bool = True  # Run faster-whisper in the managed worker process
+    # Runtime families whose native inference runs in the managed worker (U14
+    # cutover, one family at a time). "transcription" is the proven default;
+    # others switch on when their packaged worker smoke evidence lands.
+    native_worker_families: list[str] = field(default_factory=lambda: ["transcription"])
     transcription_language: str = "en"  # en, auto, or specific language code
     transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper, groq
     transcription_cloud_model: str = "whisper-large-v3-turbo"  # Groq cloud model
@@ -844,6 +848,9 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if transcription := data.get("transcription"):
         if "native_worker_isolation" in transcription:
             settings.native_worker_isolation = bool(transcription["native_worker_isolation"])
+        families = transcription.get("native_worker_families")
+        if isinstance(families, list):
+            settings.native_worker_families = [str(f) for f in families if isinstance(f, str) and f]
         if val := transcription.get("model"):
             settings.transcription_model = val
         if val := transcription.get("language"):
@@ -1064,6 +1071,7 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "transcription": {
             "native_worker_isolation": settings.native_worker_isolation,
+            "native_worker_families": list(settings.native_worker_families),
             "model": settings.transcription_model,
             "language": settings.transcription_language,
             "backend": settings.transcription_backend,

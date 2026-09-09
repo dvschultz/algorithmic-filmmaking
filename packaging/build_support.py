@@ -716,6 +716,16 @@ def collect_runtime_worker_datas(project_root: Path) -> list[tuple[str, str]]:
     collected = []
     for file_path in sorted(package_dir.glob("*.py")):
         collected.append((str(file_path), str(Path("runtime_worker_src") / "runtime_worker")))
+    # Isolated engine calls (U14) run core.analysis.* inside the worker, so the
+    # engine packages are staged as plain source next to the worker package.
+    for package in ("core", "models"):
+        root = project_root / package
+        for file_path in sorted(root.rglob("*.py")):
+            relative = file_path.relative_to(project_root).parent
+            collected.append((str(file_path), str(Path("runtime_worker_src") / relative)))
+    manifest = project_root / "core" / "package_manifest.json"
+    if manifest.is_file():
+        collected.append((str(manifest), str(Path("runtime_worker_src") / "core")))
     return collected
 
 

@@ -385,7 +385,9 @@ jobs:
           # U13 gate: managed-interpreter worker launch and real inference from the packaged app.
           $env:SCENE_RIPPER_SMOKE_INSTALL_PROFILES = "1"
           try {
-            Invoke-SceneRipperSmokeTarget -Target "native-worker"
+            Invoke-SceneRipperSmokeTarget -Target "native-worker" -TimeoutSeconds 900
+            # U14 gate: per-family worker health checks and isolated analysis.
+            Invoke-SceneRipperSmokeTarget -Target "native-analysis" -TimeoutSeconds 2400
           } finally {
             Remove-Item Env:\SCENE_RIPPER_SMOKE_INSTALL_PROFILES -ErrorAction SilentlyContinue
           }

@@ -89,6 +89,8 @@ class WorkerLaunch:
     """Managed package directories placed on the worker's ``PYTHONPATH``."""
     env: dict[str, str] = field(default_factory=dict)
     family: str = "default"
+    engine_root: Path | None = None
+    """Directory holding the ``core``/``models`` packages for isolated engine calls."""
 
     def command(self) -> list[str]:
         # -s: no user site-packages; -P: do not prepend cwd (the staging dir) to sys.path.
@@ -100,8 +102,12 @@ class WorkerLaunch:
             if not key.startswith(("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"))
         }
         env.update(self.env)
-        pythonpath = [str(self.worker_root), *(str(p) for p in self.package_paths)]
+        pythonpath = [str(self.worker_root)]
+        if self.engine_root is not None and str(self.engine_root) not in pythonpath:
+            pythonpath.append(str(self.engine_root))
+        pythonpath.extend(str(p) for p in self.package_paths)
         env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+        env["SCENE_RIPPER_WORKER_PROCESS"] = "1"  # isolated() never re-forwards inside a worker
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         # Never inherit credentials into workers; providers run in the host.
@@ -124,6 +130,25 @@ def worker_package_root() -> Path:
         if (staged / "runtime_worker" / "__main__.py").is_file():
             return staged
     return Path(__file__).resolve().parent
+
+
+def engine_package_root() -> Path | None:
+    """Directory containing the ``core`` and ``models`` packages for isolated calls.
+
+    Frozen builds stage them as source beside the worker package; source runs
+    use the checkout. ``None`` when nothing importable is found (the worker
+    then refuses ``analysis`` tasks with a dependency error, never a crash).
+    """
+    from core.paths import get_resource_path, is_frozen
+
+    candidates = []
+    if is_frozen():
+        candidates.append(get_resource_path("runtime_worker_src"))
+    candidates.append(Path(__file__).resolve().parent.parent)
+    for candidate in candidates:
+        if (candidate / "core" / "__init__.py").is_file() and (candidate / "models" / "__init__.py").is_file():
+            return candidate
+    return None
 
 
 def resolve_worker_interpreter(*, ensure: bool = False) -> Path:
@@ -198,6 +223,7 @@ def default_launch(
         worker_root=worker_package_root(),
         package_paths=packages,
         family=family,
+        engine_root=engine_package_root(),
     )
 
 
@@ -262,19 +288,27 @@ def _within(path: Path, root: Path) -> bool:
     return True
 
 
-def validate_result_paths(result: Any, staging_dir: Path) -> None:
-    """Reject any path-like value that points outside the task's staging directory."""
+def validate_result_paths(result: Any, staging_dir: Path, allowed_roots: tuple[Path, ...] = ()) -> None:
+    """Reject any path-like value that points outside the task's staging directory.
+
+    ``allowed_roots`` are directories the host itself named in the task
+    arguments (an ``output_dir`` for stems, for example); the worker may
+    report files it wrote there.
+    """
+    roots = (staging_dir, *allowed_roots)
     if isinstance(result, dict):
         for key, value in result.items():
             if isinstance(value, str) and (key.endswith("_path") or key == "path"):
                 candidate = Path(value)
-                if not candidate.is_absolute() or not _within(candidate, staging_dir):
+                if not candidate.is_absolute() or not any(_within(candidate, root) for root in roots):
                     raise WorkerProtocolViolation(f"Result path {value!r} is outside the worker staging directory")
             else:
-                validate_result_paths(value, staging_dir)
+                validate_result_paths(value, staging_dir, allowed_roots)
     elif isinstance(result, list):
         for item in result:
-            validate_result_paths(item, staging_dir)
+            validate_result_paths(item, staging_dir, allowed_roots)
+
+
 
 
 class ManagedWorker:
@@ -526,7 +560,11 @@ class ManagedWorker:
                     result = message.get("result")
                     if not isinstance(result, dict):
                         raise WorkerProtocolViolation("Task result must be an object")
-                    validate_result_paths(result, task_staging)
+                    if kind != "analysis":
+                        validate_result_paths(result, task_staging)
+                    # Analysis values are engine data the host decodes itself;
+                    # decoders that receive files (stems) check them against
+                    # the directory the host named (see core.runtime_families).
                     return result
                 elif kind_ == "cancelled":
                     raise WorkerCancelled("Task cancelled")

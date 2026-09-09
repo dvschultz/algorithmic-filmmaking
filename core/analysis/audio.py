@@ -23,6 +23,8 @@ from core.binary_resolver import find_binary, get_subprocess_kwargs
 
 import numpy as np
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Lazy import librosa to avoid startup cost
@@ -440,6 +442,7 @@ def extract_audio(
         raise RuntimeError("Audio extraction timed out")
 
 
+@isolated("audio", "audio.analyze", decode=lambda v: AudioAnalysis(**v))
 def analyze_audio(
     audio_path: Path,
     sample_rate: int = 22050,
@@ -583,6 +586,7 @@ def analyze_audio_from_video(
         )
 
 
+@isolated("audio", "audio.clip_volume")
 def extract_clip_volume(
     source_path: Path,
     start_seconds: float,
@@ -659,6 +663,7 @@ def extract_clip_volume(
         raise
 
 
+@isolated("audio", "audio.music_file", decode=lambda v: AudioAnalysis(**v))
 def analyze_music_file(
     music_path: Path,
     include_onsets: bool = True,

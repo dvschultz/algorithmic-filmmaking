@@ -169,8 +169,9 @@ def test_ui_install_prompt_uses_the_staged_profile_path_when_isolated(monkeypatc
     monkeypatch.setattr("core.spine.runtime.install_runtime_profile", lambda profile, progress_callback=None, cancel_event=None: calls.append(("profile", profile)) or {"success": True})
     legacy = lambda name, cb: calls.append(("legacy", name)) or True  # noqa: E731
     assert dependency_widgets._install_feature("transcribe", None, legacy)
-    assert dependency_widgets._install_feature("ocr", None, legacy)  # no profile yet: in-place path
-    assert calls == [("profile", "transcription-whisper"), ("legacy", "ocr")]
+    assert dependency_widgets._install_feature("ocr", None, legacy)  # every profiled feature routes the same way
+    assert dependency_widgets._install_feature("video_download", None, legacy)  # no profile: in-place path
+    assert calls == [("profile", "transcription-whisper"), ("profile", "ocr-paddle"), ("legacy", "video_download")]
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "0")
     assert dependency_widgets._install_feature("transcribe", None, legacy)
     assert calls[-1] == ("legacy", "transcribe")

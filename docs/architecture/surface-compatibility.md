@@ -165,7 +165,39 @@ profiles in `core/runtime_profiles.py`. mlx-whisper and the cloud backend still
 run in-process (U14). Packaged-platform proof is the `native-worker` runtime
 smoke target in the release workflows.
 
-## Runtime profiles and staged installs (U14, transcription family)
+## Native runtime families and the isolation seam (U14)
+
+`core/runtime_families.py` defines the families (`transcription`, `vision`,
+`ocr`, `vlm`, `audio`, `alignment`) and the `@isolated(family, call)`
+decorator. Engine functions that touch a native runtime (`core/analysis/*`:
+embeddings, boundary embeddings, YOLO objects, SigLIP shots, InsightFace
+faces, MediaPipe gaze, ImageNet classification, PaddleOCR, local VLM
+description/custom query/cinematography, librosa audio, Demucs stems, the
+CTC alignment engine) keep their signatures; when their family is isolated
+the call is forwarded as JSON to the family's worker (`analysis` task,
+allowlisted in `core/runtime_worker/calls.py`), paths travel as strings,
+`on_execution` provenance is replayed on the host, cancel events reach the
+worker task, and dependency/model failures keep their exception classes
+(`ImportError`, `ModelDownloadError`). Inside a worker the decorator is a
+no-op. The worker imports `core.analysis` itself: source runs put the
+checkout on its path, frozen builds stage `core`/`models` as source beside
+the worker package (`packaging/build_support.collect_runtime_worker_datas`).
+
+Cutover is per family: `Settings.native_worker_families` (default
+`["transcription"]`; `SCENE_RIPPER_NATIVE_WORKER_FAMILIES` overrides; chat
+`update_settings`, `scene_ripper runtime isolate`, MCP settings tools). A
+family switches on once the packaged `native-analysis` smoke (all three
+release workflows) proves it; source-mode proof for every family is in
+`tests/test_runtime_families.py` and the smoke target run locally. `main.py`
+skips the Torch pre-import once `vision`, `vlm`, `alignment` and `audio` are
+all isolated, and the MLX pre-import once `vlm` is isolated and the MLX
+whisper backend cannot be selected (`core.runtime_families.host_needs_runtime`):
+that is the removal condition for those startup workarounds. Not isolated:
+the MLX whisper backend, cloud providers (they need credentials, which
+workers never receive), and OpenCV/EAST text detection (bundled, no native
+runtime).
+
+## Runtime profiles and staged installs (U14)
 
 `core/spine/runtime.py` exposes `list_runtime_profiles`,
 `get_runtime_profile_status(probe=)`, `install_runtime_profile` and
@@ -179,12 +211,14 @@ task in a fresh worker that sees the staged directory first, then promoted to
 cancellation (pip is killed) or a failed health check discards the stage and
 keeps the previous runtime; rollback removes the newest overlay. The host never
 imports a native runtime when `native_worker_isolation` is on:
-`_validate_feature_runtime("transcribe")` probes the worker instead. Legacy
-in-place installs (`install_for_feature`) remain for features without a
-profile (OCR, embeddings, faces/objects/gaze, alignment, audio); those families,
-and the Torch/MLX GUI startup workarounds, migrate as their packaged worker
-smoke evidence lands. `SCENE_RIPPER_APP_SUPPORT_DIR` relocates the managed
-runtime root for tests and smoke runs.
+`_validate_feature_runtime("transcribe")` probes the worker instead. Profiles
+now cover every family (`transcription-whisper`, `vision-torch`, `ocr-paddle`,
+`vlm-local`, `audio-librosa`, `alignment-ctc`); features flagged
+`native_install` (torch, mlx, insightface, ...) cannot be staged with
+`pip --target`, so their profiles install in place and are health-checked in a
+worker afterwards (`staged_installs: false` in the status).
+`SCENE_RIPPER_APP_SUPPORT_DIR` relocates the managed runtime root for tests and
+smoke runs.
 
 ## Sequence variation comparison (U16)
 

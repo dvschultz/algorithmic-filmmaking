@@ -21,6 +21,8 @@ from core.analysis_model_identity import (
 
 from PIL import Image
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Own DINOv2 model instance (separate from classification model in shots.py)
@@ -129,6 +131,7 @@ def _image_to_embedding(image: Image.Image) -> list[float]:
     return cls_embedding[0].cpu().numpy().tolist()
 
 
+@isolated("vision", "embeddings.thumbnails")
 def extract_clip_embeddings_batch(
     thumbnail_paths: list[Path],
 ) -> list[list[float]]:
@@ -187,6 +190,7 @@ def extract_clip_embeddings_batch(
     return [all_embeddings.get(i, zero_vec) for i in range(len(thumbnail_paths))]
 
 
+@isolated("vision", "embeddings.boundary", decode=lambda v: (list(v[0]), list(v[1])))
 def extract_boundary_embeddings(
     source_path: Path,
     start_frame: int,

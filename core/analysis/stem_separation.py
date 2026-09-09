@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 STEM_NAMES = ("drums", "bass", "vocals", "other")
@@ -56,6 +58,19 @@ def get_cached_stems(music_path: Path, cache_dir: Path) -> Optional[dict[str, Pa
     return stems
 
 
+def _decode_stems(value: dict, arguments: dict) -> dict[str, Path]:
+    """Rebuild stem paths; the worker may only report files under the host's output_dir."""
+    output_dir = Path(arguments["output_dir"]).resolve()
+    stems: dict[str, Path] = {}
+    for name, raw in value.items():
+        path = Path(raw)
+        if not path.resolve().is_relative_to(output_dir):
+            raise RuntimeError(f"Stem separation reported a file outside the output directory: {raw}")
+        stems[str(name)] = path
+    return stems
+
+
+@isolated("audio", "audio.separate_stems", decode=_decode_stems)
 def separate_stems(
     music_path: Path,
     output_dir: Path,

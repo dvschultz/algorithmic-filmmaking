@@ -23,6 +23,8 @@ try:
 except ImportError:
     mp = None  # type: ignore[assignment]
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -396,6 +398,7 @@ def extract_gaze_from_frame(
 # Per-clip gaze extraction
 # ---------------------------------------------------------------------------
 
+@isolated("vision", "gaze.from_clip")
 def extract_gaze_from_clip(
     source_path: str,
     start_frame: int,

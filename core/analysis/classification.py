@@ -9,6 +9,8 @@ from typing import Optional
 
 from PIL import Image
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Lazy load model and labels
@@ -152,6 +154,7 @@ def _load_model():
     return _model, _labels, _preprocess
 
 
+@isolated("vision", "classification.frame", decode=lambda v: [(str(a), float(b)) for a, b in v])
 def classify_frame(
     image_path: Path,
     top_k: int = 5,

@@ -12,6 +12,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # COCO class names (80 classes used by YOLO)
@@ -230,6 +232,7 @@ def _load_yoloe(custom_classes: list[str]):
     return _ov_model
 
 
+@isolated("vision", "objects.detect_open_vocab")
 def detect_objects_open_vocab(
     image_path: Path,
     custom_classes: list[str],
@@ -292,6 +295,7 @@ def detect_objects_open_vocab(
         raise RuntimeError(f"Open-vocabulary detection failed for {image_path.name}: {e}") from e
 
 
+@isolated("vision", "objects.detect")
 def detect_objects(
     image_path: Path,
     confidence_threshold: float = 0.5,

@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # One-time SSL cert fix for Windows (certifi CA bundle)
@@ -174,6 +176,7 @@ def evaluate_custom_query_cloud(
         raise RuntimeError(_format_cloud_api_error(e, original_model, "query")) from e
 
 
+@isolated("vlm", "vlm.custom_query_local", decode=lambda v: (bool(v[0]), float(v[1]), str(v[2])))
 def evaluate_custom_query_local(
     image_path: Path,
     query: str,

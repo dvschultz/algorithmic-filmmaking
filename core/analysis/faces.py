@@ -18,6 +18,8 @@ import numpy as np
 if TYPE_CHECKING:
     from core.analysis.face_weights import FaceWeights
 
+from core.runtime_families import isolated  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Lazy-loaded model
@@ -223,6 +225,7 @@ def _format_face(face, frame_number: int | None = None) -> dict:
     return result
 
 
+@isolated("vision", "faces.from_image")
 def extract_faces_from_image(
     image_path: Path, *, on_execution: Callable[[dict], None] | None = None
 ) -> list[dict]:
@@ -260,6 +263,7 @@ def extract_faces_from_image(
     return results
 
 
+@isolated("vision", "faces.from_clip")
 def extract_faces_from_clip(
     source_path: Path,
     start_frame: int,

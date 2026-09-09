@@ -13,22 +13,35 @@ from typing import Any, Callable
 
 
 def _isolation() -> dict[str, Any]:
+    from core.runtime_families import enabled_families
     from core.transcription import native_worker_enabled
 
-    return {"native_worker_isolation": native_worker_enabled()}
+    return {
+        "native_worker_isolation": native_worker_enabled(),
+        "isolated_families": sorted(enabled_families()),
+    }
 
 
 def list_runtime_profiles() -> dict[str, Any]:
     """Every allowlisted profile with its install status and promoted overlays."""
     from core.runtime_profiles import PROFILES, profile_overlays, profile_status
 
+    from core.runtime_families import FAMILIES, family_isolated
+    from core.runtime_profiles import profile_can_stage
+
     profiles = []
     for profile_id, profile in PROFILES.items():
         status = profile_status(profile_id)
         status["description"] = profile.description
         status["overlays"] = [path.name for path in profile_overlays(profile_id)]
+        status["staged_installs"] = profile_can_stage(profile)
+        status["isolated"] = family_isolated(profile.family)
         profiles.append(status)
-    return {"success": True, "profiles": profiles, **_isolation()}
+    families = [
+        {"family": fid, "description": f.description, "isolated": family_isolated(fid)}
+        for fid, f in FAMILIES.items()
+    ]
+    return {"success": True, "profiles": profiles, "families": families, **_isolation()}
 
 
 def get_runtime_profile_status(profile_id: str, *, probe: bool = False) -> dict[str, Any]:
