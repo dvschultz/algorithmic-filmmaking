@@ -4,7 +4,7 @@ import logging
 from copy import deepcopy
 from threading import Event
 import random
-from typing import List, Tuple, Any, Optional, Literal
+from typing import Any, Callable, List, Literal, Optional, Tuple
 from core.remix.shuffle import constrained_shuffle
 from core.analysis.shots import SHOT_TYPES
 from core.remix.audio_sync import (
@@ -277,6 +277,8 @@ def run_registry_algorithm(
     parameters: Optional[dict[str, Any]] = None,
     cancel_event: Event | None = None,
     resolve_prerequisites: bool = True,
+    progress: Optional[Callable[[str], None]] = None,
+    resources: Optional[dict[str, Any]] = None,
 ):
     """Run a registry algorithm from legacy keyword arguments.
 
@@ -303,6 +305,8 @@ def run_registry_algorithm(
         seed=legacy_seed(seed) if definition.seeded else None,
         cancel_event=cancel_event,
         resolve_prerequisites=resolve_prerequisites,
+        progress=progress,
+        resources=resources,
     )
 
 

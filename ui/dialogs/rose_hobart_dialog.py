@@ -29,21 +29,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QFont, QPainter, QPen, QPixmap
 
-from core.analysis.faces import SENSITIVITY_PRESETS, order_matched_clips
 from core.operations.faces import (
     FaceApplication,
     FaceOptions,
     FaceOutcome,
     face_task,
-    run_faces,
 )
-from core.jobs.media import media_stamp, MediaFingerprints
+from core.jobs.media import media_stamp
 from core.jobs.gui_faces import GuiFaceCache
-from core.operations.face_records import (
-    verified_face_execution,
-    face_environment,
-    saved_execution,
-)
 from models.analysis_record import AnalysisRecord
 from ui.theme import theme, UISizes
 from ui.workers.base import CancellableWorker
@@ -56,6 +49,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Map dialog display names to faces.py preset keys
+_ORDERING_DISPLAY_TO_KEY = {
+    "Original Order": "original",
+    "By Duration": "duration",
+    "By Color": "color",
+    "By Brightness": "brightness",
+    "By Confidence": "confidence",
+    "Random": "random",
+}
+
 _SENSITIVITY_DISPLAY_TO_KEY = {
     "Strict": "strict",
     "Balanced": "balanced",
@@ -103,6 +105,7 @@ class RoseHobartWorker(CancellableWorker):
         self.failure: str | None = None
         self._reference_execution: dict | None = None
         self._reference_packages: dict | None = None
+        self.recipe = None  # SequenceRecipe once matching has run
         self._sensitivity = sensitivity_preset
         self._ordering = ordering
         self._sample_interval = sample_interval
@@ -126,144 +129,35 @@ class RoseHobartWorker(CancellableWorker):
             )
 
     def run(self) -> None:
-        """Run face matching pipeline."""
+        """Run the shared Rose Hobart definition and keep its face outcomes."""
         self._log_start()
         try:
-            # Ensure InsightFace is installed before attempting face detection
-            from core.feature_registry import check_feature_ready, install_for_feature
+            from core.remix import run_registry_algorithm
 
-            available, _missing = check_feature_ready("face_detect")
-            if not available:
-                self.progress_message.emit("Installing face detection dependencies...")
-                if not install_for_feature("face_detect"):
-                    self.failure = (
-                        "Failed to install face detection dependencies (insightface)"
-                    )
-                    self.error.emit(self.failure)
-                    return
-
-            from core.analysis.faces import (
-                average_embeddings,
-                compare_faces,
-                extract_faces_from_image,
+            preset_key = _SENSITIVITY_DISPLAY_TO_KEY.get(self._sensitivity, self._sensitivity)
+            ordering = _ORDERING_DISPLAY_TO_KEY.get(self._ordering, self._ordering)
+            run = run_registry_algorithm(
+                "rose_hobart", self._clips,
+                parameters={
+                    "reference_image_paths": [str(path) for path in self._reference_paths],
+                    "sensitivity": preset_key,
+                    "ordering": ordering,
+                    "sampling_interval": self._sample_interval,
+                },
+                cancel_event=self._cancel_event,
+                progress=self.progress_message.emit,
+                resources={"face_cache": self.cache, "on_match": self.match_found.emit},
             )
-
-            # Step 1: Extract reference face embeddings
-            if not self.references_current():
-                raise ValueError("Reference images changed while queued")
-            self.progress_message.emit("Extracting reference face embeddings...")
-            ref_embeddings = []
-            fingerprints = MediaFingerprints(self._cancel_event)
-            reference_identity = None
-            for path in self._reference_paths:
-                if self.is_cancelled():
-                    return
-                executions = []
-                faces = extract_faces_from_image(
-                    path, on_execution=lambda value: executions.append(deepcopy(value))
-                )
-                if faces:
-                    if len(executions) != 1:
-                        raise ValueError(
-                            "Reference faces require one verified execution"
-                        )
-                    execution = executions[0]
-                    identity = verified_face_execution(
-                        execution, fingerprints, face_environment()
-                    )
-                    if (
-                        reference_identity is not None
-                        and identity != reference_identity
-                    ):
-                        raise ValueError(
-                            "Reference faces used different model executions"
-                        )
-                    reference_identity = identity
-                    self._reference_execution = execution
-                    self._reference_packages = identity["runtime"]["packages"]
-                    best = max(faces, key=lambda f: f["confidence"])
-                    ref_embeddings.append(best["embedding"])
-
-            if not ref_embeddings:
-                self.failure = "No faces detected in reference images."
-                self.error.emit(self.failure)
-                return
-
-            if len(ref_embeddings) > 1:
-                ref_embeddings = [average_embeddings(ref_embeddings)]
-
-            preset_key = _SENSITIVITY_DISPLAY_TO_KEY.get(self._sensitivity, "balanced")
-            threshold = SENSITIVITY_PRESETS[preset_key]
-
-            if self.is_cancelled():
+            if run is None or self.is_cancelled():
                 self._log_cancelled()
                 return
-
-            if not self.references_current():
-                raise ValueError("Reference images changed during matching")
-
-            # Step 2: Process clips
-            total = len(self._clips)
-            matched = []
-            match_count = 0
-            self.outcomes = self._analyze_faces()
-
-            for i, (clip, source) in enumerate(self._clips):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    return
-
-                self.progress_message.emit(f"Processing clip {i + 1} of {total}...")
-
-                outcome = self.outcomes[i]
-                if not outcome.has_result:
-                    if not self.is_cancelled():
-                        raise ValueError(
-                            outcome.message or "Face analysis did not complete"
-                        )
-                    return
-                clip_faces = outcome.face_dicts()
-                if outcome.record_json is None:
-                    raise ValueError("Clip faces require verified execution")
-                record = AnalysisRecord.from_dict(json.loads(outcome.record_json))
-                if (
-                    verified_face_execution(
-                        saved_execution(record), fingerprints, face_environment()
-                    )
-                    != reference_identity
-                ):
-                    raise ValueError(
-                        "Reference and clip faces used different model executions"
-                    )
-
-                is_match, confidence = compare_faces(
-                    ref_embeddings, clip_faces, threshold
-                )
-                if is_match:
-                    matched.append((clip, source, confidence))
-                    match_count += 1
-                    self.match_found.emit(match_count)
-
-            if self.is_cancelled():
-                self._log_cancelled()
-                return
-
-            if not matched:
-                if not self.references_current():
-                    raise ValueError("Reference images changed during matching")
-                self.result = []
-                self.finished_sequence.emit([])
-                return
-
-            # Step 3: Order matched clips (shared function)
-            ordered = order_matched_clips(matched, self._ordering)
-
-            if not self.is_cancelled():
-                if not self.references_current():
-                    raise ValueError("Reference images changed during matching")
-                self.result = ordered
-                self.finished_sequence.emit(ordered)
-
+            self.outcomes = tuple(run.context.get("face_outcomes", ()))
+            self._reference_execution = run.context.get("reference_execution")
+            identity = run.context.get("reference_identity") or {}
+            self._reference_packages = (identity.get("runtime") or {}).get("packages")
+            self.recipe = run.recipe
+            self.result = run.ordered_clips
+            self.finished_sequence.emit(self.result)
             self._log_complete()
 
         except Exception as e:
@@ -271,29 +165,6 @@ class RoseHobartWorker(CancellableWorker):
                 self.failure = "Face matching failed. Check logs for details."
                 logger.error(f"Rose Hobart generation error: {e}", exc_info=True)
                 self.error.emit(self.failure)
-
-    def _analyze_faces(self) -> tuple[FaceOutcome, ...]:
-        def deliver(outcome: FaceOutcome) -> None:
-            self.outcomes += (outcome,)
-
-        def progress(current: int, count: int) -> None:
-            self.progress_message.emit(f"Analyzing clip {current} of {count}...")
-
-        if self.cache is not None:
-            return self.cache.run(
-                self.tasks,
-                self._cancel_event,
-                lambda: not self.is_cancelled() and self.references_current(),
-                deliver,
-                progress,
-            )
-        return run_faces(
-            self.tasks,
-            self.options,
-            cancel_event=self._cancel_event,
-            on_outcome=deliver,
-            progress=progress,
-        )
 
     def references_current(self) -> bool:
         if self._reference_execution is not None:
@@ -873,6 +744,7 @@ class RoseHobartDialog(QDialog):
                     self._on_error(worker.failure or "Face matching did not complete.")
                 else:
                     pairs = {c.id: (c, s) for c, s in self._submitted_pairs}
+                    self._recipe = worker.recipe
                     self._on_finished([pairs[c.id] for c, _ in worker.result])
         reference = self._ref_extract_worker
         if reference is not None:
@@ -920,6 +792,11 @@ class RoseHobartDialog(QDialog):
 
         self.sequence_ready.emit(sequence)
         self.accept()
+
+    @property
+    def recipe(self):
+        """Recipe of the emitted sequence, or None."""
+        return getattr(self, "_recipe", None)
 
     @Slot(str)
     def _on_error(self, message: str):

@@ -130,7 +130,7 @@ class ChromaticsDefinition(AlgorithmDefinition):
         return parameters
 
     def generate(
-        self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None,
+        self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None, context=None,
     ) -> SequenceProposal:
         ordered, notes = order_by_color(
             inputs, parameters["direction"], parameters["no_color_handling"],

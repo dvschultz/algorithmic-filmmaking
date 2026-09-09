@@ -104,12 +104,12 @@ def _definition():
         version = 1
         prerequisites = ("embeddings",)
 
-        def prepare(self, inputs, parameters, *, cancel_event: Event | None = None):
+        def prepare(self, inputs, parameters, *, cancel_event: Event | None = None, progress=None, resources=None):
             import core.remix as remix  # patchable prerequisite seam shared with the legacy dispatcher
 
             return remix._auto_compute_embeddings(list(inputs), cancel_event=cancel_event)
 
-        def generate(self, inputs, parameters, rng):
+        def generate(self, inputs, parameters, rng, context=None):
             ordered = similarity_chain(list(inputs), start_clip_id=None)
             missing = sum(1 for clip, _ in inputs if clip.embedding is None)
             notes = (f"{missing} clips lack embeddings (appended at end)",) if missing else ()

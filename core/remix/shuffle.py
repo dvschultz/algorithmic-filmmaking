@@ -160,7 +160,7 @@ class ShuffleDefinition(AlgorithmDefinition):
         }
 
     def generate(
-        self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None,
+        self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None, context=None,
     ) -> SequenceProposal:
         if rng is None:
             raise ValueError("Shuffle requires a seeded random source")

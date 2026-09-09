@@ -110,20 +110,29 @@ class ReferenceMatchWorker(CancellableWorker):
         self.user_clips = user_clips
         self.weights = weights
         self.allow_repeats = allow_repeats
+        self.recipe = None  # SequenceRecipe once matching has run
 
     def run(self):
         self._log_start()
         try:
-            from core.remix.reference_match import reference_guided_match
+            from core.remix import run_registry_algorithm
 
             self.progress.emit("Matching clips to reference structure...")
 
-            matched = reference_guided_match(
-                reference_clips=self.reference_clips,
-                user_clips=self.user_clips,
-                weights=self.weights,
-                allow_repeats=self.allow_repeats,
+            reference_id = self.reference_clips[0][1].id if self.reference_clips else ""
+            run = run_registry_algorithm(
+                "reference_guided", list(self.reference_clips) + list(self.user_clips),
+                parameters={
+                    "reference_source_id": reference_id,
+                    "weights": self.weights,
+                    "allow_repeats": self.allow_repeats,
+                },
+                cancel_event=self._cancel_event,
             )
+            if run is None or self.is_cancelled():
+                return
+            self.recipe = run.recipe
+            matched = run.ordered_clips
 
             if not self.is_cancelled():
                 self.match_ready.emit(matched)
@@ -516,6 +525,7 @@ class ReferenceGuideDialog(QDialog):
             "reference_source_id": ref_source_id,
             "dimension_weights": self._get_weights(),
             "allow_repeats": self.allow_repeats_check.isChecked(),
+            "recipe": getattr(self.worker, "recipe", None),
         }
 
         self.sequence_ready.emit(matched_clips, metadata)

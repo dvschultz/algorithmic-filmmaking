@@ -178,12 +178,12 @@ def _definition():
         version = 1
         prerequisites = ("boundary_embeddings",)
 
-        def prepare(self, inputs, parameters, *, cancel_event: Event | None = None):
+        def prepare(self, inputs, parameters, *, cancel_event: Event | None = None, progress=None, resources=None):
             import core.remix as remix  # patchable prerequisite seam shared with the legacy dispatcher
 
             return remix._auto_compute_boundary_embeddings(list(inputs), cancel_event=cancel_event)
 
-        def generate(self, inputs, parameters, rng):
+        def generate(self, inputs, parameters, rng, context=None):
             ordered = match_cut_chain(list(inputs), start_clip_id=None)
             missing = sum(
                 1 for clip, _ in inputs

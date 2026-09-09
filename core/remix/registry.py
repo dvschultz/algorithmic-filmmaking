@@ -13,6 +13,7 @@ from core.remix.engine import (
     ClipInput,
     GenerationRun,
     ParameterSpec,
+    Prepared,
     ProposedEntry,
     SequenceProposal,
     legacy_seed,
@@ -30,6 +31,7 @@ __all__ = [
     "ClipInput",
     "GenerationRun",
     "ParameterSpec",
+    "Prepared",
     "ProposedEntry",
     "SequenceProposal",
     "legacy_seed",
@@ -48,7 +50,10 @@ registry = AlgorithmRegistry()
 def _register_builtin() -> None:
     from core.remix.arrange import ARRANGE_DEFINITIONS
     from core.remix.chromatics import ChromaticsDefinition
+    from core.remix.gaze import EyesWithoutAFaceDefinition
     from core.remix.match_cut import MatchCutDefinition
+    from core.remix.reference_match import ReferenceGuidedDefinition
+    from core.remix.rose_hobart import RoseHobartDefinition
     from core.remix.shuffle import ShuffleDefinition
     from core.remix.similarity_chain import SimilarityChainDefinition
 
@@ -58,6 +63,9 @@ def _register_builtin() -> None:
         registry.register(definition())
     registry.register(SimilarityChainDefinition())
     registry.register(MatchCutDefinition())
+    registry.register(EyesWithoutAFaceDefinition())
+    registry.register(ReferenceGuidedDefinition())
+    registry.register(RoseHobartDefinition())
 
 
 _register_builtin()

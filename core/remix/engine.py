@@ -27,13 +27,26 @@ from threading import Event
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from models.recipe import RealizedEntry, RecipeInput, SequenceRecipe, canonical_json
+import json
+
+
+def _is_json(value: Any) -> bool:
+    try:
+        canonical_json(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _reject(name: str) -> Any:
+    raise ValueError(f"Parameter {name!r} must be plain JSON data")
 
 if TYPE_CHECKING:
     from models.clip import Clip, Source
 
 ClipInput = tuple["Clip", "Source"]
 
-ParameterType = Literal["string", "integer", "number", "boolean"]
+ParameterType = Literal["string", "integer", "number", "boolean", "object", "array"]
 ProposalKind = Literal["ordering", "timed", "provider"]
 
 
@@ -67,6 +80,14 @@ class ParameterSpec:
         elif self.type == "string":
             if not isinstance(value, str):
                 raise ValueError(f"Parameter {self.name!r} must be text")
+        elif self.type == "object":
+            if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
+                raise ValueError(f"Parameter {self.name!r} must be an object with text keys")
+            value = json.loads(canonical_json(value)) if _is_json(value) else _reject(self.name)
+        elif self.type == "array":
+            if not isinstance(value, list):
+                raise ValueError(f"Parameter {self.name!r} must be a list")
+            value = json.loads(canonical_json(value)) if _is_json(value) else _reject(self.name)
         if self.choices is not None and value not in self.choices:
             options = ", ".join(str(choice) for choice in self.choices)
             raise ValueError(f"Parameter {self.name!r} must be one of: {options}")
@@ -117,6 +138,16 @@ class SequenceProposal:
     provider_outputs: dict[str, Any] = field(default_factory=dict)
     notes: tuple[str, ...] = ()
     """Human-readable facts about the run (e.g. how many inputs lacked data)."""
+    sequence_settings: dict[str, Any] = field(default_factory=dict)
+    """Sequence-level fields the publisher applies (music_path, reference_source_id, ...)."""
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """Prepared inputs plus per-run context that generation may read."""
+
+    inputs: list[ClipInput]
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -127,6 +158,8 @@ class GenerationRun:
     recipe: SequenceRecipe
     inputs: tuple[ClipInput, ...]
     """Inputs the recipe describes, in recipe order (snapshot objects the caller passed)."""
+    context: dict[str, Any] = field(default_factory=dict)
+    """Prepared context for the caller (never persisted)."""
 
     @property
     def ordered_clips(self) -> list[ClipInput]:
@@ -152,6 +185,12 @@ class AlgorithmDefinition:
     """Whether generation consumes randomness and therefore needs a seed."""
     allow_duplicates: bool = False
     kind: ProposalKind = "ordering"
+    source_parameters: tuple[str, ...] = ()
+    """Parameter names that hold a project source id whose clips must be candidates."""
+    asset_parameters: tuple[str, ...] = ()
+    """Parameter names that hold file paths (validated by the calling surface)."""
+    provider: bool = False
+    """Whether prepare/generate call an external or local model provider."""
 
     def legacy_parameters(
         self,
@@ -178,8 +217,16 @@ class AlgorithmDefinition:
         parameters: Mapping[str, Any],
         *,
         cancel_event: Event | None = None,
-    ) -> list[ClipInput]:
-        """Resolve prerequisites on detached inputs; default needs nothing."""
+        progress: Callable[[str], None] | None = None,
+        resources: Mapping[str, Any] | None = None,
+    ) -> list[ClipInput] | Prepared:
+        """Resolve prerequisites on detached inputs; default needs nothing.
+
+        Return :class:`Prepared` to hand generation per-run context (provider
+        results, match scores) alongside the inputs. ``progress`` receives
+        status text; ``resources`` carries caller-provided services such as a
+        GUI result cache, never persisted state.
+        """
         return list(inputs)
 
     def generate(
@@ -187,6 +234,7 @@ class AlgorithmDefinition:
         inputs: Sequence[ClipInput],
         parameters: Mapping[str, Any],
         rng: random.Random | None,
+        context: Mapping[str, Any] | None = None,
     ) -> SequenceProposal:
         raise NotImplementedError
 
@@ -197,7 +245,10 @@ class AlgorithmDefinition:
             "kind": self.kind,
             "seeded": self.seeded,
             "allow_duplicates": self.allow_duplicates,
+            "provider": self.provider,
             "prerequisites": list(self.prerequisites),
+            "source_parameters": list(self.source_parameters),
+            "asset_parameters": list(self.asset_parameters),
             "parameters": [spec.to_dict() for spec in self.parameters],
         }
 
@@ -344,6 +395,8 @@ def run_algorithm(
     parent_recipe_id: str | None = None,
     prepared: Callable[[Sequence[ClipInput]], None] | None = None,
     resolve_prerequisites: bool = True,
+    progress: Callable[[str], None] | None = None,
+    resources: Mapping[str, Any] | None = None,
 ) -> GenerationRun | None:
     """Select, prepare, generate, and describe one run.
 
@@ -359,16 +412,22 @@ def run_algorithm(
         raise ValueError("Algorithm inputs must not repeat a clip")
     if cancel_event is not None and cancel_event.is_set():
         return None
-    inputs = (
-        definition.prepare(selected, normalized, cancel_event=cancel_event)
+    outcome = (
+        definition.prepare(
+            selected, normalized, cancel_event=cancel_event, progress=progress, resources=resources,
+        )
         if resolve_prerequisites else list(selected)
     )
+    if isinstance(outcome, Prepared):
+        inputs, context = list(outcome.inputs), dict(outcome.context)
+    else:
+        inputs, context = list(outcome), {}
     if cancel_event is not None and cancel_event.is_set():
         return None
     if prepared is not None:
         prepared(inputs)
     rng = random.Random(resolved_seed) if definition.seeded else None
-    proposal = definition.generate(inputs, normalized, rng)
+    proposal = definition.generate(inputs, normalized, rng, context)
     if proposal.kind != definition.kind:
         raise ValueError(f"Algorithm {definition.key!r} produced a {proposal.kind} proposal")
     recipe = SequenceRecipe(
@@ -381,7 +440,7 @@ def run_algorithm(
         parent_id=parent_recipe_id,
         provider_outputs=dict(proposal.provider_outputs),
     )
-    return GenerationRun(proposal, recipe, tuple(inputs))
+    return GenerationRun(proposal, recipe, tuple(inputs), context)
 
 
 def parameters_document(definition: AlgorithmDefinition, parameters: Mapping[str, Any] | None) -> str:

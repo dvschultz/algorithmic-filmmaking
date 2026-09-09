@@ -232,7 +232,7 @@ def test_realization_rejects_foreign_or_repeated_or_out_of_range_entries():
         key = "bad"
         entries: tuple = ()
 
-        def generate(self, inputs, parameters, rng):
+        def generate(self, inputs, parameters, rng, context=None):
             return SequenceProposal("ordering", self.entries)
 
     bad = Bad()
@@ -263,11 +263,11 @@ def test_prepare_and_select_hooks_run_before_generation_and_honor_cancellation()
         def select_inputs(self, candidates, parameters):
             return list(candidates)[:2]
 
-        def prepare(self, inputs, parameters, *, cancel_event=None):
+        def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
             seen["prepared"] = [c.id for c, _ in inputs]
             return list(inputs)
 
-        def generate(self, inputs, parameters, rng):
+        def generate(self, inputs, parameters, rng, context=None):
             return SequenceProposal("ordering", tuple(ProposedEntry(c.id, s.id) for c, s in reversed(inputs)))
 
     run = run_algorithm(Hooked(), pairs)
@@ -534,7 +534,7 @@ def test_legacy_hook_and_explicit_parameters_layer_per_definition():
     assert color.recipe.parameters["direction"] == "complementary"
     assert not any(e.hflip for e in color.recipe.realized)  # transforms mean nothing to Chromatics
     with pytest.raises(ValueError, match="seeded random source"):
-        registry.require("shuffle").generate(pairs, {"max_consecutive_same_source": 1, "hflip": False, "vflip": False, "reverse": False}, None)
+        registry.require("shuffle").generate(pairs, {"max_consecutive_same_source": 1, "hflip": False, "vflip": False, "reverse": False}, None, None)
 
 
 def test_recipe_reports_whether_the_timeline_still_matches():

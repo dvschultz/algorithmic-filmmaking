@@ -3747,30 +3747,22 @@ def generate_eyes_without_a_face(
     if not has_gaze:
         return {"success": False, "error": "No clips have gaze data. Run gaze analysis first."}
 
-    from core.remix.gaze import eyeline_match, gaze_filter, gaze_rotation
+    from core.spine.sequences import generate_sequence as _generate
 
-    try:
-        if mode == "eyeline_match":
-            sorted_clips = eyeline_match(clips, tolerance=tolerance)
-        elif mode == "gaze_filter":
-            sorted_clips = gaze_filter(clips, category=category)
-        else:
-            sorted_clips = gaze_rotation(
-                clips, axis=axis, range_start=range_start,
-                range_end=range_end, ascending=ascending,
-            )
-
-        from core.spine.sequences import apply_generated_order
-        apply_generated_order(project, sorted_clips, "gaze_sort", "Eyes Without a Face")
-
-        return _add_sequence_summary_for_agent(project, {
-            "success": True,
-            "algorithm": f"eyes_without_a_face ({mode})",
-            "clip_count": len(sorted_clips),
-            "mode": mode,
-        }, sorted_clips)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    parameters = {
+        "mode": mode, "tolerance": tolerance, "category": category or "", "axis": axis,
+        "range_start": range_start, "range_end": range_end, "ascending": ascending,
+    }
+    result = _generate(
+        project, "eyes_without_a_face", clip_ids=[clip.id for clip, _ in clips],
+        parameters=parameters, name="Eyes Without a Face",
+    )
+    if result.get("success"):
+        result["algorithm"] = f"eyes_without_a_face ({mode})"
+        result["mode"] = mode
+        entries = [(project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id]) for c in result["clip_ids"]]
+        _add_sequence_summary_for_agent(project, result, entries)
+    return result
 
 
 @tools.register(

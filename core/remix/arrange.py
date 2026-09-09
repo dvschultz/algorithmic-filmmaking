@@ -55,7 +55,7 @@ class SequentialDefinition(AlgorithmDefinition):
     key = "sequential"
     version = 1
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         return _ordering(inputs)
 
 
@@ -64,7 +64,7 @@ class DurationDefinition(_DirectionalDefinition):
     version = 1
     parameters = (_direction_spec(("short_first", "long_first"), "Order by clip duration"),)
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         longest_first = parameters["direction"] == "long_first"
         ordered = sorted(
             inputs,
@@ -79,7 +79,7 @@ class ShotTypeDefinition(AlgorithmDefinition):
     version = 1
     prerequisites = ("shots",)
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         from core.analysis.shots import SHOT_TYPES
 
         order = {shot: i for i, shot in enumerate(SHOT_TYPES)}
@@ -101,7 +101,7 @@ class ProximityDefinition(_DirectionalDefinition):
     prerequisites = ("shots", "cinematography")
     parameters = (_direction_spec(("far_to_close", "close_to_far"), "Camera-to-subject distance progression"),)
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         sign = 1.0 if parameters["direction"] == "far_to_close" else -1.0
         return _ordering(sorted(inputs, key=lambda item: sign * proximity_score(item[0])))
 
@@ -109,7 +109,7 @@ class ProximityDefinition(_DirectionalDefinition):
 class _ScalarDefinition(_DirectionalDefinition):
     operation: str = ""
 
-    def prepare(self, inputs, parameters, *, cancel_event: Event | None = None):
+    def prepare(self, inputs, parameters, *, cancel_event: Event | None = None, progress=None, resources=None):
         # The package-level helpers are the patchable prerequisite seam shared
         # with the legacy dispatcher and its tests.
         import core.remix as remix
@@ -117,7 +117,7 @@ class _ScalarDefinition(_DirectionalDefinition):
         compute = remix._auto_compute_brightness if self.operation == "brightness" else remix._auto_compute_volume
         return compute(list(inputs), cancel_event=cancel_event)
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         from core.remix.scalar_inputs import sort_scalar_inputs
 
         ordered = sort_scalar_inputs(list(inputs), self.operation, direction=parameters["direction"])  # type: ignore[arg-type]
@@ -156,7 +156,7 @@ class GazeSortDefinition(_DirectionalDefinition):
     prerequisites = ("gaze",)
     parameters = (_direction_spec(GAZE_DIRECTIONS, "Gaze angle progression"),)
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         with_gaze, without_gaze = _split_gaze(inputs)
         if not with_gaze:
             logger.warning("No clips with gaze data for Gaze Sort")
@@ -186,7 +186,7 @@ class GazeConsistencyDefinition(AlgorithmDefinition):
     version = 1
     prerequisites = ("gaze",)
 
-    def generate(self, inputs, parameters, rng):
+    def generate(self, inputs, parameters, rng, context=None):
         with_gaze, without_gaze = _split_gaze(inputs)
         if not with_gaze:
             logger.warning("No clips with gaze data for Gaze Consistency")

@@ -1469,14 +1469,17 @@ class SequenceTab(BaseTab):
             project=self._project,
         )
 
-        dialog.sequence_ready.connect(self._apply_rose_hobart_sequence)
+        dialog.sequence_ready.connect(
+            lambda clips_, owner=dialog: self._apply_rose_hobart_sequence(clips_, recipe=owner.recipe)
+        )
         dialog.exec()
 
     @Slot(list)
-    def _apply_rose_hobart_sequence(self, sequence_clips: list):
+    def _apply_rose_hobart_sequence(self, sequence_clips: list, recipe=None):
         """Apply the sequence from Rose Hobart dialog."""
         self._apply_dialog_sequence(
             sequence_clips, "rose_hobart", "Rose Hobart",
+            sequence_metadata={"recipe": recipe},
         )
 
     def _show_staccato_dialog(self, clips: list):
@@ -2883,7 +2886,7 @@ class SequenceTab(BaseTab):
         Returns:
             Dict with success status and matched clip info
         """
-        from core.remix.reference_match import reference_guided_match
+        from core.remix import run_registry_algorithm
 
         if not self._available_clips:
             return {"success": False, "error": "No clips available for sequencing"}
@@ -2911,12 +2914,15 @@ class SequenceTab(BaseTab):
 
         generated_sequence = None
         try:
-            matched = reference_guided_match(
-                reference_clips=reference_clips,
-                user_clips=user_clips,
-                weights=weights,
-                allow_repeats=allow_repeats,
+            run = run_registry_algorithm(
+                "reference_guided", reference_clips + user_clips,
+                parameters={
+                    "reference_source_id": reference_source_id,
+                    "weights": weights,
+                    "allow_repeats": allow_repeats,
+                },
             )
+            matched = run.ordered_clips
 
             if not matched:
                 return {
@@ -2953,6 +2959,7 @@ class SequenceTab(BaseTab):
             sequence.reference_source_id = reference_source_id
             sequence.dimension_weights = weights
             sequence.allow_repeats = allow_repeats
+            sequence.recipe = run.recipe
             self._apply_chromatic_bar_to_sequence("reference_guided")
             self._update_chromatic_bar_controls("reference_guided")
             self._emit_chromatic_bar_setting_changed()
@@ -2964,6 +2971,8 @@ class SequenceTab(BaseTab):
                 "success": True,
                 "algorithm": "reference_guided",
                 "reference_source_id": reference_source_id,
+                "recipe_id": run.recipe.id,
+                "sequence_id": generated_sequence.id,
                 "clip_count": len(matched),
                 "unmatched": len(reference_clips) - len(matched),
                 "clips": [

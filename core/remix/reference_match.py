@@ -427,3 +427,76 @@ def get_active_dimensions_for_clips(
             available.append(dim)
 
     return available
+
+
+def _definition():
+    from core.remix.engine import (
+        AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
+    )
+
+    class ReferenceGuidedDefinition(AlgorithmDefinition):
+        """Match candidate clips onto a reference source's clip structure.
+
+        Candidates must include the reference source's clips; ``select_inputs``
+        partitions them by ``reference_source_id``. Reference clips stay in the
+        recipe inputs (they define the structure) but are never realized.
+        """
+
+        key = "reference_guided"
+        version = 1
+        allow_duplicates = True
+        source_parameters = ("reference_source_id",)
+        parameters = (
+            ParameterSpec("reference_source_id", "string", "", "Source whose clip order guides the match"),
+            ParameterSpec(
+                "weights", "object", {"duration": 1.0},
+                "Dimension weights 0-1 (color, brightness, shot_scale, audio, embedding, description, transcript, movement, duration)",
+            ),
+            ParameterSpec("allow_repeats", "boolean", False, "Allow one clip at several reference positions"),
+        )
+
+        def select_inputs(self, candidates, parameters):
+            reference_id = parameters["reference_source_id"]
+            if not reference_id:
+                raise ValueError("reference_source_id is required")
+            reference = [item for item in candidates if item[1].id == reference_id]
+            if not reference:
+                raise ValueError(f"No clips from reference source {reference_id!r} among the candidates")
+            users = [item for item in candidates if item[1].id != reference_id]
+            if not users:
+                raise ValueError("All candidates belong to the reference source")
+            return reference + users
+
+        def generate(self, inputs, parameters, rng, context=None):
+            reference_id = parameters["reference_source_id"]
+            weights = parameters["weights"]
+            unknown = sorted(set(weights) - set(DIMENSION_ANALYSIS_REQUIREMENTS) - {"duration"})
+            if unknown:
+                raise ValueError(f"Unknown reference dimensions: {', '.join(unknown)}")
+            for key, value in weights.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                    raise ValueError(f"Weight for {key!r} must be between 0 and 1")
+            reference = [item for item in inputs if item[1].id == reference_id]
+            users = [item for item in inputs if item[1].id != reference_id]
+            matched = reference_guided_match(
+                reference_clips=reference, user_clips=users,
+                weights={k: float(v) for k, v in weights.items()},
+                allow_repeats=parameters["allow_repeats"],
+            )
+            notes = []
+            unmatched = len(reference) - len(matched)
+            if unmatched:
+                notes.append(f"{unmatched} reference positions had no match")
+            return SequenceProposal(
+                "ordering", tuple(ProposedEntry(c.id, s.id) for c, s in matched), notes=tuple(notes),
+                sequence_settings={
+                    "reference_source_id": reference_id,
+                    "dimension_weights": {k: float(v) for k, v in weights.items()},
+                    "allow_repeats": parameters["allow_repeats"],
+                },
+            )
+
+    return ReferenceGuidedDefinition
+
+
+ReferenceGuidedDefinition = _definition()

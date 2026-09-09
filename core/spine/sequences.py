@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from math import isfinite
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 from models.recipe import SequenceRecipe
 from models.sequence import Sequence
@@ -169,6 +169,8 @@ def apply_generated_order(
 
 # --- Registry-backed generation -------------------------------------------
 
+SEQUENCE_SETTING_FIELDS = frozenset({"music_path", "reference_source_id", "dimension_weights", "allow_repeats"})
+
 
 def recipe_input_problems(project: Project, recipe: SequenceRecipe) -> list[str]:
     """Explain why a recipe's realized clips cannot be replayed in this project."""
@@ -202,6 +204,7 @@ def publish_recipe(
     replace_sequence_id: str | None = None,
     show_chromatic_color_bar: bool = False,
     fps: float | None = None,
+    sequence_settings: Mapping[str, Any] | None = None,
 ) -> Sequence:
     """Build a timeline from realized recipe entries and publish it as one edit.
 
@@ -228,6 +231,10 @@ def publish_recipe(
         show_chromatic_color_bar=show_chromatic_color_bar,
     )
     draft.sequence.fps = float(fps)
+    for field_name, value in (sequence_settings or {}).items():
+        if field_name not in SEQUENCE_SETTING_FIELDS:
+            raise ValueError(f"Algorithm set unknown sequence field {field_name!r}")
+        setattr(draft.sequence, field_name, deepcopy(value))
     position = Fraction(0)
     for realized in recipe.realized:
         clip = project.clips_by_id[realized.clip_id]
@@ -331,6 +338,16 @@ def generate_sequence(
         return {"success": False, "error": "Parameters must be an object"}
     if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
         return {"success": False, "error": "Seed must be a non-negative integer"}
+    for name in definition.source_parameters:
+        source_id = (parameters or {}).get(name)
+        if not isinstance(source_id, str) or source_id not in project.sources_by_id:
+            return {"success": False, "error": f"Parameter {name!r} must name a source in this project"}
+        present = {clip.id for clip, _ in candidates}
+        source = project.sources_by_id[source_id]
+        candidates.extend(
+            (clip, source) for clip in project.clips_by_source.get(source_id, [])
+            if clip.id not in present and not clip.disabled
+        )
     snapshots = deepcopy(candidates)
     try:
         run = run_algorithm(
@@ -353,6 +370,7 @@ def generate_sequence(
             project, run.recipe, name=label,
             replace_sequence_id=replace_sequence_id,
             show_chromatic_color_bar=show_chromatic_color_bar,
+            sequence_settings=run.proposal.sequence_settings,
         )
     except (ValueError, RuntimeError) as exc:
         return {"success": False, "error": str(exc)}
