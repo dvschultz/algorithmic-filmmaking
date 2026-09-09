@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +231,7 @@ def is_model_loaded() -> bool:
     return _model is not None
 
 
+@isolated("vision", "classification.unload", decode=lambda v: None)
 def unload_model():
     """Unload the classification model to free memory."""
     global _model, _labels, _preprocess

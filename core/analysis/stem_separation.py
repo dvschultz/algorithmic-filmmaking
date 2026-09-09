@@ -8,8 +8,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import Callable, Optional
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 

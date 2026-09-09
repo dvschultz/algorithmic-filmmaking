@@ -11,8 +11,7 @@ import os
 import re
 from pathlib import Path
 from typing import Optional
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 

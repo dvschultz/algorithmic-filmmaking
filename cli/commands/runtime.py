@@ -13,7 +13,8 @@ def _finish(ctx: click.Context, result: dict) -> None:
         error = str(result.get("error") or "")
         # Bad input (unknown profile) is a validation error; a failed, cancelled
         # or unhealthy install is an operational failure.
-        code = ExitCode.VALIDATION_ERROR if "Unknown runtime profile" in error else ExitCode.GENERAL_ERROR
+        validation = error.startswith(("Unknown runtime", "Name at least one family"))
+        code = ExitCode.VALIDATION_ERROR if validation else ExitCode.GENERAL_ERROR
         if _json(ctx):
             output_result(result, as_json=True)
             exit_with(code)
@@ -87,6 +88,10 @@ def isolate(ctx: click.Context, families: tuple[str, ...], off: bool) -> None:
 
     if not families:
         _finish(ctx, {"success": False, "error": "Name at least one family: " + ", ".join(sorted(FAMILIES))})
+        return
+    unknown = sorted(set(families) - set(FAMILIES))
+    if unknown:
+        _finish(ctx, {"success": False, "error": f"Unknown runtime families: {', '.join(unknown)}; known: {', '.join(sorted(FAMILIES))}"})
         return
     current = set(load_settings(read_keyring=False).native_worker_families)
     wanted = (current - set(families)) if off else (current | set(families))

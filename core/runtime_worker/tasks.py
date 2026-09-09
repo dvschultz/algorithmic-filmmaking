@@ -30,10 +30,13 @@ class ModelLoadError(RuntimeError):
 
 
 class WorkerContext:
-    def __init__(self, staging_dir: Path, cancel, progress: Callable[[float, str], None]) -> None:
+    def __init__(
+        self, staging_dir: Path, cancel, progress: Callable[[float, str], None], *, allow_test_tasks: bool = False,
+    ) -> None:
         self.staging_dir = staging_dir
         self.cancel = cancel
         self.progress = progress
+        self.allow_test_tasks = allow_test_tasks
         self.children: list[subprocess.Popen] = []
 
     def check_cancelled(self) -> None:
@@ -230,12 +233,14 @@ def analysis(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     staged beside this package in frozen builds. Anything not in
     ``ISOLATED_CALLS`` is refused before any import happens.
     """
-    from .calls import ISOLATED_CALLS
+    from .calls import DISCARD_RESULT, ISOLATED_CALLS, TEST_CALLS
 
     name = str(args.get("call", ""))
     target = ISOLATED_CALLS.get(name)
     if target is None:
         raise ValueError(f"Unknown isolated call {name!r}")
+    if name in TEST_CALLS and not context.allow_test_tasks:
+        raise ValueError(f"Isolated call {name!r} is a diagnostic; the host did not enable test tasks")
     kwargs = args.get("kwargs") or {}
     if not isinstance(kwargs, dict):
         raise ValueError("kwargs must be an object")
@@ -255,8 +260,39 @@ def analysis(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     if "cancel_event" in parameters:
         kwargs["cancel_event"] = context.cancel
     context.check_cancelled()
-    value = function(**kwargs)
-    return {"value": _jsonable(value), "call": name, "executions": executions}
+    try:
+        value = function(**kwargs)
+    except (ModelLoadError, ImportError, TaskCancelled):
+        raise  # classified by the task loop (model / dependency_missing / cancelled)
+    except Exception as exc:
+        # Keep the engine's failure classes: a model download/load failure must
+        # surface as kind "model" so batch runners halt instead of retrying.
+        if type(exc).__name__ == "ModelDownloadError":
+            raise ModelLoadError(str(exc)) from exc
+        raise AnalysisCallError(exc, executions) from exc
+    result: dict[str, Any] = {"call": name, "executions": executions}
+    encoded = None if name in DISCARD_RESULT else _jsonable(value)
+    payload = json.dumps(encoded, ensure_ascii=True, allow_nan=False)
+    if len(payload) > LARGE_VALUE_BYTES:
+        # Big embeddings/face batches would exceed the protocol's line bound;
+        # hand them over through the task's staging directory instead.
+        value_file = context.staging_dir / "value.json"
+        value_file.write_text(payload, encoding="utf-8")
+        result["value_path"] = str(value_file)
+    else:
+        result["value"] = encoded
+    return result
+
+
+LARGE_VALUE_BYTES = 256 * 1024
+
+
+class AnalysisCallError(RuntimeError):
+    """An engine call failed; carries the provenance it reported before failing."""
+
+    def __init__(self, cause: BaseException, executions: list[Any]) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.executions = executions
 
 
 def _signature_parameters(function: Callable[..., Any]) -> dict[str, Any]:

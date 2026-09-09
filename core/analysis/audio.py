@@ -22,8 +22,7 @@ from typing import Generator, Optional
 from core.binary_resolver import find_binary, get_subprocess_kwargs
 
 import numpy as np
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 

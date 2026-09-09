@@ -17,13 +17,12 @@ from core.analysis_model_identity import (
     GAZE_YAW_THRESHOLD, GAZE_PITCH_THRESHOLD, MAX_YAW_ANGLE, MAX_PITCH_ANGLE,
     GAZE_DETECTOR_OPTIONS,
 )
+from core.runtime_families import isolated
 
 try:
     import mediapipe as mp
 except ImportError:
     mp = None  # type: ignore[assignment]
-
-from core.runtime_families import isolated  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +130,7 @@ def _get_model_path() -> str:
     return model_path
 
 
+@isolated("vision", "gaze.load", decode=lambda v: None)
 def load_face_mesh():
     """Lazy load MediaPipe FaceLandmarker model (thread-safe).
 
@@ -170,6 +170,7 @@ def load_face_mesh():
     return _model
 
 
+@isolated("vision", "gaze.unload", decode=lambda v: None)
 def unload_model():
     """Unload the MediaPipe FaceMesh model to free memory."""
     global _model

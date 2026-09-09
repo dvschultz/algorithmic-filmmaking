@@ -757,6 +757,11 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         settings.thumbnail_cache_dir = Path(cache_dir)
         _env_overridden.add("thumbnail_cache_dir")
 
+    # SCENE_RIPPER_MODEL_CACHE_DIR (the host hands its model cache to isolated workers)
+    if model_cache := os.environ.get("SCENE_RIPPER_MODEL_CACHE_DIR"):
+        settings.model_cache_dir = Path(model_cache).expanduser()
+        _env_overridden.add("model_cache_dir")
+
     # SCENE_RIPPER_DOWNLOAD_DIR
     if download_dir := os.environ.get(ENV_DOWNLOAD_DIR):
         settings.download_dir = Path(download_dir)
@@ -1181,6 +1186,9 @@ def load_settings(read_keyring: bool = True) -> Settings:
         Settings instance populated from available sources
     """
     settings = Settings()
+    # Isolated worker processes never read credentials: the host keeps them.
+    if os.environ.get("SCENE_RIPPER_WORKER_PROCESS") == "1":
+        read_keyring = False
 
     # 0. One-time migration from XDG to macOS-native paths (frozen app only)
     migrate_from_xdg_config()
@@ -1235,6 +1243,15 @@ def _sync_model_cache_env(model_cache_dir: Path) -> None:
         hub_module.HF_MODULES_CACHE = str(modules_cache_dir)
 
 
+def _invalidate_runtime_family_cache() -> None:
+    try:
+        from core.runtime_families import invalidate_family_cache
+
+        invalidate_family_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def save_settings(settings: Settings) -> bool:
     """Save settings to JSON file.
 
@@ -1247,6 +1264,7 @@ def save_settings(settings: Settings) -> bool:
     Returns:
         True if save succeeded
     """
+    _invalidate_runtime_family_cache()
     config_path = _get_config_path()
 
     try:

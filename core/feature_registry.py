@@ -72,7 +72,21 @@ def _scaled_progress_callback(
 
 
 def _validate_feature_runtime(name: str) -> None:
-    """Run narrow runtime import checks for fragile on-demand features."""
+    """Run narrow runtime import checks for fragile on-demand features.
+
+    A feature whose runtime family is isolated is validated by probing the
+    family's worker (never restarting it, cached per overlay set); the host
+    process itself never imports the native runtime.
+    """
+    from core.runtime_families import family_isolated
+    from core.runtime_profiles import profile_for_feature
+
+    profile = profile_for_feature(name)
+    if profile is not None and profile.probe_module and family_isolated(profile.family):
+        from core.runtime_profiles import probe_profile_runtime
+
+        probe_profile_runtime(profile.id, restart=False)
+        return
     if name == "describe_local":
         from core.analysis.description import ensure_local_description_runtime_available
 
@@ -106,18 +120,9 @@ def _validate_feature_runtime(name: str) -> None:
 
         ensure_face_detection_runtime_available()
     elif name == "transcribe":
-        from core.transcription import ensure_faster_whisper_runtime_available, native_worker_enabled
+        from core.transcription import ensure_faster_whisper_runtime_available
 
-        if native_worker_enabled():
-            # The worker owns the native runtime; importing py-version-specific
-            # wheels into this (possibly frozen) process would fail or corrupt it.
-            from core.runtime_profiles import probe_profile_runtime
-
-            # A readiness check reuses the warm worker (never restarts it) and
-            # is cached per overlay set, so hot GUI paths stay cheap.
-            probe_profile_runtime("transcription-whisper", restart=False)
-        else:
-            ensure_faster_whisper_runtime_available()
+        ensure_faster_whisper_runtime_available()  # isolated case handled above
     elif name == "transcribe_mlx":
         from core.transcription import ensure_mlx_whisper_runtime_available
 
@@ -302,6 +307,14 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["mediapipe"],
         size_estimate_mb=50,
         repair_packages=["mediapipe"],
+    ),
+    # Engine modules the isolated workers import (core.analysis.* pull numpy,
+    # Pillow and OpenCV at import time). Installed with every runtime profile
+    # so a worker never depends on a runtime package bringing them along.
+    "worker_engine": FeatureDeps(
+        binaries=[],
+        packages=["numpy", "pillow", "opencv-python-headless"],
+        size_estimate_mb=85,
     ),
     "embeddings": FeatureDeps(
         binaries=[],

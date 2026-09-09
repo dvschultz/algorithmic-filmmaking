@@ -64,6 +64,12 @@ def find_binary(name: str) -> Optional[str]:
     # On Windows, check both the bare name and with .exe suffix
     suffixes = [".exe", ""] if sys.platform == "win32" else [""]
 
+    # 0. An explicit hand-off from the host (isolated workers get the host's
+    #    resolved ffmpeg/ffprobe, bundled or managed, via the environment).
+    explicit = os.environ.get(f"SCENE_RIPPER_{name.upper().replace('-', '_')}")
+    if explicit and Path(explicit).is_file():
+        return str(Path(explicit))
+
     # 1. Check bundled runtime directories in frozen apps
     if is_frozen():
         base_path = get_base_path()

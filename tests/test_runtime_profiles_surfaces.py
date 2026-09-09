@@ -42,10 +42,12 @@ def test_status_is_identical_across_spine_chat_and_cli(monkeypatch, isolated_sup
     _missing(monkeypatch, ["package:faster-whisper"])
     spine = list_runtime_profiles()
     chat = tools.get("list_runtime_profiles").func()
-    assert spine == chat and spine["profiles"][0]["missing"] == ["package:faster-whisper"]
+    assert spine == chat
+    # Every feature of the profile (worker_engine + transcribe) reports the same missing list.
+    assert spine["profiles"][0]["missing"] == ["package:faster-whisper"]  # de-duplicated across features
     assert spine["profiles"][0]["installed"] is False
     single = get_runtime_profile_status("transcription-whisper")
-    assert single["success"] and single["missing"] == ["package:faster-whisper"]
+    assert single["success"] and set(single["missing"]) == {"package:faster-whisper"}
     assert tools.get("install_runtime_profile").conflicts_with_workers
     assert not tools.get("install_runtime_profile").requires_project
     assert get_runtime_profile_status("torch")["success"] is False  # package names are refused

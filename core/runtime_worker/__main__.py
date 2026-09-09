@@ -16,16 +16,36 @@ from pathlib import Path
 from typing import Any
 
 from .protocol import HOST_TYPES, PROTOCOL_VERSION, ProtocolError, decode, encode
-from .tasks import HANDLERS, TEST_HANDLERS, ModelLoadError, TaskCancelled, WorkerContext
+from .tasks import HANDLERS, TEST_HANDLERS, AnalysisCallError, ModelLoadError, TaskCancelled, WorkerContext
 
 _out_lock = threading.Lock()
+_protocol_out = None  # private handle to the original stdout; fd 1 itself is rerouted to stderr
+
+
+def _claim_protocol_stdout() -> None:
+    """Reserve the real stdout for protocol messages only.
+
+    Engine code and native libraries (progress bars, ``print`` in third-party
+    packages) write to file descriptor 1; once it points at stderr nothing
+    they emit can corrupt the newline-JSON stream the host is parsing.
+    """
+    global _protocol_out
+    if _protocol_out is not None:
+        return
+    _protocol_out = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
+    sys.stdout.flush()
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr  # Python-level prints follow the descriptor
 
 
 def _send(message: dict[str, Any]) -> None:
     data = encode(message)
     with _out_lock:
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        if _protocol_out is not None:
+            _protocol_out.write(data)
+        else:
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
 
 
 def _log(text: str) -> None:
@@ -62,6 +82,7 @@ def _reader(
 
 
 def main() -> int:
+    _claim_protocol_stdout()
     inbox: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
     cancel_flags: dict[str, threading.Event] = {}
     pending_cancels: set[str] = set()
@@ -79,7 +100,8 @@ def main() -> int:
         _send({"type": "error", "id": None, "error": "Staging directory does not exist", "kind": "protocol"})
         return 2
     handlers = dict(HANDLERS)
-    if hello.get("allow_test_tasks"):
+    allow_test_tasks = bool(hello.get("allow_test_tasks"))
+    if allow_test_tasks:
         handlers.update(TEST_HANDLERS)
     _send({
         "type": "ready", "protocol": PROTOCOL_VERSION, "pid": os.getpid(),
@@ -109,7 +131,7 @@ def main() -> int:
 
         task_staging = staging / task_id
         task_staging.mkdir(parents=True, exist_ok=True)
-        context = WorkerContext(task_staging, cancel, progress)
+        context = WorkerContext(task_staging, cancel, progress, allow_test_tasks=allow_test_tasks)
         try:
             result = handler(dict(message.get("args") or {}), context)
             if cancel.is_set():
@@ -124,6 +146,11 @@ def main() -> int:
             _send({"type": "error", "id": task_id, "error": f"{type(exc).__name__}: {exc}"[:2000], "kind": "dependency_missing"})
         except ModelLoadError as exc:
             _send({"type": "error", "id": task_id, "error": str(exc)[:2000], "kind": "model"})
+        except AnalysisCallError as exc:
+            _send({
+                "type": "error", "id": task_id, "error": str(exc)[:2000], "kind": "task",
+                "executions": exc.executions[:50],
+            })
         except MemoryError:
             _send({"type": "error", "id": task_id, "error": "Out of memory", "kind": "resource"})
         except BaseException as exc:  # noqa: BLE001 - report, keep the worker alive

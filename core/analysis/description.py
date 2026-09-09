@@ -30,8 +30,7 @@ from core.analysis_model_identity import (
     description_video_capable_model,
 )
 from core.settings import load_settings
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +351,7 @@ def describe_video_cloud(
         raise RuntimeError(_format_cloud_api_error(e, original_model, "video")) from e
 
 
+@isolated("vlm", "vlm.load", decode=lambda v: None)
 def _load_local_model(model_id: Optional[str] = None):
     """Load local VLM model (thread-safe).
 
@@ -525,12 +525,21 @@ def _load_moondream_fallback(model_id: Optional[str] = None):
 
 @isolated("vlm", "vlm.describe_local")
 def describe_frame_local(
-    image_path: Path, prompt: str = "Describe this image.", *, model_name: Optional[str] = None
+    image_path: Path, prompt: str = "Describe this image.", *, model_name: Optional[str] = None,
+    on_execution: Optional[Callable[[dict], None]] = None,
 ) -> str:
-    """Generate description using local VLM (Qwen3-VL or Moondream fallback)."""
-    model, processor = _load_local_model(model_name)
+    """Generate description using local VLM (Qwen3-VL or Moondream fallback).
 
-    if is_mlx_vlm_available():
+    ``on_execution`` receives the backend/model actually used, decided where
+    the inference runs (the worker when the vlm family is isolated).
+    """
+    model, processor = _load_local_model(model_name)
+    mlx = is_mlx_vlm_available()
+    if on_execution is not None:
+        from core.analysis_model_identity import local_description_runtime
+
+        on_execution({**local_description_runtime(model_name or "", mlx=mlx), "input_mode": "frame"})
+    if mlx:
         return _describe_with_mlx_vlm(model, processor, str(image_path), prompt)
     else:
         return _describe_with_moondream(model, processor, image_path, prompt)
@@ -821,6 +830,7 @@ def is_model_loaded(model_name: Optional[str] = None) -> bool:
     )
 
 
+@isolated("vlm", "vlm.unload", decode=lambda v: None)
 def unload_model():
     """Unload the local model to free memory."""
     global _LOCAL_MODEL, _LOCAL_PROCESSOR, _LOCAL_MODEL_KEY, _CPU_MODEL, _CPU_TOKENIZER

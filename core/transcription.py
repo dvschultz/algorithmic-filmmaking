@@ -474,11 +474,19 @@ def _build_word_timestamps(raw_words) -> Optional[list[WordTimestamp]]:
 
 # --- managed worker isolation (KTD8) ------------------------------------------
 
+def transcription_isolated() -> bool:
+    """Whether faster-whisper runs in the managed worker (isolation on and the family enabled)."""
+    from core.runtime_families import family_isolated
+
+    return family_isolated("transcription")
+
+
 def native_worker_enabled() -> bool:
-    """Whether faster-whisper runs in the managed worker instead of this process.
+    """Whether native worker isolation is switched on at all (any family).
 
     ``SCENE_RIPPER_NATIVE_WORKERS=0`` disables isolation (tests, diagnostics);
     ``1`` forces it. Otherwise the setting ``native_worker_isolation`` decides.
+    Per-family routing is ``core.runtime_families.family_isolated``.
     """
     override = os.environ.get("SCENE_RIPPER_NATIVE_WORKERS")
     if override in ("0", "1"):
@@ -568,7 +576,7 @@ def _transcribe_video_faster_whisper(
     cancel_event=None,
 ) -> list[TranscriptSegment]:
     """Transcribe using faster-whisper backend."""
-    if native_worker_enabled():
+    if transcription_isolated():
         results, _language = _transcribe_in_worker(
             video_path, model_name, language, progress_callback, extract_audio=True,
             cancel_event=cancel_event,
@@ -788,7 +796,7 @@ def transcribe_clip(
             )
 
         # faster-whisper backend
-        if native_worker_enabled():
+        if transcription_isolated():
             results, _language = _transcribe_in_worker(
                 tmp_path, model_name, language, extract_audio=False, cancel_event=cancel_event,
             )

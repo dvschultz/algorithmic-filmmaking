@@ -16,8 +16,12 @@ async def list_runtime_profiles(ctx: Context = None) -> str:
 
     Returns:
         JSON with ``profiles`` (each: ``profile`` id, ``family``, ``features``,
-        ``task_kinds``, ``installed``, ``missing``, ``overlays``, ``description``)
-        and ``native_worker_isolation``. Read-only.
+        ``task_kinds``, ``installed``, ``missing``, ``overlays``, ``description``,
+        ``staged_installs``, ``isolated``), ``families`` (``family``,
+        ``description``, ``isolated``), ``isolated_families`` and
+        ``native_worker_isolation``. Read-only; switch a family's inference into
+        its worker with the ``SCENE_RIPPER_NATIVE_WORKER_FAMILIES`` environment
+        variable or the ``scene_ripper runtime isolate`` CLI (settings.json).
     """
     from core.spine.runtime import list_runtime_profiles as _impl
 

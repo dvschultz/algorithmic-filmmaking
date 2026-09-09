@@ -147,6 +147,8 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.runtime",
     "core.jobs.runtime_install",
     "core.runtime_profiles",
+    "core.runtime_families",
+    "core.runtime_worker.calls",
     "cli.commands.runtime",
 )
 

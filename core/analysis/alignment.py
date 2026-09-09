@@ -37,12 +37,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Callable
 
 from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
+from core.runtime_families import isolated
 
 if TYPE_CHECKING:
     # Type-only import; the runtime import lives inside ``align_words``.
     from core.transcription import TranscriptSegment, WordTimestamp
-
-from core.runtime_families import isolated  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

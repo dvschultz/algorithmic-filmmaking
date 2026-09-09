@@ -26,8 +26,7 @@ from typing import Callable, Optional
 from core.settings import load_settings, get_gemini_api_key
 from core.analysis.description import extract_clip_segment, encode_image_base64, encode_video_base64
 from models.cinematography import CinematographyAnalysis
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 

@@ -4442,7 +4442,8 @@ SAFE_SETTINGS = {
 
 @tools.register(
     description="Update application settings (safe settings only, no API keys or paths). "
-                "Use get_settings first to see current values. "
+                "Use get_settings first to see current values. native_worker_families takes "
+                "comma-separated family ids (transcription, vision, ocr, vlm, audio, alignment). "
                 "Settings: default_sensitivity (1.0-10.0), export_quality ('low'/'medium'/'high'), "
                 "export_resolution ('original'/'1080p'/'720p'/'480p'), theme_preference ('system'/'light'/'dark'), "
                 "llm_provider ('local'/'openai'/'anthropic'/'gemini'/'openrouter'), llm_model, llm_temperature (0.0-2.0).",

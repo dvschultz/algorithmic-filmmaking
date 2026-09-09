@@ -11,8 +11,7 @@ import sys
 import threading
 from pathlib import Path
 from typing import Optional
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 
@@ -440,6 +439,7 @@ def is_model_loaded() -> bool:
     return _model is not None
 
 
+@isolated("vision", "objects.unload", decode=lambda v: None)
 def unload_model():
     """Unload all YOLO models to free memory."""
     global _model, _ov_model, _ov_model_classes

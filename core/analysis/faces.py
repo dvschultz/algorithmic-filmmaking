@@ -14,11 +14,10 @@ import colorsys
 import random
 
 import numpy as np
+from core.runtime_families import isolated
 
 if TYPE_CHECKING:
     from core.analysis.face_weights import FaceWeights
-
-from core.runtime_families import isolated  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +64,7 @@ def _get_model_cache_dir() -> Path:
         return default
 
 
+@isolated("vision", "faces.load", decode=lambda v: None)
 def _load_insightface():
     """Lazy load InsightFace model (thread-safe).
 
@@ -404,6 +404,7 @@ def is_model_loaded() -> bool:
     return _model is not None
 
 
+@isolated("vision", "faces.unload", decode=lambda v: None)
 def unload_model():
     """Unload the InsightFace model to free memory."""
     global _model

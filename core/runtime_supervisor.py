@@ -108,6 +108,7 @@ class WorkerLaunch:
         pythonpath.extend(str(p) for p in self.package_paths)
         env["PYTHONPATH"] = os.pathsep.join(pythonpath)
         env["SCENE_RIPPER_WORKER_PROCESS"] = "1"  # isolated() never re-forwards inside a worker
+        env.update(_host_context_env())
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         # Never inherit credentials into workers; providers run in the host.
@@ -119,6 +120,38 @@ class WorkerLaunch:
             ):
                 env.pop(key, None)
         return env
+
+
+def _host_context_env() -> dict[str, str]:
+    """Hand the host's resolved settings, caches and binaries to the worker.
+
+    A worker under the managed interpreter is not "frozen", so left alone it
+    would derive source-mode config/model-cache paths and miss the bundled
+    ffmpeg. Everything is passed explicitly and never includes credentials.
+    """
+    env: dict[str, str] = {}
+    try:
+        from core.settings import _get_config_path, load_settings
+
+        settings = load_settings(read_keyring=False)
+        env["SCENE_RIPPER_CONFIG"] = str(_get_config_path())
+        env["SCENE_RIPPER_CACHE_DIR"] = str(settings.cache_dir)
+        env["SCENE_RIPPER_MODEL_CACHE_DIR"] = str(settings.model_cache_dir)
+    except Exception:  # noqa: BLE001 - settings problems must not prevent a worker launch
+        pass
+    try:
+        from core.binary_resolver import find_binary
+
+        for name in ("ffmpeg", "ffprobe"):
+            path = find_binary(name)
+            if path:
+                env[f"SCENE_RIPPER_{name.upper()}"] = str(path)
+        directories = [str(Path(p).parent) for p in (env.get("SCENE_RIPPER_FFMPEG"), env.get("SCENE_RIPPER_FFPROBE")) if p]
+        if directories:
+            env["PATH"] = os.pathsep.join(dict.fromkeys(directories + os.environ.get("PATH", "").split(os.pathsep)))
+    except Exception:  # noqa: BLE001
+        pass
+    return env
 
 
 def worker_package_root() -> Path:
@@ -569,7 +602,9 @@ class ManagedWorker:
                 elif kind_ == "cancelled":
                     raise WorkerCancelled("Task cancelled")
                 elif kind_ == "error":
-                    raise WorkerTaskError(str(message.get("error")), str(message.get("kind", "task")))
+                    error = WorkerTaskError(str(message.get("error")), str(message.get("kind", "task")))
+                    error.executions = list(message.get("executions") or [])  # type: ignore[attr-defined]
+                    raise error
         except WorkerProtocolViolation:
             # A worker that breaks the protocol is not trusted with further tasks.
             process = self._process

@@ -15,8 +15,7 @@ from PIL import Image
 from core.analysis_model_identity import (
     SHOT_TYPES, SHOT_TYPE_PROMPTS, SIGLIP_NAME as _SIGLIP_MODEL_NAME, SIGLIP_REVISION,
 )
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +168,7 @@ def is_model_loaded() -> bool:
     return _model is not None
 
 
+@isolated("vision", "shots.unload", decode=lambda v: None)
 def unload_model():
     """Unload the classification model to free memory."""
     global _model, _processor

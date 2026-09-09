@@ -604,8 +604,9 @@ before the edit, so malformed transcript input cannot partially change a clip.
   Profiles are allowlisted ids (`transcription-whisper`, `vision-torch`,
   `ocr-paddle`, `vlm-local`, `audio-librosa`, `alignment-ctc`), never package
   names; `list_runtime_profiles` also reports the runtime `families` and which
-  are isolated (`update_settings("native_worker_families", [...])` switches a
-  family's inference into its worker).
+  are isolated. The MCP server has no settings tool: switch a family's inference
+  into its worker with `SCENE_RIPPER_NATIVE_WORKER_FAMILIES=transcription,audio`
+  in the server's environment or persist it with `scene_ripper runtime isolate audio`.
   An install stages the packages, health-checks them in a fresh worker and
   only then promotes them; cancelling the job or a failed health check keeps
   the previous runtime, and rollback removes the newest promoted overlay.

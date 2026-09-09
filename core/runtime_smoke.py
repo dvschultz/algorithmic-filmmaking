@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import wave
+from typing import Callable
 from pathlib import Path
 
 import cv2
@@ -689,9 +690,7 @@ def _run_native_worker_smoke() -> None:
     ``SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1`` to install it first, otherwise a
     missing profile is a reported failure so packaged evidence stays honest.
     """
-    import math
     import os
-    import wave
 
     from core.paths import get_managed_python_dir, is_frozen
     from core.runtime_profiles import install_profile, profile_status
@@ -729,14 +728,7 @@ def _run_native_worker_smoke() -> None:
                     + ", ".join(status["missing"]) + ". Set SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 to install."
                 )
         with tempfile.TemporaryDirectory(prefix="scene-ripper-native-worker-smoke-") as tmp:
-            wav = Path(tmp) / "tone.wav"
-            with wave.open(str(wav), "wb") as handle:
-                handle.setnchannels(1)
-                handle.setsampwidth(2)
-                handle.setframerate(16000)
-                for index in range(16000):
-                    value = int(8000 * math.sin(2 * math.pi * 220 * index / 16000))
-                    handle.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
+            wav = _write_tone_wav(Path(tmp) / "tone.wav", sample_rate=16000)
             import core.runtime_supervisor as supervisor_module
 
             previous_env = os.environ.get("SCENE_RIPPER_NATIVE_WORKERS")
@@ -763,7 +755,23 @@ def _run_native_worker_smoke() -> None:
 # profiles unsupported on this platform as "unsupported"; both are explicit
 # results, never silent passes. The target fails when any installed family
 # cannot import or run.
-_ANALYSIS_SMOKE_FAMILIES = ("audio", "ocr", "vision", "vlm", "alignment")
+def _analysis_smoke_families() -> frozenset[str]:
+    """Every runtime family except transcription, which the native-worker target proves."""
+    from core.runtime_families import FAMILIES
+
+    return frozenset(FAMILIES) - {"transcription"}
+
+
+def _write_tone_wav(path: Path, *, sample_rate: int = 22050, seconds: float = 1.0, frequency: float = 220.0) -> Path:
+    """A mono 16-bit sine tone; whisper smoke uses 16 kHz, librosa smoke 22.05 kHz."""
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        for index in range(int(sample_rate * seconds)):
+            value = int(8000 * math.sin(2 * math.pi * frequency * index / sample_rate))
+            handle.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
+    return path
 
 
 def _synthetic_frame(path: Path) -> Path:
@@ -788,15 +796,16 @@ def _run_native_analysis_smoke() -> None:
     only = {f.strip() for f in os.environ.get("SCENE_RIPPER_SMOKE_FAMILIES", "").split(",") if f.strip()}
     results: dict[str, str] = {}
     failures: list[str] = []
-    previous = os.environ.get("SCENE_RIPPER_NATIVE_WORKER_FAMILIES")
+    previous = {key: os.environ.get(key) for key in ("SCENE_RIPPER_NATIVE_WORKER_FAMILIES", "SCENE_RIPPER_NATIVE_WORKERS")}
     os.environ["SCENE_RIPPER_NATIVE_WORKER_FAMILIES"] = ",".join(FAMILIES)
     os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
+    smoke_families = _analysis_smoke_families()
     try:
         with tempfile.TemporaryDirectory(prefix="scene-ripper-native-analysis-") as tmp:
             work = Path(tmp)
             for profile_id, profile in PROFILES.items():
                 family = profile.family
-                if family not in _ANALYSIS_SMOKE_FAMILIES or (only and family not in only):
+                if family not in smoke_families or (only and family not in only):
                     continue
                 if profile.probe_module == "mlx_vlm" and not (platform.system() == "Darwin" and platform.machine() == "arm64"):
                     results[profile_id] = "unsupported"
@@ -816,10 +825,11 @@ def _run_native_analysis_smoke() -> None:
                     results[profile_id] = f"failed: {exc}"
                     failures.append(profile_id)
     finally:
-        if previous is None:
-            os.environ.pop("SCENE_RIPPER_NATIVE_WORKER_FAMILIES", None)
-        else:
-            os.environ["SCENE_RIPPER_NATIVE_WORKER_FAMILIES"] = previous
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         from core.runtime_supervisor import shutdown_default_supervisor
 
         shutdown_default_supervisor()
@@ -831,31 +841,45 @@ def _run_native_analysis_smoke() -> None:
         raise RuntimeError("No native analysis family ran; results: " + ", ".join(f"{k}={v}" for k, v in results.items()))
 
 
-def _run_family_call(family: str, work: Path) -> str:
-    """One cheap real call per family inside its worker (models stay small)."""
-    from core.runtime_families import run_isolated
+def _smoke_audio(work: Path) -> str:
+    # Through the public decorated entry point, exactly as the operations call it.
+    from core.analysis.audio import analyze_audio
 
-    if family == "audio":
-        wav = work / "tone.wav"
-        with wave.open(str(wav), "wb") as handle:
-            handle.setnchannels(1)
-            handle.setsampwidth(2)
-            handle.setframerate(22050)
-            for index in range(22050):
-                value = int(8000 * math.sin(2 * math.pi * 220 * index / 22050))
-                handle.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
-        value = run_isolated("audio", "audio.analyze", {"audio_path": str(wav), "include_onsets": False})
-        if not (0.9 < float(value["duration_seconds"]) < 1.1):
-            raise RuntimeError(f"audio analysis returned an unexpected duration: {value['duration_seconds']}")
-        return "analyze_audio"
-    if family == "ocr":
-        frame = _synthetic_frame(work / "frame.png")
-        value = run_isolated("ocr", "ocr.paddle", {"frame_path": str(frame)})
-        return f"paddle text={value[0][:20]!r}"
-    if family == "vision":
-        frame = _synthetic_frame(work / "frame.png")
-        value = run_isolated("vision", "objects.detect", {"image_path": str(frame), "confidence_threshold": 0.9})
-        if not isinstance(value, list):
-            raise RuntimeError("object detection returned no list")
-        return f"yolo detections={len(value)}"
-    return "probe only"
+    analysis = analyze_audio(_write_tone_wav(work / "tone.wav"), include_onsets=False)
+    if not (0.9 < analysis.duration_seconds < 1.1):
+        raise RuntimeError(f"audio analysis returned an unexpected duration: {analysis.duration_seconds}")
+    return "analyze_audio"
+
+
+def _smoke_ocr(work: Path) -> str:
+    from core.analysis.ocr import extract_text_from_frame
+
+    text, confidence, source = extract_text_from_frame(
+        _synthetic_frame(work / "frame.png"), use_vlm_fallback=False, raise_errors=True,
+    )
+    if source != "paddleocr":
+        raise RuntimeError(f"OCR did not come from the isolated PaddleOCR engine (source={source})")
+    return f"paddle text={text[:20]!r}"
+
+
+def _smoke_vision(work: Path) -> str:
+    from core.analysis.detection import detect_objects
+
+    detections = detect_objects(_synthetic_frame(work / "frame.png"), confidence_threshold=0.9)
+    if not isinstance(detections, list):
+        raise RuntimeError("object detection returned no list")
+    return f"yolo detections={len(detections)}"
+
+
+# Families without an entry are probed only (their models are too large to pull in CI).
+_FAMILY_SMOKE_CALLS: dict[str, Callable[[Path], str]] = {
+    "audio": _smoke_audio,
+    "ocr": _smoke_ocr,
+    "vision": _smoke_vision,
+}
+
+
+def _run_family_call(family: str, work: Path) -> str:
+    """One cheap real call per family through the public engine functions."""
+    call = _FAMILY_SMOKE_CALLS.get(family)
+    return call(work) if call is not None else "probe only"

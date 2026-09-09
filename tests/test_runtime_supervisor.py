@@ -133,9 +133,9 @@ def test_protocol_mismatch_is_refused(tmp_path, monkeypatch):
 def test_excessive_and_malformed_output_fail_the_task_without_a_result(supervisor):
     with pytest.raises(WorkerTaskError, match="exceeds"):
         supervisor.run("test", "big_output", {"size": 2_000_000})
-    with pytest.raises(WorkerProtocolViolation, match="Malformed"):
-        supervisor.run("test", "raw_stdout", {})
-    # The violating worker was retired; the family recovers.
+    # Stray prints (library progress bars, print() in engine code) are rerouted
+    # to stderr inside the worker, so they can no longer corrupt the protocol.
+    assert supervisor.run("test", "raw_stdout", {}) == {"ok": True}
     assert supervisor.run("test", "echo", {"value": "again"})["echo"] == "again"
 
 
@@ -183,7 +183,7 @@ def test_install_requests_cannot_name_packages_or_executables(monkeypatch):
         with pytest.raises(ValueError, match="Unknown runtime profile"):
             runtime_profiles.install_profile(bad)
     status = runtime_profiles.install_profile("transcription-whisper", staged=False)
-    assert status["success"] and calls == ["transcribe"]
+    assert status["success"] and calls == ["worker_engine", "transcribe"]
     assert runtime_profiles.profile_status("transcription-whisper")["task_kinds"] == ["transcribe"]
 
 
@@ -268,7 +268,7 @@ def test_failed_health_check_or_cancel_keeps_previous_runtime(monkeypatch, app_s
 
     monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v4.txt", succeed=False))
     failed = runtime_profiles.install_profile("transcription-whisper")
-    assert failed["failed_features"] == ["transcribe"] and not failed["success"]
+    assert failed["failed_features"] == ["worker_engine", "transcribe"] and not failed["success"]
     assert runtime_profiles.profile_overlays("transcription-whisper") == [previous]
 
 

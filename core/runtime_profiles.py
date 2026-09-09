@@ -40,7 +40,7 @@ PROFILES: dict[str, RuntimeProfile] = {
     "transcription-whisper": RuntimeProfile(
         id="transcription-whisper",
         family="transcription",
-        features=("transcribe",),
+        features=("worker_engine", "transcribe"),
         task_kinds=("transcribe",),
         description="faster-whisper transcription in an isolated worker",
         probe_module="faster_whisper",
@@ -48,7 +48,7 @@ PROFILES: dict[str, RuntimeProfile] = {
     "vision-torch": RuntimeProfile(
         id="vision-torch",
         family="vision",
-        features=("embeddings", "shot_classify", "object_detect", "image_classify", "face_detect", "gaze_detect"),
+        features=("worker_engine", "embeddings", "shot_classify", "object_detect", "image_classify", "face_detect", "gaze_detect"),
         task_kinds=("analysis",),
         description="torch/transformers embeddings and shots, YOLO objects, InsightFace faces, MediaPipe gaze",
         probe_module="torch",
@@ -56,7 +56,7 @@ PROFILES: dict[str, RuntimeProfile] = {
     "ocr-paddle": RuntimeProfile(
         id="ocr-paddle",
         family="ocr",
-        features=("ocr",),
+        features=("worker_engine", "ocr"),
         task_kinds=("analysis",),
         description="PaddleOCR text extraction in an isolated worker",
         probe_module="paddleocr",
@@ -64,7 +64,7 @@ PROFILES: dict[str, RuntimeProfile] = {
     "vlm-local": RuntimeProfile(
         id="vlm-local",
         family="vlm",
-        features=("describe_local",) if _apple_silicon() else ("describe_local_cpu",),
+        features=("worker_engine", "describe_local") if _apple_silicon() else ("worker_engine", "describe_local_cpu"),
         task_kinds=("analysis",),
         description="local vision-language model (mlx-vlm on Apple Silicon, transformers elsewhere)",
         probe_module="mlx_vlm" if _apple_silicon() else "transformers",
@@ -72,7 +72,7 @@ PROFILES: dict[str, RuntimeProfile] = {
     "audio-librosa": RuntimeProfile(
         id="audio-librosa",
         family="audio",
-        features=("audio_analysis", "stem_separation"),
+        features=("worker_engine", "audio_analysis", "stem_separation"),
         task_kinds=("analysis",),
         description="librosa audio analysis and Demucs stem separation",
         probe_module="librosa",
@@ -80,12 +80,20 @@ PROFILES: dict[str, RuntimeProfile] = {
     "alignment-ctc": RuntimeProfile(
         id="alignment-ctc",
         family="alignment",
-        features=("word_alignment",),
+        features=("worker_engine", "word_alignment"),
         task_kinds=("analysis",),
         description="CTC forced word alignment",
         probe_module="ctc_forced_aligner",
     ),
 }
+
+
+def profile_for_feature(feature: str) -> RuntimeProfile | None:
+    """The profile (and so the worker family) that owns a feature, if any."""
+    for profile in PROFILES.values():
+        if feature in profile.features and feature != "worker_engine":
+            return profile
+    return None
 
 
 def profile_can_stage(profile: RuntimeProfile) -> bool:
@@ -123,7 +131,7 @@ def profile_status(profile_id: str) -> dict[str, Any]:
     for feature in profile.features:
         available, feature_missing = check_feature(feature)
         if not available:
-            missing.extend(feature_missing)
+            missing.extend(item for item in feature_missing if item not in missing)
     return {
         "profile": profile.id, "family": profile.family, "features": list(profile.features),
         "task_kinds": list(profile.task_kinds), "installed": not missing, "missing": missing,
@@ -145,6 +153,7 @@ STALE_STAGE_SECONDS = 6 * 3600
 _profile_locks: dict[str, threading.Lock] = {}
 _profile_locks_guard = threading.Lock()
 _probe_cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+_probe_cache_lock = threading.Lock()
 
 
 def _profile_lock(profile_id: str) -> threading.Lock:
@@ -223,13 +232,15 @@ def install_profile(
 
     profile = get_profile(profile_id)
     with _profile_lock(profile.id):
-        _probe_cache.pop((profile.id, _overlay_key(profile.id)), None)
+        with _probe_cache_lock:
+            _probe_cache.pop((profile.id, _overlay_key(profile.id)), None)
         if staged and not profile_can_stage(profile):
             staged = False  # site-packages installs cannot be staged; still probed in a worker below
         if not staged:
             _retire_family_worker(profile.family)
             failed = [feature for feature in profile.features if not install_for_feature(feature, progress_callback)]
-            _probe_cache.clear()
+            with _probe_cache_lock:
+                _probe_cache.clear()
             _retire_family_worker(profile.family)
             status = profile_status(profile_id)
             status["failed_features"] = failed
@@ -243,7 +254,8 @@ def install_profile(
                     status["error"] = f"Health check failed after install: {exc}"
             return status
         outcome = _staged_install(profile, progress_callback, cancel_event)
-        _probe_cache.clear()
+        with _probe_cache_lock:
+            _probe_cache.clear()
         if outcome["success"]:
             # Retire the warm worker so the next task sees the promoted overlay
             # (waits for a running task under the family lock) and let an
@@ -362,7 +374,8 @@ def rollback_profile(profile_id: str) -> dict[str, Any]:
                 "error": f"Could not remove overlay {newest.name}; close other Scene Ripper processes and retry: {exc}",
             }
         shutil.rmtree(trash, ignore_errors=True)
-        _probe_cache.clear()
+        with _probe_cache_lock:
+            _probe_cache.clear()
         result: dict[str, Any] = {"success": True, "profile": profile.id, "removed": str(newest)}
         if trash.exists():
             result["warning"] = f"Overlay {newest.name} was retired but some files could not be deleted"
@@ -401,8 +414,11 @@ def probe_profile_runtime(
     if not profile.probe_module:
         return {"ok": True, "profile": profile.id, "probed": False}
     cache_key = (profile.id, _overlay_key(profile.id))
-    if not staged_paths and not restart and cache_key in _probe_cache:
-        return dict(_probe_cache[cache_key])
+    if not staged_paths and not restart:
+        with _probe_cache_lock:
+            cached = _probe_cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
     try:
         if staged_paths:
             launch = default_launch(profile.family, ensure_interpreter=True, staged_paths=staged_paths)
@@ -428,5 +444,6 @@ def probe_profile_runtime(
     result["profile"] = profile.id
     result["probed"] = True
     if not staged_paths:
-        _probe_cache[cache_key] = dict(result)
+        with _probe_cache_lock:
+            _probe_cache[cache_key] = dict(result)
     return result

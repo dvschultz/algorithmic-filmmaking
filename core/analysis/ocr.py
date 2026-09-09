@@ -13,8 +13,7 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Optional, Callable
-
-from core.runtime_families import isolated  # noqa: E402
+from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +46,10 @@ def _check_paddleocr() -> bool:
         True if PaddleOCR is available, False otherwise.
     """
     global _paddleocr_available
+    from core.runtime_families import family_isolated
+
+    if family_isolated("ocr"):
+        return True  # the ocr worker owns the runtime; it reports a missing install itself
     if _paddleocr_available is not None:
         return _paddleocr_available
 
@@ -72,13 +75,21 @@ def _construct_paddle_engine(PaddleOCR):
     except (TypeError, ValueError):
         parameters = {}
     if "show_log" in parameters or not parameters:
-        return PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
-    # PaddleOCR 3.x: the document-orientation/unwarping stages are not needed
-    # for video frames and only add model downloads.
-    return PaddleOCR(
-        lang="en", use_textline_orientation=True,
-        use_doc_orientation_classify=False, use_doc_unwarping=False,
-    )
+        engine = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+        is_v3 = False
+    else:
+        # PaddleOCR 3.x: the document-orientation/unwarping stages are not needed
+        # for video frames and only add model downloads.
+        engine = PaddleOCR(
+            lang="en", use_textline_orientation=True,
+            use_doc_orientation_classify=False, use_doc_unwarping=False,
+        )
+        is_v3 = True
+    try:
+        engine._scene_ripper_v3 = is_v3  # decided once, at construction, per engine instance
+    except AttributeError:
+        pass
+    return engine
 
 
 def _paddle_lines(result) -> list[tuple[str, float]]:
@@ -156,7 +167,7 @@ def paddle_extract_text(frame_path: Path, *, cancel_event: Optional[threading.Ev
     ocr = _get_ocr_engine()
     if cancel_event is not None and cancel_event.is_set():
         return "", 0.0
-    if hasattr(ocr, "predict") and not hasattr(ocr, "use_angle_cls"):
+    if getattr(ocr, "_scene_ripper_v3", False) is True:
         result = ocr.predict(str(frame_path))  # PaddleOCR 3.x
     else:
         result = ocr.ocr(str(frame_path), cls=True)  # PaddleOCR 2.x

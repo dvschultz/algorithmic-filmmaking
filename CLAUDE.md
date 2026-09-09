@@ -26,9 +26,9 @@ pyproject.toml                   # Metadata, CLI + MCP entry points
 ui/                  (23 files)  # Main window, chat, player, browser, theme, algorithm_config
   models/            (3 files)   # Shared clip/frame item models owned by ProjectSignalAdapter (docs/architecture/library-models.md)
   tabs/              (6 wired)   # collect, cut, analyze, frames, sequence, render (generate_tab.py exists but is unmounted stub)
-  dialogs/           (21 files)  # Algorithm-specific config dialogs, recipe inspect/regenerate
+  dialogs/           (22 files)  # Algorithm-specific config dialogs, recipe inspect/regenerate
   workers/           (74 files)  # QThread workers (base.py = CancellableWorker + is_transient_provider_error)
-  widgets/           (24 files)  # Cards, grids, timeline preview, A/B sequence comparison, empty states
+  widgets/           (25 files)  # Cards, grids, timeline preview, A/B sequence comparison, empty states
   timeline/          (8 files)   # Timeline widget, tracks, clips, playhead
   session_history.py            # Qt actions projecting shared project history
 core/                (71 files)  # Business logic, FFmpeg, settings, project, LLM, runtime_supervisor (managed workers), runtime_families (isolation seam)
@@ -43,7 +43,7 @@ scene_ripper_mcp/                # MCP server for external agent access
   schemas/                       #   Pydantic input schemas for MCP tools
   jobs/                          #   SQLite-backed jobs framework (store, runtime, per-project mutex)
   security.py, auth_snapshot.py  #   Auth/permission gating for headless callers
-tests/              (404 files)  # ~6100 tests
+tests/              (405 files)  # ~6300 tests
 docs/user-guide/                 # End-user documentation
 docs/solutions/                  # Documented solutions (bugs, best practices), YAML frontmatter (module, tags, problem_type)
 ```
@@ -139,7 +139,7 @@ See `.claude/rules/ui-consistency.md` (loads automatically when editing ui/ file
 
 ## Testing
 
-404 test files, ~6100 tests in `tests/`. Plus a separate MCP suite under `scene_ripper_mcp/tests/`. Run: `pytest tests/`, `pytest scene_ripper_mcp/tests/`, or `pytest tests/test_specific.py -v`.
+405 test files, ~6300 tests in `tests/`. Plus a separate MCP suite under `scene_ripper_mcp/tests/`. Run: `pytest tests/`, `pytest scene_ripper_mcp/tests/`, or `pytest tests/test_specific.py -v`.
 
 ### Bug Fixes: Prove It Pattern
 
