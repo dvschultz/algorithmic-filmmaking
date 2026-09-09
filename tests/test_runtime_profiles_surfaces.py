@@ -73,9 +73,10 @@ def test_probe_status_reports_a_broken_runtime_without_importing_it(monkeypatch,
         runtime_profiles, "probe_profile_runtime",
         lambda profile, staged_paths=(): (_ for _ in ()).throw(RuntimeError("worker: no StorageView")),
     )
+    modules_before = set(sys.modules)
     status = get_runtime_profile_status("transcription-whisper", probe=True)
     assert status["installed"] is False and "StorageView" in status["health_error"]
-    assert "faster_whisper" not in sys.modules or True  # the probe ran in the (fake) worker, not here
+    assert not {m for m in set(sys.modules) - modules_before if m.split(".")[0] in ("faster_whisper", "ctranslate2")}
 
 
 @pytest.mark.asyncio
@@ -91,7 +92,10 @@ async def test_mcp_install_job_is_durable_and_cancellable(monkeypatch, isolated_
     ctx = AsyncMock()
     ctx.request_context = SimpleNamespace(lifespan_context={"job_store": store, "job_runtime": job_runtime})
     _missing(monkeypatch, [])
-    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, staged_paths=(): {"ok": True})
+    monkeypatch.setattr(
+        runtime_profiles, "probe_profile_runtime",
+        lambda profile, staged_paths=(), **kw: {"ok": True, "file": str((staged_paths or (isolated_support / "packages",))[0] / "faster_whisper" / "__init__.py")},
+    )
 
     def quick_stage(name, target_dir, progress_callback=None, cancel_event=None):
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -119,13 +123,23 @@ async def test_mcp_install_job_is_durable_and_cancellable(monkeypatch, isolated_
             return not (cancel_event is not None and cancel_event.is_set())
 
         monkeypatch.setattr("core.feature_registry.stage_feature_packages", slow_stage)
+        entered = threading.Event()
+
+        def slow_stage_signalling(name, target_dir, progress_callback=None, cancel_event=None):
+            entered.set()
+            return slow_stage(name, target_dir, progress_callback, cancel_event)
+
+        monkeypatch.setattr("core.feature_registry.stage_feature_packages", slow_stage_signalling)
         second = json.loads(await runtime_tools.start_install_runtime_profile("transcription-whisper", ctx=ctx))
         assert second["success"]
-        time.sleep(0.1)
+        assert entered.wait(5)  # the job is inside the staged install now
         cancelled = json.loads(await cancel_job(second["task_id"], ctx=ctx))
         assert cancelled.get("ok") or cancelled.get("success")
         gate.set()
-        _wait(store, second["task_id"], {STATUS_CANCELLED, STATUS_COMPLETED})
+        final = _wait(store, second["task_id"], {STATUS_CANCELLED, STATUS_COMPLETED})
+        assert final == STATUS_CANCELLED or json.loads(
+            await get_job_result(second["task_id"], ctx=ctx)
+        )["result"].get("cancelled")
         assert runtime_profiles.profile_overlays("transcription-whisper") == [first_overlay]
         assert not any((isolated_support / "packages-staging").iterdir())
         listed = json.loads(await runtime_tools.list_runtime_profiles(ctx=ctx))
@@ -152,7 +166,7 @@ def test_ui_install_prompt_uses_the_staged_profile_path_when_isolated(monkeypatc
 
     calls = []
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
-    monkeypatch.setattr("core.spine.runtime.install_runtime_profile", lambda profile, progress_callback=None: calls.append(("profile", profile)) or {"success": True})
+    monkeypatch.setattr("core.spine.runtime.install_runtime_profile", lambda profile, progress_callback=None, cancel_event=None: calls.append(("profile", profile)) or {"success": True})
     legacy = lambda name, cb: calls.append(("legacy", name)) or True  # noqa: E731
     assert dependency_widgets._install_feature("transcribe", None, legacy)
     assert dependency_widgets._install_feature("ocr", None, legacy)  # no profile yet: in-place path
@@ -160,3 +174,7 @@ def test_ui_install_prompt_uses_the_staged_profile_path_when_isolated(monkeypatc
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "0")
     assert dependency_widgets._install_feature("transcribe", None, legacy)
     assert calls[-1] == ("legacy", "transcribe")
+    monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
+    monkeypatch.setattr("core.spine.runtime.install_runtime_profile", lambda profile, **kw: {"success": False, "error": "Health check failed; previous runtime kept"})
+    with pytest.raises(RuntimeError, match="previous runtime kept"):
+        dependency_widgets._install_feature("transcribe", None, legacy)  # the dialog shows the real reason

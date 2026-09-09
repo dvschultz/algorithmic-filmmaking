@@ -33,7 +33,7 @@ def _requirements(name: str) -> dict[str, str]:
 
 
 def _name(spec: str) -> str:
-    return re.split(r"[\[<>=!;~ ]", spec, 1)[0].strip().lower().replace("_", "-")
+    return re.split(r"[\[<>=!;~ ]", spec, maxsplit=1)[0].strip().lower().replace("_", "-")
 
 
 def _extras() -> dict[str, dict[str, str]]:

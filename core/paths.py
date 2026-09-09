@@ -39,7 +39,7 @@ def get_app_support_dir() -> Path:
     """
     override = os.environ.get("SCENE_RIPPER_APP_SUPPORT_DIR", "").strip()
     if override:
-        return Path(override).expanduser()
+        return Path(override).expanduser().resolve()  # workers get absolute PYTHONPATH entries
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Scene Ripper"
     if sys.platform == "win32":

@@ -1,6 +1,7 @@
 """Widgets for dependency management: banners, download dialogs, progress."""
 
 import logging
+import threading
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -138,14 +139,19 @@ class _DownloadWorker(QThread):
         self._install_func = install_func
         self._progress_adapter = progress_callback_adapter
         self._cancelled = False
+        self.cancel_event = threading.Event()  # reaches pip/worker installs that accept it
 
     def cancel(self):
         """Request cooperative cancellation."""
         self._cancelled = True
+        self.cancel_event.set()
 
     def run(self):
         try:
-            result = self._install_func(self._progress_adapter)
+            try:
+                result = self._install_func(self._progress_adapter, self.cancel_event)
+            except TypeError:
+                result = self._install_func(self._progress_adapter)  # legacy single-argument installers
             if not self._cancelled:
                 if result is False:
                     self.failed.emit("Install completed but dependency verification failed.")
@@ -298,13 +304,14 @@ def _is_compiler_available() -> bool:
     return True
 
 
-def _install_feature(feature_name: str, progress_callback, install_for_feature) -> bool:
+def _install_feature(feature_name: str, progress_callback, install_for_feature, cancel_event=None) -> bool:
     """Install a feature the same way chat/MCP/CLI do.
 
     Features that belong to an isolated runtime profile go through the staged
     profile install (health-checked in a worker, previous runtime kept on
-    failure) when native worker isolation is on; everything else still uses
-    the in-place installer.
+    failure, cancel honored) when native worker isolation is on; everything
+    else still uses the in-place installer. Failures raise so the dialog
+    shows the real reason.
     """
     from core.runtime_profiles import PROFILES
     from core.transcription import native_worker_enabled
@@ -313,7 +320,10 @@ def _install_feature(feature_name: str, progress_callback, install_for_feature) 
     if profile is not None and native_worker_enabled():
         from core.spine.runtime import install_runtime_profile
 
-        return bool(install_runtime_profile(profile.id, progress_callback=progress_callback).get("success"))
+        result = install_runtime_profile(profile.id, progress_callback=progress_callback, cancel_event=cancel_event)
+        if not result.get("success"):
+            raise RuntimeError(str(result.get("error") or "Runtime profile install failed"))
+        return True
     return install_for_feature(feature_name, progress_callback)
 
 
@@ -382,7 +392,7 @@ def prompt_feature_download(
     dialog = DependencyDownloadDialog(
         title="Installing dependencies",
         message=f"Downloading {missing_str} (~{size_mb} MB)...",
-        install_func=lambda cb: _install_feature(feature_name, cb, install_for_feature),
+        install_func=lambda cb, ev=None: _install_feature(feature_name, cb, install_for_feature, cancel_event=ev),
         parent=parent_widget,
     )
 

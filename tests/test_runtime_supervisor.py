@@ -198,6 +198,12 @@ def app_support(monkeypatch, tmp_path):
     return root
 
 
+def _staged_ok(profile, staged_paths=()):
+    """A health check that imported the runtime from the staged directory (or the live one)."""
+    root = staged_paths[0] if staged_paths else Path("/live")
+    return {"ok": True, "file": str(root / "faster_whisper" / "__init__.py")}
+
+
 def _fake_stage(marker: str, *, succeed: bool = True):
     def stage(name, target_dir, progress_callback=None, cancel_event=None):
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -215,7 +221,9 @@ def test_staged_install_promotes_after_health_check_and_never_imports_in_host(mo
     monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("new.txt"))
     monkeypatch.setattr(
         runtime_profiles, "probe_profile_runtime",
-        lambda profile, staged_paths=(): probes.append(tuple(staged_paths)) or {"ok": True, "python": "managed"},
+        lambda profile, staged_paths=(): probes.append(tuple(staged_paths)) or {
+            "ok": True, "python": "managed", "file": str(staged_paths[0] / "faster_whisper" / "__init__.py"),
+        },
     )
     path_before, modules_before = list(sys.path), set(sys.modules)
     result = runtime_profiles.install_profile("transcription-whisper")
@@ -225,7 +233,9 @@ def test_staged_install_promotes_after_health_check_and_never_imports_in_host(mo
     assert (promoted / "new.txt").read_text() == "transcribe"
     assert probes and probes[0][0].parent == app_support / "packages-staging"  # probed before promotion
     assert not (app_support / "packages-staging" / promoted.name).exists()
-    assert sys.path == path_before and "faster_whisper" not in (set(sys.modules) - modules_before)
+    # The host may learn the new search path (isolation-off callers) but never imports the runtime.
+    assert all(Path(entry).is_relative_to(app_support) for entry in sys.path if entry not in path_before)
+    assert "faster_whisper" not in (set(sys.modules) - modules_before)
     assert runtime_profiles.profile_overlays("transcription-whisper") == [promoted]
 
 
@@ -235,7 +245,7 @@ def test_failed_health_check_or_cancel_keeps_previous_runtime(monkeypatch, app_s
     from core import runtime_profiles
 
     monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v1.txt"))
-    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, staged_paths=(): {"ok": True})
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", _staged_ok)
     first = runtime_profiles.install_profile("transcription-whisper")
     previous = Path(first["promoted_dir"])
 
@@ -265,7 +275,7 @@ def test_failed_health_check_or_cancel_keeps_previous_runtime(monkeypatch, app_s
 def test_rollback_removes_only_the_newest_overlay(monkeypatch, app_support):
     from core import runtime_profiles
 
-    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, staged_paths=(): {"ok": True})
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", _staged_ok)
     overlays = []
     for marker in ("v1.txt", "v2.txt"):
         monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage(marker))
@@ -534,13 +544,13 @@ def test_transcribe_runtime_validation_probes_the_worker_when_isolated(monkeypat
 
     probed = []
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
-    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile: probed.append(profile) or {"ok": True})
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, **kw: probed.append((profile, kw.get("restart"))) or {"ok": True})
     monkeypatch.setattr(
         "core.transcription.ensure_faster_whisper_runtime_available",
         lambda: (_ for _ in ()).throw(AssertionError("host must not import faster_whisper")),
     )
     feature_registry._validate_feature_runtime("transcribe")
-    assert probed == ["transcription-whisper"]
+    assert probed == [("transcription-whisper", False)]  # readiness checks never restart the worker
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "0")
     called = []
     monkeypatch.setattr("core.transcription.ensure_faster_whisper_runtime_available", lambda: called.append(True))
@@ -567,3 +577,82 @@ def test_probe_profile_runtime_maps_worker_failures_to_runtime_errors(monkeypatc
         assert runtime_profiles.probe_profile_runtime("plain") == {"ok": True, "profile": "plain", "probed": False}
     finally:
         sup.shutdown()
+
+
+def test_staged_install_refuses_a_runtime_imported_from_outside_the_stage(monkeypatch, app_support):
+    from core import runtime_profiles
+
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("new.txt"))
+    monkeypatch.setattr(
+        runtime_profiles, "probe_profile_runtime",
+        lambda profile, staged_paths=(): {"ok": True, "file": str(app_support / "packages" / "faster_whisper" / "__init__.py")},
+    )
+    result = runtime_profiles.install_profile("transcription-whisper")
+    assert not result["success"] and "outside the staged directory" in result["error"]
+    assert runtime_profiles.profile_overlays("transcription-whisper") == []
+    assert not any((app_support / "packages-staging").iterdir())
+
+    monkeypatch.setattr(
+        runtime_profiles, "probe_profile_runtime",
+        lambda profile, staged_paths=(): {"ok": True, "file": str(staged_paths[0] / "faster_whisper" / "__init__.py")},
+    )
+    assert runtime_profiles.install_profile("transcription-whisper")["success"]
+
+
+def test_cancel_after_staging_never_promotes(monkeypatch, app_support):
+    from threading import Event
+
+    from core import runtime_profiles
+
+    cancel = Event()
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("late.txt"))
+
+    def probe_then_cancel(profile, staged_paths=()):
+        cancel.set()  # the user cancels while the health check is running
+        return {"ok": True, "file": str(staged_paths[0] / "late.txt")}
+
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", probe_then_cancel)
+    result = runtime_profiles.install_profile("transcription-whisper", cancel_event=cancel)
+    assert result["cancelled"] and not result["success"]
+    assert runtime_profiles.profile_overlays("transcription-whisper") == []
+
+
+def test_rollback_reports_failure_when_the_overlay_cannot_be_moved(monkeypatch, app_support):
+    from core import runtime_profiles
+
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v1.txt"))
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, staged_paths=(): {"ok": True, "file": str(staged_paths[0] / "v1.txt") if staged_paths else ""})
+    overlay = Path(runtime_profiles.install_profile("transcription-whisper")["promoted_dir"])
+    monkeypatch.setattr(runtime_profiles.os, "replace", lambda src, dst: (_ for _ in ()).throw(OSError("busy")))
+    failed = runtime_profiles.rollback_profile("transcription-whisper")
+    assert failed["success"] is False and "Could not remove overlay" in failed["error"]
+    assert overlay.is_dir()  # nothing half-deleted
+
+
+def test_readiness_probe_reuses_the_warm_worker_and_caches(monkeypatch, tmp_path):
+    from core import runtime_profiles, runtime_supervisor
+
+    sup = RuntimeSupervisor(staging_root=tmp_path / "staging")
+    sup.launch_factory = lambda family: _launch()
+    monkeypatch.setattr(runtime_supervisor, "_default", sup)
+    monkeypatch.setattr(runtime_supervisor, "default_supervisor", lambda: sup)
+    monkeypatch.setattr("core.paths.get_app_support_dir", lambda: tmp_path / "support")
+    runtime_profiles._probe_cache.clear()
+    plain = runtime_profiles.RuntimeProfile(id="plain", family="test", features=(), task_kinds=(), description="", probe_module="faster_whisper")
+    monkeypatch.setitem(runtime_profiles.PROFILES, "plain", plain)
+    try:
+        first = sup.worker("test")
+        runs = []
+        real_run = sup.run
+        monkeypatch.setattr(sup, "run", lambda *a, **k: runs.append(a) or real_run(*a, **k))
+        try:
+            runtime_profiles.probe_profile_runtime("plain", restart=False)
+        except RuntimeError:
+            pass  # faster_whisper may be absent here; the routing is what matters
+        else:
+            runtime_profiles.probe_profile_runtime("plain", restart=False)
+            assert len(runs) == 1  # second readiness check served from the cache
+        assert sup.worker("test") is first  # never restarted by a readiness check
+    finally:
+        sup.shutdown()
+        runtime_profiles._probe_cache.clear()

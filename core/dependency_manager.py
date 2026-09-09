@@ -1160,6 +1160,21 @@ def install_packages(
             logger.error("pip install failed to start: %s", exc)
             return False, str(exc)
 
+        # pip can stay silent for minutes (large downloads, wheel builds); a
+        # watcher thread kills it on cancel instead of waiting for output.
+        watcher_stop = threading.Event()
+
+        def _cancel_watcher() -> None:
+            while not watcher_stop.wait(0.5):
+                if cancel_event is not None and cancel_event.is_set():
+                    process.kill()
+                    return
+                if process.poll() is not None:
+                    return
+
+        watcher = threading.Thread(target=_cancel_watcher, name="pip-cancel-watcher", daemon=True)
+        if cancel_event is not None:
+            watcher.start()
         try:
             assert process.stdout is not None
             for raw_line in process.stdout:
@@ -1175,12 +1190,16 @@ def install_packages(
                     progress, message = parsed
                     _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
             returncode = process.wait(timeout=600)
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("pip install cancelled for %s", install_label)
+                return False, "pip install cancelled"
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=30)
             logger.error("pip install timed out for %s", install_label)
             return False, "pip install timed out"
         finally:
+            watcher_stop.set()
             if process.stdout is not None:
                 process.stdout.close()
 

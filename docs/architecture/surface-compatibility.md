@@ -55,7 +55,7 @@ the later analysis/recipe registry migration.
 
 ## Sequencer inventory
 
-`ui/algorithm_config.py` contains 23 choices. `core/remix.generate_sequence`
+`ui/algorithm_config.py` contains 23 choices. `core.remix.run_registry_algorithm`
 dispatches the ordinary sorting algorithms; dialogs own additional inputs and
 workflow steps. GUI chat's `generate_remix` coordinates the GUI workflow.
 The CLI exports existing sequences; it does not expose the full GUI recipe

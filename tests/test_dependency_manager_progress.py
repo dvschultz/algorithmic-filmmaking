@@ -520,3 +520,73 @@ def test_reset_imported_package_roots_survives_namespace_paths_of_evicted_parent
     finally:
         for name, module in original.items():
             _restore_sys_module(name, module)
+
+
+def test_install_packages_target_dir_stages_without_touching_the_live_roots(monkeypatch, tmp_path):
+    """A staged install pip-installs into target_dir only: no sys.path edits, no compat marker."""
+    from core.dependency_manager import install_packages
+
+    captured: list[str] = []
+    marker_calls = []
+
+    def _fake_popen(cmd, **kwargs):
+        captured.extend(cmd)
+        return _FakePopen(["Collecting faster-whisper", "Successfully installed faster-whisper-1.1.0"])
+
+    monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
+    monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: marker_calls.append(True))
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: tmp_path / "packages")
+    monkeypatch.setattr("core.dependency_manager._ensure_managed_packages_importable", lambda: (_ for _ in ()).throw(AssertionError("staged installs must not touch sys.path")))
+    staged = tmp_path / "staging" / "overlay-1-transcription-whisper"
+    path_before = list(sys.path)
+    assert install_packages(["faster-whisper>=1.0.0,<2"], target_dir=staged) is True
+    assert captured[captured.index("--target") + 1] == str(staged) and staged.is_dir()
+    assert marker_calls == [] and sys.path == path_before
+
+
+def test_install_packages_cancel_kills_a_silent_pip(monkeypatch, tmp_path):
+    """pip that emits nothing must still die when the cancel event is set."""
+    import threading
+    import time
+
+    from core.dependency_manager import install_packages
+
+    class _SilentPopen:
+        def __init__(self, *args, **kwargs):
+            self.killed = threading.Event()
+            self.returncode = None
+            self.stdout = _BlockingStdout(self.killed)
+
+        def poll(self):
+            return 1 if self.killed.is_set() else None
+
+        def wait(self, timeout=None):
+            return 1
+
+        def kill(self):
+            self.killed.set()
+
+    class _BlockingStdout:
+        """Yields no lines until the process is killed (a silent pip)."""
+
+        def __init__(self, killed):
+            self._killed = killed
+
+        def __iter__(self):
+            self._killed.wait(10)
+            return iter([])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
+    monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _SilentPopen)
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: tmp_path / "packages")
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    started = time.monotonic()
+    assert install_packages(["faster-whisper>=1.0.0,<2"], target_dir=tmp_path / "stage", cancel_event=cancel) is False
+    assert time.monotonic() - started < 5.0  # the watcher killed pip; we did not wait for output

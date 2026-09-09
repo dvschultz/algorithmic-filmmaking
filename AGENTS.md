@@ -81,6 +81,7 @@ Pytest is configured in `pyproject.toml` with `tests/` as the default path and `
 For bug fixes, follow a prove-it loop: add a failing test, fix the bug, and confirm the test passes. Prioritize coverage around project save/load, CLI flows, tab synchronization, sequencing logic, analysis pipelines, dependency gating, and updater/runtime safety.
 
 - For optional dependency or feature-gating changes, update tests around `core/analysis_dependencies.py`, `core/dependency_manager.py`, `core/feature_registry.py`, or the affected UI availability paths.
+- Runtime-install tests (`install_profile`, `install_packages`, `stage_feature_packages`, `probe_profile_runtime`) must set `SCENE_RIPPER_APP_SUPPORT_DIR` to a `tmp_path` and patch the pip/worker steps; without that they pip-install into the real `~/Library/Application Support/Scene Ripper` (and download ffmpeg there). Keep `SCENE_RIPPER_NATIVE_WORKERS=0` (the conftest default) unless a test specifically exercises the isolated worker.
 - For packaging changes, update `tests/test_build_support.py` and add or adjust import-time safety coverage.
 - For frozen startup or updater changes, preserve and update `tests/test_runtime_smoke.py`, `tests/test_update_service.py`, `tests/test_macos_updater.py`, and `tests/test_windows_updater.py` as applicable.
 - For platform-specific path or binary-resolution changes, update the corresponding Linux and Windows compatibility tests.

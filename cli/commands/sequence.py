@@ -31,7 +31,9 @@ def sequence() -> None:
 
 
 def _json(ctx: click.Context) -> bool:
-    return bool((ctx.obj or {}).get("json", False))
+    from cli.utils.output import json_flag
+
+    return json_flag(ctx)
 
 
 def _parse_parameters(raw: Optional[str]) -> Optional[dict[str, Any]]:

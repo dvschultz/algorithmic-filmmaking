@@ -113,7 +113,9 @@ def _validate_feature_runtime(name: str) -> None:
             # wheels into this (possibly frozen) process would fail or corrupt it.
             from core.runtime_profiles import probe_profile_runtime
 
-            probe_profile_runtime("transcription-whisper")
+            # A readiness check reuses the warm worker (never restarts it) and
+            # is cached per overlay set, so hot GUI paths stay cheap.
+            probe_profile_runtime("transcription-whisper", restart=False)
         else:
             ensure_faster_whisper_runtime_available()
     elif name == "transcribe_mlx":
@@ -410,6 +412,8 @@ def stage_feature_packages(
     deps = FEATURE_DEPS.get(name)
     if deps is None:
         raise ValueError(f"Unknown feature: {name}")
+    if deps.native_install:
+        raise ValueError(f"Feature {name!r} needs a site-packages install and cannot be staged yet")
     binary_installers = {
         "ffmpeg": ensure_ffmpeg, "ffprobe": ensure_ffprobe, "deno": ensure_deno, "yt-dlp": ensure_yt_dlp,
     }

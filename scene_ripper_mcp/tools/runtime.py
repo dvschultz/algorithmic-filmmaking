@@ -15,8 +15,9 @@ async def list_runtime_profiles(ctx: Context = None) -> str:
     """List native runtime profiles with install status, missing packages and overlays.
 
     Returns:
-        JSON with ``profiles`` (id, family, features, installed, missing,
-        overlays) and ``native_worker_isolation``. Read-only.
+        JSON with ``profiles`` (each: ``profile`` id, ``family``, ``features``,
+        ``task_kinds``, ``installed``, ``missing``, ``overlays``, ``description``)
+        and ``native_worker_isolation``. Read-only.
     """
     from core.spine.runtime import list_runtime_profiles as _impl
 
@@ -60,7 +61,7 @@ async def start_install_runtime_profile(
     ``promoted_dir`` or an ``error``.
     """
     from core.jobs.runtime_install import run_runtime_install_job, runtime_install_job_spec
-    from scene_ripper_mcp.tools.jobs import _start_job
+    from scene_ripper_mcp.tools.jobs import start_job
 
     try:
         operation = runtime_install_job_spec(profile)
@@ -70,7 +71,7 @@ async def start_install_runtime_profile(
     def run(progress_callback, cancel_event):
         return run_runtime_install_job(profile, progress_callback, cancel_event)
 
-    return _start_job(
+    return start_job(
         ctx, kind="install_runtime_profile", args={"profile": profile},
         project_path=None, project_mtime_at_start=None, idempotency_key=idempotency_key,
         run=run, operation=operation,

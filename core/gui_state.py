@@ -261,7 +261,30 @@ class GUIState:
                 elif plan.status == "draft":
                     lines.append("  Awaiting user confirmation")
 
+            missing_profiles = self._missing_runtime_profiles()
+            if missing_profiles:
+                lines.append(
+                    "RUNTIME PROFILES MISSING: "
+                    + "; ".join(f"{pid} (missing: {', '.join(missing)})" for pid, missing in missing_profiles)
+                    + " -- use install_runtime_profile before transcription-type analysis"
+                )
+
             return "\n".join(lines) if lines else ""
+
+    @staticmethod
+    def _missing_runtime_profiles() -> list[tuple[str, list[str]]]:
+        """Profiles whose runtime is not installed (cheap: no worker probe)."""
+        try:
+            from core.runtime_profiles import PROFILES, profile_status
+
+            return [
+                (profile_id, status["missing"])
+                for profile_id in PROFILES
+                for status in (profile_status(profile_id),)
+                if not status["installed"]
+            ]
+        except Exception:  # noqa: BLE001 - context building must never fail the chat
+            return []
 
     def clear_search_state(self):
         """Clear YouTube search state."""

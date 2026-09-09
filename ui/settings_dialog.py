@@ -1840,8 +1840,12 @@ class SettingsDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
 
+        # Stop warm native workers first so their open files do not block removal.
+        from core.runtime_supervisor import shutdown_default_supervisor
+
+        shutdown_default_supervisor()
         app_dir = get_app_support_dir()
-        for subdir in ["bin", "python", "packages"]:
+        for subdir in ["bin", "python", "packages", "packages-overlays", "packages-staging"]:
             target = app_dir / subdir
             if target.exists():
                 shutil.rmtree(target)

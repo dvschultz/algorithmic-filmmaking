@@ -5,19 +5,19 @@ from __future__ import annotations
 import click
 
 from cli.utils.errors import ExitCode, exit_with
-from cli.utils.output import output_result
-
-
-def _json(ctx: click.Context) -> bool:
-    return bool((ctx.obj or {}).get("json", False))
+from cli.utils.output import json_flag as _json, output_result
 
 
 def _finish(ctx: click.Context, result: dict) -> None:
     if not result.get("success"):
+        error = str(result.get("error") or "")
+        # Bad input (unknown profile) is a validation error; a failed, cancelled
+        # or unhealthy install is an operational failure.
+        code = ExitCode.VALIDATION_ERROR if "Unknown runtime profile" in error else ExitCode.GENERAL_ERROR
         if _json(ctx):
             output_result(result, as_json=True)
-            exit_with(ExitCode.VALIDATION_ERROR)
-        exit_with(ExitCode.VALIDATION_ERROR, str(result.get("error")))
+            exit_with(code)
+        exit_with(code, error)
     output_result(result, as_json=_json(ctx))
 
 

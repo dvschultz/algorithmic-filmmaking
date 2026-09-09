@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,11 +38,13 @@ from core.edl_export import EDLExportConfig, export_edl
 work = Path(tempfile.mkdtemp())
 video = work / "synthetic.mp4"
 writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (96, 64))
+assert writer.isOpened(), "cv2 cannot encode mp4v here"
 for color in ((255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)):
     frame = np.zeros((64, 96, 3), dtype=np.uint8); frame[:] = color
     for _ in range(24):
         writer.write(frame)
 writer.release()
+assert video.stat().st_size > 0
 
 project = Project.new()
 detected = detect_scenes_for_video(project, video, sensitivity=3.0)
@@ -61,7 +64,8 @@ sources = dict(project.sources_by_id)
 clips = {c.id: (c, sources[c.source_id]) for c in project.clips}
 config = EDLExportConfig(output_path=work / "a.edl", title="headless")
 assert export_edl(sequence, sources, config, clips=clips), config.error_message
-assert (work / "a.edl").read_text().count("V     C") == len(project.clips)
+placed = len(sequence.get_all_clips())
+assert placed >= 2 and (work / "a.edl").read_text().count("V     C") == placed
 
 path = work / "headless.sceneripper"
 assert project.save(path)
@@ -82,6 +86,11 @@ def test_engine_runs_a_synthetic_workflow_without_gui_or_ml_runtimes():
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     env["PYTHONPATH"] = str(ROOT)
     env.setdefault("SCENE_RIPPER_NATIVE_WORKERS", "0")
+    # Keep the workflow's managed runtime, config and cache out of the developer's real dirs.
+    sandbox = Path(tempfile.mkdtemp(prefix="scene-ripper-headless-"))
+    env["SCENE_RIPPER_APP_SUPPORT_DIR"] = str(sandbox / "support")
+    env["SCENE_RIPPER_CACHE_DIR"] = str(sandbox / "cache")
+    env["SCENE_RIPPER_CONFIG"] = str(sandbox / "config.json")
     proc = subprocess.run(
         [sys.executable, "-c", WORKFLOW], capture_output=True, text=True, cwd=str(ROOT), env=env, timeout=300,
     )

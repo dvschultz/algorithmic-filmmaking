@@ -144,3 +144,8 @@ def output_info(message: str) -> None:
         message: Message to display
     """
     click.echo(message, err=True)
+
+
+def json_flag(ctx) -> bool:
+    """Whether the top-level ``--json`` flag is set for this invocation."""
+    return bool((getattr(ctx, "obj", None) or {}).get("json", False))

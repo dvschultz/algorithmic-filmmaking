@@ -750,7 +750,7 @@ async def test_custom_query_submission_pins_options_and_records_results(lifespan
     settings = Settings(description_model_tier="cloud", description_model_cloud="original")
     monkeypatch.setattr("core.settings.load_settings", lambda: settings)
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=(True, 0.9, "original"))
     monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", compute)
     ids = ["clip-1"]
@@ -803,7 +803,7 @@ async def test_cinematography_submission_pins_options_and_records_results(lifesp
     settings = Settings(cinematography_tier="cloud", cinematography_model="original")
     monkeypatch.setattr("core.settings.load_settings", lambda: settings)
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=CinematographyAnalysis(shot_size="CU"))
     monkeypatch.setattr("core.analysis.cinematography.analyze_cinematography", compute)
     ids = ["clip-1"]
@@ -832,7 +832,7 @@ async def test_gaze_submission_records_durable_results(lifespan_ctx, tmp_path, m
     ctx, store, _runtime = lifespan_ctx
     path = _make_project_file(tmp_path)
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value={"gaze_yaw": 2.123456, "gaze_pitch": -1.23456, "gaze_category": "at_camera"})
     monkeypatch.setattr("core.analysis.gaze.extract_gaze_from_clip", compute)
     monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
@@ -966,7 +966,7 @@ async def test_face_submission_records_durable_results(lifespan_ctx, tmp_path, m
     project.clips[0].thumbnail_path = thumbnail
     assert project.save()
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=[{"embedding": [.123456789] * 512, "confidence": .9, "bbox": [0, 0, 1, 1]}])
     from tests.analysis_fixtures import mock_face_execution
     mock_face_execution(monkeypatch, tmp_path, compute)
@@ -1002,7 +1002,7 @@ async def test_object_detection_submission_records_durable_results(lifespan_ctx,
     project.clips[0].thumbnail_path = thumbnail
     assert project.save()
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=[{"label": "person", "confidence": 0.9, "bbox": [0, 0, 1, 1]}])
     monkeypatch.setattr("core.analysis.detection.detect_objects", compute)
     ids = ["clip-1"]
@@ -1038,7 +1038,7 @@ async def test_shot_submission_captures_targets_and_recovers_results(
     project.clips[0].thumbnail_path = thumbnail
     assert project.save()
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=("wide", .9))
     monkeypatch.setattr("core.analysis.shots.classify_shot_type", compute)
     for _ in range(2):
@@ -1072,7 +1072,7 @@ async def test_classification_submission_records_durable_results(lifespan_ctx, t
     project.clips[0].thumbnail_path = thumbnail
     assert project.save()
     captured = {}
-    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    monkeypatch.setattr(jobs, "start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
     compute = Mock(return_value=[("person", 0.9)])
     monkeypatch.setattr("core.analysis.classification.classify_frame", compute)
     ids = ["clip-1"]
@@ -1191,7 +1191,7 @@ async def test_clip_tools_expose_agent_context_parity(tmp_path):
 async def test_download_submission_freezes_url_list(tmp_path, monkeypatch, lifespan_ctx):
     from scene_ripper_mcp.tools import jobs
     captured = {}
-    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    monkeypatch.setattr(jobs, 'start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
     urls = ['https://youtube.com/original']
     assert await jobs.start_download_videos(urls, str(tmp_path), ctx=lifespan_ctx[0]) == 'queued'
     urls[0] = 'https://youtube.com/replaced'
@@ -1208,7 +1208,7 @@ async def test_download_submission_rejects_replaced_directory(tmp_path, monkeypa
     target = tmp_path / 'downloads'
     target.mkdir()
     captured = {}
-    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    monkeypatch.setattr(jobs, 'start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
     await jobs.start_download_videos(['https://youtube.com/a'], str(target), ctx=lifespan_ctx[0])
     target.rename(tmp_path / 'old-downloads')
     target.mkdir()
@@ -1224,7 +1224,7 @@ async def test_transcription_submission_freezes_ids_and_rejects_queued_media_cha
     ctx, store, _ = lifespan_ctx
     path = _make_project_file(tmp_path)
     captured = {}
-    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    monkeypatch.setattr(jobs, 'start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
     ids = ['clip-1']
     assert await jobs.start_transcribe(str(path), clip_ids=ids, ctx=ctx) == 'queued'
     ids.clear()
@@ -1272,7 +1272,7 @@ async def test_analysis_plan_freezes_submission_and_saves_transcription(lifespan
     ctx, store, _ = lifespan_ctx
     path = _make_project_file(tmp_path)
     captured = {}
-    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    monkeypatch.setattr(jobs, 'start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
     monkeypatch.setattr('core.transcription.transcribe_clip', lambda **_: [])
     operations = ['transcribe']
     ids = ['clip-1']
@@ -1333,7 +1333,7 @@ async def test_alignment_job_freezes_ids_and_rejects_queued_media_change(lifespa
     project.clips[0].transcript = [TranscriptSegment(0, 1, 'hello', language='en')]
     assert project.save()
     captured = {}
-    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    monkeypatch.setattr(jobs, 'start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
     ids = ['clip-1']
     assert await jobs.start_align_words(str(path), ids, ctx=ctx) == 'queued'
     ids.clear()
@@ -1457,7 +1457,7 @@ async def test_audio_import_rejects_invalid_media_paths_before_submission(lifesp
     project.save(path)
     project.close_writer()
     submit = Mock(return_value=json.dumps({"success": True}))
-    monkeypatch.setattr(jobs, "_start_job", submit)
+    monkeypatch.setattr(jobs, "start_job", submit)
     result = json.loads(await jobs.start_import_audio(str(path), media_path, ctx=ctx))
     assert result["success"] is False
     submit.assert_not_called()

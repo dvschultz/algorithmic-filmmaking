@@ -263,7 +263,21 @@ def _transcribe_sync(path, model, language, store=None):
             skipped_count = len(clips) - transcribed_count
             dependency_errors = [item for item in batch["failed"] if item["code"] == "dependency_missing"]
             if not transcribed_count and dependency_errors:
-                return json.dumps({"success": False, "error": dependency_errors[0]["message"]})
+                # Same requirement the desktop prompt and the runtime tools report;
+                # nothing installs silently here.
+                from core.runtime_profiles import profile_status
+
+                status = profile_status("transcription-whisper")
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "runtime_missing",
+                        "message": dependency_errors[0]["message"],
+                        "profile": status["profile"],
+                        "missing": status["missing"],
+                        "hint": "start_install_runtime_profile('transcription-whisper') installs it",
+                    },
+                })
 
             return json.dumps(
                 {

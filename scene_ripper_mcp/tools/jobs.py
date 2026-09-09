@@ -321,7 +321,7 @@ async def purge_old_jobs(
 # =============================================================================
 
 
-def _start_job(
+def start_job(
     ctx: Context,
     *,
     kind: str,
@@ -332,7 +332,7 @@ def _start_job(
     run,
     operation: OperationSpec | None = None,
 ) -> str:
-    """Common path for start_* tools: validate, submit, wrap errors."""
+    """Common path for start_* tools (this module and scene_ripper_mcp.tools.runtime): validate, submit, wrap errors."""
     from scene_ripper_mcp.jobs.runtime import InvalidIdempotencyKeyError
 
     try:
@@ -468,7 +468,7 @@ async def start_accept_legacy_analysis(
         finally:
             project.close_writer()
 
-    return _start_job(
+    return start_job(
         ctx, kind=spec.kind, args=arguments, project_path=str(path),
         project_mtime_at_start=None, idempotency_key=idempotency_key,
         run=run, operation=spec,
@@ -551,7 +551,7 @@ async def start_accept_legacy_audio_transcripts(
         finally:
             project.close_writer()
 
-    return _start_job(
+    return start_job(
         ctx, kind=spec.kind, args=arguments, project_path=str(path),
         project_mtime_at_start=None, idempotency_key=idempotency_key,
         run=run, operation=spec,
@@ -626,7 +626,7 @@ async def start_detect_scenes_bulk(
             raise StaleJobResult("Detection inputs changed while the job was queued")
         return run_saved_detection(store, path, frozen["source_ids"], frozen["sensitivity"], progress_callback, cancel_event)
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="detect_scenes_bulk",
         args=operation.arguments,
@@ -959,7 +959,7 @@ async def _start_spine_analyze_job(
     # the public name that callers will poll and find in their job history.
     from dataclasses import replace
 
-    return _start_job(
+    return start_job(
         ctx,
         kind=kind,
         args=payload,
@@ -1066,7 +1066,7 @@ async def start_analyze_colors(
             raise StaleJobResult("Color inputs changed while the job was queued")
         return run_colors(store, path, frozen["clip_ids"], frozen["num_colors"], progress_callback, cancel_event)
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="analyze_colors",
         args=operation.arguments,
@@ -1134,7 +1134,7 @@ async def start_analyze_shots(
             progress_callback, cancel_event, operation=operation,
         )
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="analyze_shots",
         args=operation.arguments,
@@ -1230,7 +1230,7 @@ async def start_generate_thumbnails(
             }
         return result
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="generate_thumbnails",
         args={"project_path": canonical, "clip_ids": clip_ids, "force": force},
@@ -1272,7 +1272,7 @@ async def start_import_images(
             return run_image_import_job(store, path, args["file_paths"], progress, cancel,
                 copy_files=args["copy_files"], validate_paths=True, operation=operation)
 
-        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+        return start_job(ctx, kind=operation.kind, args=operation.arguments,
             project_path=str(path), project_mtime_at_start=mtime,
             idempotency_key=idempotency_key, run=run, operation=operation)
     except Exception as exc:
@@ -1322,7 +1322,7 @@ async def start_import_audio(
             return run_audio_import_job(store, path, operation.arguments["file_path"],
                 progress, cancel, operation=operation)
 
-        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+        return start_job(ctx, kind=operation.kind, args=operation.arguments,
             project_path=str(path), project_mtime_at_start=mtime,
             idempotency_key=idempotency_key, run=run, operation=operation)
     except Exception as exc:
@@ -1362,7 +1362,7 @@ async def start_extract_frames(
             return run_frame_extraction_job(store, path, args["source_id"], progress, cancel,
                 mode=args["mode"], interval=args["interval"], clip_id=args["clip_id"], operation=operation)
 
-        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+        return start_job(ctx, kind=operation.kind, args=operation.arguments,
             project_path=str(path), project_mtime_at_start=mtime,
             idempotency_key=idempotency_key, run=run, operation=operation)
     except Exception as exc:
@@ -1408,7 +1408,7 @@ async def start_transcribe_audio(
                 TranscriptionOptions(**args["options"]), progress, cancel,
                 force=args["force"], operation=operation)
 
-        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+        return start_job(ctx, kind=operation.kind, args=operation.arguments,
             project_path=str(path), project_mtime_at_start=mtime,
             idempotency_key=idempotency_key, run=run, operation=operation)
     except Exception as exc:
@@ -1487,7 +1487,7 @@ async def start_transcribe(
             operation=operation,
         )
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="transcribe",
         args=operation.arguments,
@@ -1850,7 +1850,7 @@ async def start_download_videos(
             cancel_event=cancel_event,
         )
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="download_videos",
         args={"urls": list(download_urls), "output_dir": canonical_target},
@@ -1910,7 +1910,7 @@ async def start_detect_scenes_new_project(
             cancel_event=cancel_event,
         )
 
-    return _start_job(
+    return start_job(
         ctx,
         kind="detect_scenes_new_project",
         args={
@@ -1985,7 +1985,7 @@ async def start_generate_sequence(
         def run(progress, cancel):
             return run_sequence_generation_job(store, path, operation, progress, cancel)
 
-        return _start_job(
+        return start_job(
             ctx, kind=operation.kind, args=operation.arguments,
             project_path=str(path), project_mtime_at_start=mtime,
             idempotency_key=idempotency_key, run=run, operation=operation,
@@ -2064,7 +2064,7 @@ async def start_regenerate_sequence(
         def run(progress, cancel):
             return run_sequence_generation_job(store, path, operation, progress, cancel)
 
-        return _start_job(
+        return start_job(
             ctx, kind=operation.kind, args=operation.arguments,
             project_path=str(path), project_mtime_at_start=mtime,
             idempotency_key=idempotency_key, run=run, operation=operation,
