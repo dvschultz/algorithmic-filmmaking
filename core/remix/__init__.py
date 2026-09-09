@@ -4,7 +4,7 @@ import logging
 from copy import deepcopy
 from threading import Event
 import random
-from typing import List, Tuple, Any, Optional
+from typing import List, Tuple, Any, Optional, Literal
 from core.remix.shuffle import constrained_shuffle
 from core.analysis.color import get_primary_hue
 from core.analysis.shots import SHOT_TYPES
@@ -261,13 +261,16 @@ def generate_sequence(
     elif algorithm in ("brightness", "volume"):
         from core.remix.scalar_inputs import sort_scalar_inputs
 
+        scalar_kind: Literal["brightness", "volume"]
         if algorithm == "brightness":
+            scalar_kind = "brightness"
             clips_to_use = _auto_compute_brightness(clips_to_use, cancel_event=cancel_event)
         else:
+            scalar_kind = "volume"
             clips_to_use = _auto_compute_volume(clips_to_use, cancel_event=cancel_event)
         if cancel_event is not None and cancel_event.is_set():
             return []
-        return sort_scalar_inputs(clips_to_use, algorithm, direction=direction)
+        return sort_scalar_inputs(clips_to_use, scalar_kind, direction=direction)
 
     elif algorithm == "proximity":
         # Sort by camera-to-subject distance (proximity score)

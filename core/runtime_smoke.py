@@ -345,12 +345,11 @@ def _run_render_short_smoke() -> None:
         project = Project.new(name="Render Short Smoke")
         project.add_source(source)
         project.add_clips(clips)
-        project.sequence.fps = source.fps or 24.0
-        project.add_to_sequence([clip.id for clip in clips])
-
         sequence = project.sequence
         if sequence is None:
             raise RuntimeError("Render-short smoke produced no sequence to render.")
+        sequence.fps = source.fps or 24.0
+        project.add_to_sequence([clip.id for clip in clips])
 
         # Keep the render well under 5 seconds: the synthetic clip is ~2.25s of
         # source at 24fps, and the sequence renders at its own fps (24).

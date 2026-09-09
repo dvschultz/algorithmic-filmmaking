@@ -10,6 +10,14 @@ execution: code
 
 # Shared Editing Engine and Architecture Renewal - Plan
 
+**U8–U10 acceptance, 2026-09-08:** Complete. The full suite passed 6,108 tests
+with two documented opt-in skips. Subsequent typing cleanup passed the affected
+regression suites and the 141-file shared scope. All five final review findings
+are fixed. [Requirement-by-requirement evidence and explicit static-check
+baseline exceptions](2026-09-08-u8-u10-verification.md) are recorded separately.
+This closes U8–U10; U11–U17 and packaged release certification remain separate.
+The dated checkpoints below preserve implementation history.
+
 ## Goal Capsule
 
 **Objective:** Make Scene Ripper reliable to edit, automate, and extend: the same action has the same result from the desktop, chat, CLI, and MCP; creative experiments remain recoverable and reproducible.

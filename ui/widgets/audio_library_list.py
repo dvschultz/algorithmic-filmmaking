@@ -61,7 +61,7 @@ class AudioLibraryList(QWidget):
         header.setSectionResizeMode(self._COL_TRANSCRIBE, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self._COL_REMOVE, QHeaderView.ResizeToContents)
 
-        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self._table)

@@ -3740,9 +3740,9 @@ class MainWindow(QMainWindow):
                 row = self._build_agent_clip_context(clip)
                 row["face_count"] = len(clip.face_embeddings)
                 confidences = [
-                    entry.get("confidence")
+                    confidence
                     for entry in clip.face_embeddings
-                    if isinstance(entry.get("confidence"), (int, float))
+                    if isinstance(confidence := entry.get("confidence"), (int, float))
                 ]
                 if confidences:
                     row["max_confidence"] = round(max(confidences), 4)
@@ -5092,7 +5092,9 @@ class MainWindow(QMainWindow):
             return
         file_to_load = segment.path
         clip_start_seconds, clip_end_seconds = float(segment.media.start), float(segment.media.end)
-        source_seconds = float(plan.source_seconds_at(timeline_frame))
+        source_time = plan.source_seconds_at(timeline_frame)
+        assert source_time is not None  # The playhead is inside a video segment.
+        source_seconds = float(source_time)
 
         # Determine the source ID for tracking loaded sources
         preview_source_key = str(file_to_load)

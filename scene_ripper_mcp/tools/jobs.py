@@ -22,7 +22,7 @@ import json
 import logging
 from pathlib import Path
 from core.jobs.spec import OperationSpec
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Literal
 
 from mcp.server.fastmcp import Context
 
@@ -731,7 +731,7 @@ async def _start_spine_analyze_job(
         )
 
     op_kwargs = op_kwargs or {}
-    payload = {"project_path": canonical, "clip_ids": clip_ids}
+    payload: dict = {"project_path": canonical, "clip_ids": clip_ids}
     if args:
         payload.update(args)
 
@@ -831,7 +831,7 @@ async def _start_spine_analyze_job(
     elif spine_fn_name == "analyze_scalars":
         from core.jobs.scalars import scalar_job_spec, run_scalar_job
 
-        scalar_kind = "brightness" if payload["operation"] == "brightness" else "volume"
+        scalar_kind: Literal["brightness", "volume"] = "brightness" if payload["operation"] == "brightness" else "volume"
         try:
             operation = scalar_job_spec(
                 _project, clip_ids, scalar_kind,
