@@ -203,6 +203,7 @@ This work does not add new creative algorithms, a new frontend, general composit
 - Scenario 3: `TestClipLibraryModel::test_thumbnail_for_removed_clip_is_ignored`, `::test_mutations_refused_off_owner_thread`, `TestFrameLibraryModel::test_mutations_refused_off_owner_thread`.
 - Scenario 4: `scripts/library_model_benchmark.py` recorded 1k/10k runs (table in `docs/architecture/library-models.md`); all measurements are within budget, and model-layer cost at 10k is under 5 ms per operation. `TestModelScale` bounds the model layer in CI.
 - Validation: the 26 UI suites that touch browsers, adapters, history and thumbnail delivery pass (346 tests) plus `tests/test_library_models.py` (16 tests); ruff clean for changed files.
+- Review closure: the CE review of `a172738..72048ce` (run `20260909-043301-f7adb43e`, 10 reviewers) found stale rows after re-detection (`Project.replace_source_clips` now emits `clips_removed`), adapter signal suppression when a model mutation fails, an O(n) frame refresh, a frame-model reset on source undo, double refreshes and stale cached sources in the browser, and agent-context gaps (`frames_tab_frame_ids`, virtual-mode `total_clips`); `068a304` applies 19 fixes with regression tests (`tests/test_library_models.py` now 28 tests). Two P3s stay documented as residual (blanket `set_sources` invalidation, post-undo row order).
 
 ## U16. Add sequence variation comparison to the existing workspace
 
