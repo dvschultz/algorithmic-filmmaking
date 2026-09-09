@@ -1,7 +1,8 @@
 """Background worker for sequence generation.
 
-Runs generate_sequence() (including auto-compute for brightness, volume,
-embeddings) in a background thread so the UI stays responsive.
+Runs the registry algorithm (including prerequisite auto-compute for
+brightness, volume and embeddings) in a background thread so the UI stays
+responsive.
 """
 
 import logging
@@ -21,11 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 class SequenceWorker(CancellableWorker):
-    """Background worker that runs generate_sequence().
+    """Background worker that runs a registry algorithm.
 
-    Heavy auto-compute operations (brightness, volume, CLIP embeddings)
-    happen inside generate_sequence() and would otherwise block the main
-    thread. This worker moves them off the UI thread.
+    Heavy prerequisite work (brightness, volume, CLIP embeddings) would
+    otherwise block the main thread. This worker moves it off the UI thread.
 
     Signals:
         sequence_ready: Emitted with sorted (Clip, Source) list on success
@@ -72,8 +72,7 @@ class SequenceWorker(CancellableWorker):
     def run(self):
         self._log_start()
         try:
-            from core.remix import generate_sequence, run_registry_algorithm
-            from core.remix.registry import registry
+            from core.remix import run_registry_algorithm
 
             self.progress_message.emit(f"Computing {self._algorithm} sequence...")
 
@@ -94,7 +93,7 @@ class SequenceWorker(CancellableWorker):
                     return
                 self.recipe = run.recipe
                 sorted_clips = run.ordered_clips
-            elif self._algorithm in registry:
+            else:
                 run = run_registry_algorithm(
                     self._algorithm, self._clips,
                     direction=self._direction,
@@ -105,15 +104,6 @@ class SequenceWorker(CancellableWorker):
                     return
                 self.recipe = run.recipe
                 sorted_clips = run.ordered_clips
-            else:
-                sorted_clips = generate_sequence(
-                    algorithm=self._algorithm,
-                    clips=self._clips,
-                    clip_count=len(self._clips),
-                    direction=self._direction,
-                    no_color_handling=self._no_color_handling,
-                    cancel_event=self._cancel_event,
-                )
 
             if not self.is_cancelled():
                 self.sequence_ready.emit(sorted_clips)

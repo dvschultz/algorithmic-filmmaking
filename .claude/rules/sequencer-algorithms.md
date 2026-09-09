@@ -48,7 +48,8 @@ definitions; `models/recipe.py` is the persisted `SequenceRecipe`. All 23
 algorithms run through the registry on every surface and store a recipe on the
 sequence; dialogs collect parameters and hand already-computed provider results
 back through `resources` so committing never repeats a model call.
-`core.remix.generate_sequence` is a thin compatibility dispatcher. New
+Production code calls `core.remix.run_registry_algorithm` or the spine; the old
+`generate_sequence` keyword dispatcher lives only in `tests/remix_compat.py`. New
 algorithms: add a definition (`prepare` for prerequisites/provider work,
 `generate` pure), register it, keep labels/icons/dialog hints in
 `ui/algorithm_config.py`, add it to `tests/test_recipe_reconstruction.py`, and

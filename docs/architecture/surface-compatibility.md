@@ -140,13 +140,14 @@ They are exposed as chat tools, MCP tools of the same names, and the
 `scene_ripper sequence` CLI group (`algorithms`, `list`, `generate`, `recipe`,
 `reconstruct`, `regenerate`, `duplicate`, `activate`).
 
-Compatibility wrappers: `core.remix.generate_sequence` is a thin dispatcher for
-the pre-registry keyword contract (removal condition: remaining callers in
-`tests/test_sequencer_algorithms.py` migrate to registry parameters). It
-refuses provider-assisted algorithms. `SequenceTab._run_generation` forwards
-legacy keywords to `run_registry_algorithm`. The superseded per-algorithm
-branches, `_is_dialog_only_algorithm`, and `apply_generated_order` were
-removed. MCP `shuffle_sequence` remains a timeline reorder, not a generation.
+Compatibility wrappers (retired in U17): `core.remix.generate_sequence` and
+`SequenceTab._run_generation` are gone; every production caller runs
+`core.remix.run_registry_algorithm` (legacy `direction`/`no_color_handling`/
+`seed=0` keywords are still translated there) or
+`core.spine.sequences.generate_sequence`. The old keyword dispatcher survives
+only as `tests/remix_compat.py` for the algorithm suites. The superseded
+per-algorithm branches, `_is_dialog_only_algorithm`, and `apply_generated_order`
+were removed earlier. MCP `shuffle_sequence` remains a timeline reorder, not a generation.
 Dialog workers now project registry runs back onto their existing emitted
 shapes; the dialogs themselves remain the desktop parameter collectors.
 

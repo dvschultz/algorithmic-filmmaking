@@ -10,17 +10,11 @@ from core.operations.description import (
     run_description,
 )
 from core.spine.analyze import describe
+from tests.project_fixtures import project_with_thumbnails  # noqa: F401  (re-exported for older imports)
 from tests.test_spine_analyze import _build_project
 from ui.workers.description_worker import DescriptionWorker
 
 
-def project_with_thumbnails(tmp_path, count=3):
-    project = _build_project(tmp_path, count)
-    thumbnail = tmp_path / "thumb.jpg"
-    thumbnail.write_bytes(b"fake")
-    for clip in project.clips:
-        clip.thumbnail_path = thumbnail
-    return project
 
 
 @pytest.mark.parametrize("frame_count", [None, 3])

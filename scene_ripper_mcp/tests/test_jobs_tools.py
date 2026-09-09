@@ -62,7 +62,7 @@ def lifespan_ctx(tmp_path):
 async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path, operation):
     from core.project import Project
     from core.analysis_model_identity import DINOV2_TAG
-    from tests.test_description_operations import project_with_thumbnails
+    from tests.project_fixtures import project_with_thumbnails
     from scene_ripper_mcp.tools.jobs import start_accept_legacy_analysis
 
     ctx, store, _ = lifespan_ctx

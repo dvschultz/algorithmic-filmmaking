@@ -13,7 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 from core.project import Project
-from core.remix import generate_sequence, run_registry_algorithm
+from core.remix import run_registry_algorithm
+from tests.remix_compat import generate_sequence
 from core.remix.engine import (
     AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
     legacy_seed, normalize_parameters, resolve_seed, run_algorithm,

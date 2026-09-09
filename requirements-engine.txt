@@ -1,0 +1,23 @@
+# Scene Ripper - Engine dependencies (Qt-free contract)
+# Everything the headless engine needs: project persistence, scene detection,
+# analysis math, the algorithm registry, the CLI, and the MCP server. No GUI
+# (PySide6, python-mpv) and no optional ML runtimes (see requirements-optional.txt).
+# requirements-core.txt is the frozen desktop contract: engine + GUI.
+# tests/test_dependency_contracts.py keeps the three files and pyproject extras aligned.
+
+certifi>=2024.0.0
+click>=8.0
+scenedetect[opencv]>=0.6.4
+opencv-python>=4.8
+numpy>=1.24
+scikit-learn>=1.3
+Pillow>=10.0
+rapidfuzz>=3.0.0
+google-api-python-client>=2.100.0
+keyring>=24.0
+
+# LLM Integration
+# Vendored wheel avoids build-time dependency on PyPI-hosted LiteLLM artifacts.
+./vendor/wheels/litellm-1.82.6-py3-none-any.whl
+tenacity>=8.2.0
+httpx>=0.25.0

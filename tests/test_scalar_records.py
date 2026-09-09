@@ -59,7 +59,7 @@ def test_verified_scalar_reuses_after_save(setup, tmp_path):
 
 
 def test_sequencing_verifies_legacy_values_on_detached_clips(setup):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     project, operation, provider = setup
     clip, source = project.clips[0], project.sources[0]
@@ -79,7 +79,7 @@ def test_sequencing_verifies_legacy_values_on_detached_clips(setup):
 
 
 def test_sequencing_cancel_discards_scalar_results(setup):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     project, operation, provider = setup
     cancel = Event()
@@ -91,7 +91,7 @@ def test_sequencing_cancel_discards_scalar_results(setup):
 
 
 def test_sequencing_does_not_sort_stale_values_after_failure(setup):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     project, operation, provider = setup
     clip, source = project.clips[0], project.sources[0]
@@ -104,7 +104,7 @@ def test_sequencing_does_not_sort_stale_values_after_failure(setup):
 
 
 def test_sequencing_rechecks_earlier_media_after_batch(setup, tmp_path):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     project, operation, provider = setup
     first, source = project.clips[0], project.sources[0]
@@ -124,7 +124,7 @@ def test_sequencing_rechecks_earlier_media_after_batch(setup, tmp_path):
 
 
 def test_sequencing_verified_no_audio_reuses(setup):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     project, operation, provider = setup
     if operation != "volume":

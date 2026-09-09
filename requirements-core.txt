@@ -1,5 +1,7 @@
 # Scene Ripper - Core dependencies (bundled in .app)
-# These are required for the base application to run.
+# These are required for the base application to run: the Qt-free engine
+# contract (requirements-engine.txt) plus the desktop GUI (PySide6, python-mpv).
+# Frozen desktop contract; tests/test_dependency_contracts.py keeps it aligned.
 
 certifi>=2024.0.0
 click>=8.0

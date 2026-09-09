@@ -24,7 +24,7 @@ def inputs(tmp_path, monkeypatch):
 
 
 def test_similarity_computation_does_not_mutate_input_clips(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute = inputs
     result = generate_sequence("similarity_chain", clips, len(clips))
@@ -35,7 +35,7 @@ def test_similarity_computation_does_not_mutate_input_clips(inputs):
 
 @pytest.mark.parametrize("vector", [[0.0] * 768, [float("nan")] * 768, [1.0]])
 def test_similarity_rejects_invalid_provider_vectors(inputs, vector):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute = inputs
     compute.side_effect = lambda paths: [vector for _ in paths]
@@ -44,7 +44,7 @@ def test_similarity_rejects_invalid_provider_vectors(inputs, vector):
 
 
 def test_similarity_cancellation_rejects_late_batch(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute = inputs
     cancel = Event()
@@ -73,7 +73,7 @@ def test_staccato_worker_captures_private_inputs(inputs):
 
 
 def test_short_batch_does_not_publish_partial_assignments(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute = inputs
     compute.side_effect = lambda paths: [[0.1] * 768]
@@ -95,7 +95,7 @@ def test_staccato_requires_thumbnails_even_when_no_inference_is_possible(inputs)
 
 
 def test_changed_thumbnail_is_not_used_in_sequence(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute = inputs
 

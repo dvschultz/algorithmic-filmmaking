@@ -37,7 +37,8 @@ Tests live primarily in `tests/`. Packaging code is split across `packaging/linu
 
 ## Build, Test, and Development Commands
 - `python -m pip install -r requirements.txt`: install the full source-development dependency set.
-- `python -m pip install -r requirements-core.txt`: install the minimal frozen-app dependency contract.
+- `python -m pip install -r requirements-core.txt`: install the minimal frozen-app dependency contract (engine + GUI).
+- `python -m pip install -r requirements-engine.txt -e .[mcp]`: install the Qt-free engine contract for headless CLI/MCP work; `pip install -e .[desktop]` / `.[engine]` / `.[ml]` resolve the same definitions.
 - `python -m pip install -r requirements-optional.txt`: install optional on-demand ML and media features explicitly in a source environment.
 - `python main.py`: launch the desktop application from source.
 - `scene_ripper --help` or `python -m cli.main --help`: inspect the CLI.
@@ -65,7 +66,7 @@ Target Python 3.11+ with 4-space indentation. Use `snake_case` for modules/funct
 - Keep heavy operations off the UI thread. Long-running detection, analysis, export, and sequencing work belongs in `ui/workers/` or equivalent worker-thread infrastructure.
 - Preserve `main.py` startup ordering. Frozen environment setup must happen before heavy imports, `torch` should remain pre-imported before `PySide6`, and macOS MLX warmup must stay on the main thread.
 - Use `core/paths.py` for app-support, managed binary, managed package, and log locations. Use `core/settings.py` for user-configurable paths, persisted settings, and environment overrides.
-- Treat `requirements-core.txt` as the frozen base-app contract and `requirements-optional.txt` as the on-demand feature set. New heavyweight or dynamically imported dependencies should not be pulled into startup accidentally.
+- Treat `requirements-core.txt` as the frozen base-app contract, `requirements-engine.txt` as its Qt-free subset, and `requirements-optional.txt` as the on-demand feature set; `tests/test_dependency_contracts.py` keeps them and the pyproject extras aligned. New heavyweight or dynamically imported dependencies should not be pulled into startup accidentally, and nothing under `core/spine/`, `cli/` or `scene_ripper_mcp/` may import Qt (`tests/test_spine_imports.py`, enforced by the `headless-engine` CI job).
 - Keep `core/dependency_manager.py` and `core/feature_registry.py` aligned when adding or changing optional capabilities. If a feature is install-on-demand, make its dependency gates, availability checks, and user-facing install path consistent.
 - For FFmpeg or other subprocess calls, pass argument arrays and never shell-interpolated strings.
 - For new UI controls, reuse shared sizing and spacing primitives from `ui/theme.py`, especially `UISizes` and `Spacing`.

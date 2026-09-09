@@ -13,7 +13,9 @@ walkthrough with a concrete example, see
 
 ## Quick start
 
-1. Install the MCP server: `pip install -e .[mcp]`
+1. Install the MCP server: `pip install -e .[mcp]` (the `mcp` extra pulls in the
+   Qt-free engine contract; no PySide6 or ML runtime is needed, and CI proves
+   the server runs without them)
 2. Configure your agent to launch `scene-ripper-mcp` over stdio (or
    `scene-ripper-mcp --transport http --port 8765` for HTTP).
 3. Start a job — for example, scene detection over an existing project:

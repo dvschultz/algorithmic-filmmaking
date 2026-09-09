@@ -23,8 +23,7 @@ jobs:
         run: pip install ruff==0.14.11
 
       - name: Run ruff
-        # Informational until green across a release cycle — see docs/releases.md gate-flip rule
-        continue-on-error: true
+        # Required since U17 (green on v1-hardening); see docs/releases.md gate-flip rule
         run: ruff check .
 
   mypy:
@@ -41,10 +40,49 @@ jobs:
       - name: Install mypy
         run: pip install mypy==1.19.1
 
-      - name: Run mypy (core/spine + models)
-        # Informational until green across a release cycle — see docs/releases.md gate-flip rule.
-        # Scoped to core/spine/ + models/: the full tree carries ~870 baseline errors, so the
-        # gate is limited to the layers we keep clean. --follow-imports=silent stops mypy from
-        # dragging the whole import graph (ui/, core/analysis/, ...) into the scoped check.
-        continue-on-error: true
-        run: python -m mypy --follow-imports=silent core/spine/ models/
+      - name: Run mypy (migrated scopes)
+        # Required since U17 for the layers kept clean: spine, models, the algorithm engine and
+        # registry, the recipe model, the native worker/supervisor, and the shared item models.
+        # The rest of the tree still carries baseline errors; widen this list as areas become
+        # clean, never narrow it. --follow-imports=silent stops mypy from dragging the whole
+        # import graph (ui/, core/analysis/, ...) into the scoped check.
+        run: >-
+          python -m mypy --follow-imports=silent
+          core/spine/ models/ core/remix/engine.py core/remix/registry.py
+          core/runtime_worker/ core/runtime_supervisor.py core/runtime_profiles.py
+          ui/models/
+
+  headless-engine:
+    name: Headless engine (no Qt)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install the engine + MCP contract only
+        # U17 scenario 1: no PySide6, no python-mpv, no optional ML runtimes.
+        run: |
+          pip install -r requirements-engine.txt "mcp[cli]>=1.2.0" pytest pytest-asyncio
+          python -c "import importlib.util as u; assert u.find_spec('PySide6') is None, 'PySide6 leaked into the engine env'"
+
+      - name: Dependency contracts and import boundaries
+        run: pytest tests/test_dependency_contracts.py tests/test_spine_imports.py -q
+
+      - name: Synthetic headless workflow
+        env:
+          SCENE_RIPPER_HEADLESS_ENV: '1'
+          SCENE_RIPPER_NATIVE_WORKERS: '0'
+        run: pytest tests/test_headless_engine.py -q
+
+      - name: MCP suite without Qt
+        env:
+          SCENE_RIPPER_NATIVE_WORKERS: '0'
+        run: pytest scene_ripper_mcp/tests -q

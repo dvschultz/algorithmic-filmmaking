@@ -33,7 +33,7 @@ jobs:
         continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest tests/ -v --tb=short -rs
+        run: pytest tests/ scene_ripper_mcp/tests/ -v --tb=short -rs
 
       - name: Skip-count reminder
         if: always()

@@ -108,7 +108,7 @@ class TestBrightnessAlgorithm:
     """Brightness gradient sorting."""
 
     def test_bright_to_dark_order(self, scalar_sort_inputs):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("dark", average_brightness=0.1), source),
@@ -120,7 +120,7 @@ class TestBrightnessAlgorithm:
         assert ids == ["bright", "mid", "dark"]
 
     def test_dark_to_bright_order(self, scalar_sort_inputs):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("bright", average_brightness=0.9), source),
@@ -133,7 +133,7 @@ class TestBrightnessAlgorithm:
 
     def test_midpoint_brightness_order(self, scalar_sort_inputs):
         """A measured midpoint brightness sorts between dark and bright."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("dark", average_brightness=0.1), source),
@@ -151,7 +151,7 @@ class TestVolumeAlgorithm:
     """Volume gradient sorting with clip exclusion."""
 
     def test_quiet_to_loud_order(self, scalar_sort_inputs):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("loud", rms_volume=-5.0), source),
@@ -163,7 +163,7 @@ class TestVolumeAlgorithm:
         assert ids == ["quiet", "mid", "loud"]
 
     def test_loud_to_quiet_order(self, scalar_sort_inputs):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("quiet", rms_volume=-40.0), source),
@@ -175,7 +175,7 @@ class TestVolumeAlgorithm:
 
     def test_clips_without_volume_excluded(self, scalar_sort_inputs):
         """Clips with rms_volume=None are excluded from the result."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("has_vol", rms_volume=-20.0), source),
@@ -195,7 +195,7 @@ class TestProximityAlgorithm:
 
     def test_far_to_close_with_shot_type(self):
         """Uses 5-class shot_type for proximity scoring."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("cu", shot_type="close-up"), source),
@@ -207,7 +207,7 @@ class TestProximityAlgorithm:
         assert ids == ["wide", "med", "cu"]
 
     def test_close_to_far_direction(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("wide", shot_type="wide shot"), source),
@@ -219,7 +219,7 @@ class TestProximityAlgorithm:
 
     def test_prefers_cinematography_over_shot_type(self):
         """10-class cinematography.shot_size takes priority."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
 
         # Clip with both: cinematography says BCU (8.0), shot_type says medium (5.0)
@@ -236,7 +236,7 @@ class TestProximityAlgorithm:
 
     def test_unclassified_clips_sort_to_middle(self):
         """Clips without shot_type or cinematography get score 5.0."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("cu", shot_type="close-up"), source),   # 7.0
@@ -254,7 +254,7 @@ class TestColorComplementaryAlgorithm:
     """Color algorithm: purity filter + hue sorting (rainbow & complementary)."""
 
     def test_rainbow_sorts_by_hue(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         # Pure red, pure green, pure blue
         clips = [
@@ -269,7 +269,7 @@ class TestColorComplementaryAlgorithm:
 
     def test_low_purity_clips_included(self):
         """All clips with color data are included regardless of purity."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("pure", dominant_colors=[(255, 0, 0)]), source),
@@ -283,7 +283,7 @@ class TestColorComplementaryAlgorithm:
 
     def test_complementary_interleaves(self):
         """Complementary direction alternates from opposite ends."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         # 4 clips with distinct hues
         clips = [
@@ -300,7 +300,7 @@ class TestColorComplementaryAlgorithm:
 
     def test_clips_without_colors_appended_at_end(self):
         """Clips without color data are appended after sorted clips."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("has_color", dominant_colors=[(255, 0, 0)]), source),
@@ -541,7 +541,7 @@ class TestGenerateSequenceIntegration:
     """Test generate_sequence() with all new algorithm keys."""
 
     def test_brightness_algorithm_key(self, scalar_sort_inputs):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a", average_brightness=0.9), source),
@@ -551,7 +551,7 @@ class TestGenerateSequenceIntegration:
         assert len(result) == 2
 
     def test_volume_algorithm_key(self, scalar_sort_inputs):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a", rms_volume=-20.0), source),
@@ -561,7 +561,7 @@ class TestGenerateSequenceIntegration:
         assert len(result) == 2
 
     def test_proximity_algorithm_key(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a", shot_type="wide shot"), source),
@@ -571,7 +571,7 @@ class TestGenerateSequenceIntegration:
         assert len(result) == 2
 
     def test_color_complementary_algorithm_key(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a", dominant_colors=[(255, 0, 0)]), source),
@@ -581,7 +581,7 @@ class TestGenerateSequenceIntegration:
         assert len(result) == 2
 
     def test_similarity_chain_algorithm_key(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         import numpy as np
 
@@ -595,7 +595,7 @@ class TestGenerateSequenceIntegration:
         assert len(result) == 3
 
     def test_match_cut_algorithm_key(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         import numpy as np
 
@@ -615,7 +615,7 @@ class TestGenerateSequenceIntegration:
         assert len(result) == 3
 
     def test_dialog_only_algorithm_key_raises_not_implemented(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a"), source),
@@ -626,7 +626,7 @@ class TestGenerateSequenceIntegration:
             generate_sequence("storyteller", clips, 2)
 
     def test_unknown_algorithm_still_returns_clipped_input_order(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a"), source),
@@ -700,7 +700,7 @@ class TestGazeSortAlgorithm:
     """Gaze Sort: arrange clips by gaze direction."""
 
     def test_left_to_right_sorts_by_ascending_yaw(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("right", gaze_yaw=25.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
@@ -712,7 +712,7 @@ class TestGazeSortAlgorithm:
         assert ids == ["left", "center", "right"]
 
     def test_right_to_left_sorts_by_descending_yaw(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("left", gaze_yaw=-20.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
@@ -724,7 +724,7 @@ class TestGazeSortAlgorithm:
         assert ids == ["right", "center", "left"]
 
     def test_up_to_down_sorts_by_ascending_pitch(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("down", gaze_yaw=0.0, gaze_pitch=15.0, gaze_category="looking_down"), source),
@@ -736,7 +736,7 @@ class TestGazeSortAlgorithm:
         assert ids == ["up", "center", "down"]
 
     def test_down_to_up_sorts_by_descending_pitch(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("up", gaze_yaw=0.0, gaze_pitch=-18.0, gaze_category="looking_up"), source),
@@ -748,7 +748,7 @@ class TestGazeSortAlgorithm:
 
     def test_clips_without_gaze_appended_at_end(self):
         """Clips without gaze data are appended after sorted clips."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("no_gaze"), source),
@@ -761,7 +761,7 @@ class TestGazeSortAlgorithm:
 
     def test_no_clips_have_gaze_returns_original_order(self):
         """When no clips have gaze data, return original order."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a"), source),
@@ -773,7 +773,7 @@ class TestGazeSortAlgorithm:
         assert ids == ["a", "b", "c"]
 
     def test_default_direction_is_left_to_right(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("right", gaze_yaw=25.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
@@ -790,7 +790,7 @@ class TestGazeConsistencyAlgorithm:
     """Gaze Consistency: group clips by matching gaze direction."""
 
     def test_groups_by_category_largest_first(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("r1", gaze_yaw=20.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
@@ -807,7 +807,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_within_group_sorted_by_relevant_angle(self):
         """Left/right categories sort by yaw, up/down by pitch."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("d1", gaze_yaw=0.0, gaze_pitch=20.0, gaze_category="looking_down"), source),
@@ -820,7 +820,7 @@ class TestGazeConsistencyAlgorithm:
         assert ids == ["d2", "d1", "u1"]
 
     def test_clips_without_gaze_appended_at_end(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("no_gaze"), source),
@@ -831,7 +831,7 @@ class TestGazeConsistencyAlgorithm:
         assert ids == ["r1", "no_gaze"]
 
     def test_no_clips_have_gaze_returns_original_order(self):
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a"), source),
@@ -843,7 +843,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_all_same_category_stable_order_by_angle(self):
         """When all clips share a category, order by angle within that category."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("c", gaze_yaw=5.0, gaze_pitch=0.0, gaze_category="at_camera"), source),
@@ -857,7 +857,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_mixed_with_and_without_gaze(self):
         """Gaze clips sorted by category, no-gaze clips appended."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("no1"), source),
@@ -874,7 +874,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_gaze_consistency_groups_by_category_largest_first(self):
         """gaze_consistency groups clips by category with the largest group first."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("r1", gaze_yaw=10.0, gaze_category="looking_right"), source),
@@ -892,7 +892,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_gaze_consistency_without_gaze_appended(self):
         """Clips without gaze data are appended at the end."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("no_gaze"), source),
@@ -904,7 +904,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_gaze_consistency_intra_group_sort(self):
         """Within a category group, clips are sorted by the relevant angle."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("u1", gaze_pitch=-15.0, gaze_category="looking_up"), source),
@@ -917,7 +917,7 @@ class TestGazeConsistencyAlgorithm:
 
     def test_gaze_sort_invalid_direction_raises(self):
         """gaze_sort raises ValueError for unrecognized direction strings."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a", gaze_yaw=5.0, gaze_category="at_camera"), source),

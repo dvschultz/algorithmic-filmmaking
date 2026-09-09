@@ -31,9 +31,6 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
-from core.operations.downloads import (
-    calculate_download_timeout as _calculate_download_timeout,
-)
 from core.spine.sources import find_source_by_path, add_source_if_missing
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from core.operations.detection import StaleDetectionResult
@@ -104,16 +101,12 @@ from core.analysis_dependencies import get_operation_feature_candidates
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
 )
-from ui.workers.base import CancellableWorker, summarize_messages
-from ui.workers.cinematography_worker import CinematographyWorker
+from ui.workers.base import summarize_messages
 from ui.workers.color_worker import ColorAnalysisWorker
 from ui.workers.shot_type_worker import ShotTypeWorker
 from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
-from ui.workers.face_detection_worker import FaceDetectionWorker
-from ui.workers.gaze_worker import GazeAnalysisWorker
-from ui.workers.embedding_worker import EmbeddingAnalysisWorker
 from ui.workers.description_worker import DescriptionWorker
 from ui.workers.custom_query_worker import CustomQueryWorker
 from ui.workers.export_worker import ExportBundleWorker
@@ -5451,7 +5444,9 @@ class MainWindow(QMainWindow):
             self._rendered_sequence_preview_lease = None
             self._rendered_sequence_preview_stamp = None
         self._rendered_sequence_preview_path = Path(path)
-        self.sequence_tab.comparison_panel.refresh()
+        panel = getattr(self.sequence_tab, "comparison_panel", None)
+        if panel is not None:
+            panel.refresh()  # A/B "preview ready" state
         self._rendered_sequence_preview_signature = signature
         self._rendered_sequence_preview_profile = profile_label
         self.progress_bar.setVisible(False)
@@ -8923,8 +8918,9 @@ class MainWindow(QMainWindow):
         analysis_workers += tuple(worker for controller in clip_analyses for worker in controller.workers.values())
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        variation_worker = getattr(self.sequence_tab, "_variation_worker", None)
-        generation_worker = getattr(self.sequence_tab, "_sequence_worker", None)
+        sequence_tab = getattr(self, "sequence_tab", None)
+        variation_worker = getattr(sequence_tab, "_variation_worker", None)
+        generation_worker = getattr(sequence_tab, "_sequence_worker", None)
         active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_project_loads", ())) + tuple(getattr(self, "_active_legacy_reuses", ())) + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker, variation_worker, generation_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()

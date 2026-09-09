@@ -31,4 +31,4 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ scene_ripper_mcp/tests/ -v --tb=short

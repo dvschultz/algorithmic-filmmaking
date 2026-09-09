@@ -122,7 +122,7 @@ class TestDINOv2Embeddings:
 
     def test_embedding_model_tag_set_in_remix(self, tmp_path, monkeypatch):
         """Both sequencing prerequisites preserve the computed model identity."""
-        from core.remix import generate_sequence
+        from tests.remix_compat import generate_sequence
         from tests.test_description_operations import project_with_thumbnails
 
         project = project_with_thumbnails(tmp_path, 1)

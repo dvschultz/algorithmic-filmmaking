@@ -34,6 +34,7 @@ from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
 from ui.workers.variation_worker import VariationWorker
 from core.cost_estimates import estimate_sequence_cost
+from core.remix import run_registry_algorithm
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.feature_registry import check_feature_ready
 from core.settings import get_llm_api_key, get_replicate_api_key, load_settings, save_settings
@@ -2964,34 +2965,6 @@ class SequenceTab(BaseTab):
                     f"Gaze filter active: {count}/{total} clips match '{_display_label}'"
                 )
 
-    @staticmethod
-    def _run_generation(
-        algorithm: str,
-        clips: list,
-        *,
-        direction: Optional[str] = None,
-        seed: Optional[int] = None,
-        no_color_handling: Optional[str] = None,
-        transform_options: Optional[dict] = None,
-        parameters: Optional[dict] = None,
-    ) -> tuple[list, object]:
-        """Run synchronous generation through the registry.
-
-        Legacy keyword translation lives in ``run_registry_algorithm``;
-        explicit ``parameters`` override it. Returns the ordered
-        (Clip, Source) list and the recipe.
-        """
-        from core.remix import run_registry_algorithm
-
-        run = run_registry_algorithm(
-            algorithm, clips, direction=direction, seed=seed,
-            no_color_handling=no_color_handling, transform_options=transform_options,
-            parameters=parameters,
-        )
-        if run is None:
-            raise ValueError("Generation was cancelled")
-        return run.ordered_clips, run.recipe
-
     def generate_and_apply(
         self,
         algorithm: str,
@@ -3044,11 +3017,14 @@ class SequenceTab(BaseTab):
                 self.set_chromatic_color_bar_enabled(bool(show_chromatic_color_bar), emit_signal=False)
             proposal = self._prepare_sequence_draft(algorithm.lower()) if self._project else None
             # Generate sequence
-            sorted_clips, recipe = self._run_generation(
+            run = run_registry_algorithm(
                 algorithm.lower(), clips, direction=direction, seed=seed,
                 no_color_handling=no_color_handling, transform_options=transform_options,
                 parameters=parameters,
             )
+            if run is None:
+                raise ValueError("Generation was cancelled")
+            sorted_clips, recipe = run.ordered_clips, run.recipe
 
             # Create new sequence and apply to timeline
             generated_sequence = self._create_and_activate_sequence(algorithm.lower(), proposal=proposal)
@@ -3327,9 +3303,12 @@ class SequenceTab(BaseTab):
         generated_sequence = None
         try:
             # Generate sorted sequence
-            sorted_clips, recipe = self._run_generation(
+            run = run_registry_algorithm(
                 algorithm.lower(), clips_with_sources, direction=direction, seed=seed,
             )
+            if run is None:
+                raise ValueError("Generation was cancelled")
+            sorted_clips, recipe = run.ordered_clips, run.recipe
 
             # Create new sequence and populate timeline
             generated_sequence = self._create_and_activate_sequence(algorithm.lower())

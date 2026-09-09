@@ -267,11 +267,13 @@ def test_real_worker_delivers_on_owner_thread_and_releases_draft(
     gate = Event()
     pairs = [(project.clips[0], project.sources[0])]
 
-    def compute(**kwargs):
-        assert gate.wait(2)
-        return pairs
+    def compute(algorithm, clips, **kwargs):
+        from types import SimpleNamespace
 
-    monkeypatch.setattr("core.remix.generate_sequence", compute)
+        assert gate.wait(2)
+        return SimpleNamespace(ordered_clips=pairs, recipe=None)
+
+    monkeypatch.setattr("core.remix.run_registry_algorithm", compute)
     monkeypatch.setattr("ui.tabs.sequence_tab.estimate_sequence_cost", lambda *args, **kwargs: [])
     errors = Mock()
     monkeypatch.setattr("ui.tabs.sequence_tab.QMessageBox.critical", errors)

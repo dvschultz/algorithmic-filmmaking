@@ -136,6 +136,13 @@ SPINE_MODULES: tuple[str, ...] = (
     "models.recipe",
     "core.remix.engine",
     "core.remix.registry",
+    "core.jobs.sequence_generation",
+    # Headless entry points (U17): the CLI and the MCP server are engine-only.
+    "cli.main",
+    "scene_ripper_mcp.server",
+    "scene_ripper_mcp.tools.sequence",
+    "scene_ripper_mcp.tools.jobs",
+    "scene_ripper_mcp.tools.export",
 )
 
 
@@ -165,6 +172,14 @@ for forbidden in {FORBIDDEN_MODULES!r}:
 
 
 def test_import_boundary_detects_a_forbidden_dependency(monkeypatch):
+    try:
+        import importlib.util
+
+        has_qt = importlib.util.find_spec("PySide6") is not None
+    except ImportError:  # a headless env may block the import outright
+        has_qt = False
+    if not has_qt:
+        pytest.skip("PySide6 is absent in this environment; nothing to detect (headless engine env)")
     monkeypatch.setitem(globals(), "SPINE_MODULES", SPINE_MODULES + ("PySide6.QtCore",))
     with pytest.raises(AssertionError, match="forbidden module: PySide6"):
         test_spine_modules_do_not_load_gui_or_runtime_deps()

@@ -26,7 +26,7 @@ def inputs(tmp_path, monkeypatch):
 
 
 def test_match_cut_does_not_mutate_project_clips(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, _, unload = inputs
     result = generate_sequence("match_cut", clips, len(clips))
@@ -87,7 +87,7 @@ def test_boundary_identity_invalidates_changed_inputs(inputs, monkeypatch, chang
 
 @pytest.mark.parametrize("bad", [[0.0] * 768, [float("nan")] * 768, [1.0]])
 def test_invalid_second_vector_does_not_publish_either_boundary(inputs, bad):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute, _ = inputs
     compute.return_value = ([0.1] * 768, bad)
@@ -99,7 +99,7 @@ def test_invalid_second_vector_does_not_publish_either_boundary(inputs, bad):
 
 
 def test_cancelled_boundary_call_stops_later_clips_and_publication(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute, unload = inputs
     cancel = Event()
@@ -116,7 +116,7 @@ def test_cancelled_boundary_call_stops_later_clips_and_publication(inputs):
 
 
 def test_source_replaced_during_boundary_call_is_rejected(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute, _ = inputs
 
@@ -130,7 +130,7 @@ def test_source_replaced_during_boundary_call_is_rejected(inputs):
 
 
 def test_later_source_change_invalidates_earlier_detached_result(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute, _ = inputs
 
@@ -183,7 +183,7 @@ def test_invalid_range_does_not_load_model(inputs, fps, start, end):
 
 
 def test_verified_boundaries_do_not_load_or_unload_model(inputs, monkeypatch):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute, unload = inputs
     clips = generate_sequence("match_cut", clips, len(clips))
@@ -200,7 +200,7 @@ def test_verified_boundaries_do_not_load_or_unload_model(inputs, monkeypatch):
 
 
 def test_failed_match_cut_refresh_does_not_use_stale_boundary_vectors(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, compute, _ = inputs
     for clip, _ in clips:
@@ -216,7 +216,7 @@ def test_failed_match_cut_refresh_does_not_use_stale_boundary_vectors(inputs):
 
 
 def test_match_cut_cannot_relabel_foreign_thumbnail_vectors(inputs):
-    from core.remix import generate_sequence
+    from tests.remix_compat import generate_sequence
 
     clips, _, _ = inputs
     clips[0][0].embedding = [0.5] * 768
