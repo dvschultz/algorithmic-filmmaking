@@ -105,9 +105,16 @@ def _validate_feature_runtime(name: str) -> None:
 
         ensure_face_detection_runtime_available()
     elif name == "transcribe":
-        from core.transcription import ensure_faster_whisper_runtime_available
+        from core.transcription import ensure_faster_whisper_runtime_available, native_worker_enabled
 
-        ensure_faster_whisper_runtime_available()
+        if native_worker_enabled():
+            # The worker owns the native runtime; importing py-version-specific
+            # wheels into this (possibly frozen) process would fail or corrupt it.
+            from core.runtime_profiles import probe_profile_runtime
+
+            probe_profile_runtime("transcription-whisper")
+        else:
+            ensure_faster_whisper_runtime_available()
     elif name == "transcribe_mlx":
         from core.transcription import ensure_mlx_whisper_runtime_available
 

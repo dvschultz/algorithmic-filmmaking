@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import importlib
 import sys
 import time
 from pathlib import Path
@@ -188,8 +189,35 @@ def raw_stdout(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     return {"ok": True}
 
 
+# --- runtime health -----------------------------------------------------------
+
+# Modules a host may ask this worker to import as a health check. The worker
+# is the only process that ever imports native runtimes, so a host validating
+# an install never loads wheels built for another interpreter.
+PROBE_MODULES: dict[str, str] = {
+    "faster_whisper": "WhisperModel",
+}
+
+
+def probe(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
+    """Import an allowlisted runtime module here and report its version."""
+    name = str(args.get("module", ""))
+    attribute = PROBE_MODULES.get(name)
+    if attribute is None:
+        raise ValueError(f"Unknown probe module {name!r}; known: {', '.join(sorted(PROBE_MODULES))}")
+    module = importlib.import_module(name)
+    getattr(module, attribute)  # a half-installed runtime fails here, like a real import would
+    return {
+        "ok": True, "module": name,
+        "version": str(getattr(module, "__version__", "") or ""),
+        "python": sys.executable,
+        "file": str(getattr(module, "__file__", "") or ""),
+    }
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], WorkerContext], dict[str, Any]]] = {
     "transcribe": transcribe,
+    "probe": probe,
 }
 
 TEST_HANDLERS: dict[str, Callable[[dict[str, Any], WorkerContext], dict[str, Any]]] = {

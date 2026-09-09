@@ -337,14 +337,16 @@ def _module_loaded_from_managed_packages(module: object, packages_dir: Path) -> 
         return True
 
     module_path = getattr(module, "__path__", None)
-    if module_path:
-        try:
-            path_entries = list(module_path)
-        except TypeError:
-            path_entries = []
-        for path_entry in path_entries:
-            if _path_is_within_managed_packages(path_entry, packages_dir):
-                return True
+    try:
+        # A namespace-package ``__path__`` recomputes itself from the parent
+        # module on every access and raises KeyError once that parent has been
+        # dropped from sys.modules; treat any such failure as "not managed".
+        path_entries = list(module_path) if module_path else []
+    except (KeyError, TypeError, AttributeError, RuntimeError):
+        path_entries = []
+    for path_entry in path_entries:
+        if _path_is_within_managed_packages(path_entry, packages_dir):
+            return True
 
     return False
 
@@ -361,15 +363,18 @@ def _reset_imported_package_roots(package_roots: list[str]) -> None:
     except OSError:
         resolved_packages_dir = packages_dir
 
+    # Decide first, pop afterwards: popping a parent while still inspecting its
+    # submodules makes namespace ``__path__`` lookups fail mid-iteration.
+    doomed: list[str] = []
     for module_name in list(sys.modules):
+        if not any(module_name == root or module_name.startswith(f"{root}.") for root in package_roots):
+            continue
         module = sys.modules.get(module_name)
         if module is None or not _module_loaded_from_managed_packages(module, resolved_packages_dir):
             continue
-
-        for root in package_roots:
-            if module_name == root or module_name.startswith(f"{root}."):
-                sys.modules.pop(module_name, None)
-                break
+        doomed.append(module_name)
+    for module_name in doomed:
+        sys.modules.pop(module_name, None)
 
     importlib.invalidate_caches()
 

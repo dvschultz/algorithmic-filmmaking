@@ -489,3 +489,34 @@ def test_filter_already_loaded_packages_with_none_loaded(monkeypatch):
 
     result = _filter_already_loaded_packages(["torch", "ultralytics"])
     assert result == ["torch", "ultralytics"]
+
+
+def test_reset_imported_package_roots_survives_namespace_paths_of_evicted_parents(monkeypatch, tmp_path):
+    """Regression (U13 packaged smoke): a submodule's namespace ``__path__`` recomputes
+    from its parent; once the parent is popped from sys.modules that lookup raises
+    KeyError and used to abort the whole install (`KeyError: 'torch'`)."""
+    from types import ModuleType
+    from importlib._bootstrap_external import _NamespacePath
+
+    packages_dir = tmp_path / "packages"
+    root = packages_dir / "torch"
+    (root / "ops").mkdir(parents=True)
+    (root / "__init__.py").write_text("# managed torch")
+
+    parent = ModuleType("torch")
+    parent.__file__ = str(root / "__init__.py")
+    parent.__path__ = [str(root)]
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    original = {name: sys.modules.get(name) for name in ("torch", "torch.ops")}
+    sys.modules["torch"] = parent  # _NamespacePath reads the parent from sys.modules
+    child = ModuleType("torch.ops")
+    child.__path__ = _NamespacePath("torch.ops", [str(root / "ops")], lambda name, path: None)
+    sys.modules["torch.ops"] = child
+    try:
+        from core.dependency_manager import _reset_imported_package_roots
+
+        _reset_imported_package_roots(["torch"])
+        assert "torch" not in sys.modules and "torch.ops" not in sys.modules
+    finally:
+        for name, module in original.items():
+            _restore_sys_module(name, module)

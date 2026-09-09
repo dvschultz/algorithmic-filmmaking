@@ -398,3 +398,63 @@ def test_source_mode_uses_the_managed_interpreter_when_the_runtime_lives_there(m
     monkeypatch.setattr("importlib.util.find_spec", lambda name: importlib.machinery.ModuleSpec(name, None, origin="/opt/venv/site-packages/faster_whisper/__init__.py"))
     launch = default_launch("transcription")
     assert launch.interpreter == Path(sys.executable) and launch.package_paths == ()
+
+
+# U13 packaged evidence: the host validates an installed runtime through the
+# worker, never by importing interpreter-specific wheels into itself.
+
+def test_probe_runs_in_the_worker_and_restart_family_retires_it(supervisor):
+    first = supervisor.worker("test")
+    assert "probe" in first.capabilities
+    with pytest.raises(WorkerTaskError, match="Unknown probe module"):
+        supervisor.run("test", "probe", {"module": "os"})  # allowlisted modules only
+    try:
+        result = supervisor.run("test", "probe", {"module": "faster_whisper"})
+    except WorkerTaskError as exc:
+        assert "faster_whisper" in str(exc)  # dependency missing in this checkout
+    else:
+        assert result["ok"] and result["python"] == sys.executable
+    supervisor.restart_family("test")
+    assert not first.alive
+    second = supervisor.worker("test")
+    assert second is not first and second.alive and second.pid != first.pid
+
+
+def test_transcribe_runtime_validation_probes_the_worker_when_isolated(monkeypatch):
+    from core import feature_registry, runtime_profiles
+
+    probed = []
+    monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile: probed.append(profile) or {"ok": True})
+    monkeypatch.setattr(
+        "core.transcription.ensure_faster_whisper_runtime_available",
+        lambda: (_ for _ in ()).throw(AssertionError("host must not import faster_whisper")),
+    )
+    feature_registry._validate_feature_runtime("transcribe")
+    assert probed == ["transcription-whisper"]
+    monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "0")
+    called = []
+    monkeypatch.setattr("core.transcription.ensure_faster_whisper_runtime_available", lambda: called.append(True))
+    feature_registry._validate_feature_runtime("transcribe")
+    assert called == [True]
+
+
+def test_probe_profile_runtime_maps_worker_failures_to_runtime_errors(monkeypatch, tmp_path):
+    from core import runtime_profiles, runtime_supervisor
+
+    sup = RuntimeSupervisor(staging_root=tmp_path / "staging")
+    sup.launch_factory = lambda family: _launch()
+    monkeypatch.setattr(runtime_supervisor, "_default", sup)
+    monkeypatch.setattr(runtime_supervisor, "default_supervisor", lambda: sup)
+    try:
+        broken = runtime_profiles.RuntimeProfile(
+            id="broken", family="test", features=(), task_kinds=(), description="", probe_module="not_allowlisted",
+        )
+        monkeypatch.setitem(runtime_profiles.PROFILES, "broken", broken)
+        with pytest.raises(RuntimeError, match="not_allowlisted runtime is incomplete"):
+            runtime_profiles.probe_profile_runtime("broken")
+        plain = runtime_profiles.RuntimeProfile(id="plain", family="test", features=(), task_kinds=(), description="")
+        monkeypatch.setitem(runtime_profiles.PROFILES, "plain", plain)
+        assert runtime_profiles.probe_profile_runtime("plain") == {"ok": True, "profile": "plain", "probed": False}
+    finally:
+        sup.shutdown()

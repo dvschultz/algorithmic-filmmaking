@@ -587,6 +587,18 @@ class RuntimeSupervisor:
                         self._workers.pop(family, None)
                 raise
 
+    def restart_family(self, family: str) -> None:
+        """Retire the family's warm worker so the next task starts a fresh one.
+
+        Required after installing or repairing packages: a running worker keeps
+        the old modules loaded and would never see the new install.
+        """
+        with self._family_lock(family):
+            with self._guard:
+                worker = self._workers.pop(family, None)
+            if worker is not None:
+                worker.close()
+
     def shutdown(self) -> None:
         with self._guard:
             workers = list(self._workers.values())
