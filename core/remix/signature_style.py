@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING, Optional
 
 from core.analysis.color import _SATURATION_THRESHOLD, rgb_to_hsv
 from core.remix.drawing_segment import DrawingSegment
+from core.remix.engine import (
+    AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+)
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
@@ -553,90 +556,82 @@ def check_missing_analysis(
     return missing
 
 
-def _definition():
-    from core.remix.engine import (
-        AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+
+class SignatureStyleDefinition(AlgorithmDefinition):
+    """Interpret a drawing as an editing guide and match clips to its segments.
+
+    ``drawing_path`` is a PNG asset (the desktop canvas is saved to one
+    before generation). Parametric mode samples the drawing directly; VLM
+    mode asks a vision model for segment qualities. The interpreted
+    segments are provider output so recipes replay without the model.
+    """
+
+    key = "signature_style"
+    version = 1
+    kind = "provider"
+    provider = True
+    long_running = True
+    allow_duplicates = True
+    prerequisites = ("colors",)
+    asset_parameters = ("drawing_path",)
+    parameters = (
+        ParameterSpec("drawing_path", "string", "", "PNG drawing used as the editing guide"),
+        ParameterSpec("mode", "string", "parametric", "parametric or vlm", choices=("parametric", "vlm")),
+        ParameterSpec("total_duration_seconds", "number", 60.0, "Target sequence duration", minimum=1.0, maximum=36000.0),
+        ParameterSpec("sample_count", "integer", 64, "Parametric: number of drawing samples", minimum=4, maximum=512),
+        ParameterSpec("fps", "number", 30.0, "Timeline frame rate used to size segments", minimum=1.0, maximum=240.0),
     )
 
-    class SignatureStyleDefinition(AlgorithmDefinition):
-        """Interpret a drawing as an editing guide and match clips to its segments.
+    def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
+        from core.remix.drawing_image import DrawingImage
 
-        ``drawing_path`` is a PNG asset (the desktop canvas is saved to one
-        before generation). Parametric mode samples the drawing directly; VLM
-        mode asks a vision model for segment qualities. The interpreted
-        segments are provider output so recipes replay without the model.
-        """
+        resources = resources or {}
+        segments = resources.get("segments")
+        if segments is None:
+            if not parameters["drawing_path"]:
+                raise ValueError("drawing_path is required")
+            image = resources.get("image") or DrawingImage.load(parameters["drawing_path"])
+            if parameters["mode"] == "parametric":
+                if progress:
+                    progress("Sampling drawing...")
+                found = sample_drawing_parametric(
+                    image, parameters["total_duration_seconds"], parameters["sample_count"],
+                )
+            else:
+                from core.remix.drawing_vlm import interpret_drawing_vlm
 
-        key = "signature_style"
-        version = 1
-        kind = "provider"
-        provider = True
-        allow_duplicates = True
-        prerequisites = ("colors",)
-        asset_parameters = ("drawing_path",)
-        parameters = (
-            ParameterSpec("drawing_path", "string", "", "PNG drawing used as the editing guide"),
-            ParameterSpec("mode", "string", "parametric", "parametric or vlm", choices=("parametric", "vlm")),
-            ParameterSpec("total_duration_seconds", "number", 60.0, "Target sequence duration", minimum=1.0, maximum=36000.0),
-            ParameterSpec("sample_count", "integer", 64, "Parametric: number of drawing samples", minimum=4, maximum=512),
-            ParameterSpec("fps", "number", 30.0, "Timeline frame rate used to size segments", minimum=1.0, maximum=240.0),
+                client = resources.get("llm_client")
+                if client is None:
+                    from core.llm_client import LLMClient, create_provider_config_from_settings
+
+                    client = LLMClient(create_provider_config_from_settings())
+
+                def on_progress(current, total):
+                    if progress:
+                        progress(f"Interpreting slice {current} of {total}...")
+
+                if progress:
+                    progress("Analyzing drawing with VLM...")
+                found = interpret_drawing_vlm(
+                    image, parameters["total_duration_seconds"], client, progress_callback=on_progress,
+                )
+            segments = [segment.__dict__.copy() for segment in found]
+        return Prepared(list(inputs), {"segments": [dict(s) for s in segments]})
+
+    def generate(self, inputs, parameters, rng, context=None):
+        from core.remix.drawing_segment import DrawingSegment
+
+        raw = list((context or {}).get("segments") or [])
+        segments = [DrawingSegment(**{k: (tuple(v) if k == "target_color" and v is not None else v) for k, v in s.items()}) for s in raw]
+        if not segments:
+            return SequenceProposal("provider", (), notes=("No drawing content found",))
+        matches = match_clips_to_segments(segments, list(inputs), allow_reuse=True)
+        placed = build_sequence_from_matches(matches, parameters["fps"])
+        entries = tuple(
+            ProposedEntry(clip.id, source.id, in_point, out_point)
+            for clip, source, in_point, out_point in placed
         )
-
-        def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
-            from core.remix.drawing_image import DrawingImage
-
-            resources = resources or {}
-            segments = resources.get("segments")
-            if segments is None:
-                if not parameters["drawing_path"]:
-                    raise ValueError("drawing_path is required")
-                image = resources.get("image") or DrawingImage.load(parameters["drawing_path"])
-                if parameters["mode"] == "parametric":
-                    if progress:
-                        progress("Sampling drawing...")
-                    found = sample_drawing_parametric(
-                        image, parameters["total_duration_seconds"], parameters["sample_count"],
-                    )
-                else:
-                    from core.remix.drawing_vlm import interpret_drawing_vlm
-
-                    client = resources.get("llm_client")
-                    if client is None:
-                        from core.llm_client import get_llm_client
-
-                        client = get_llm_client()
-
-                    def on_progress(current, total):
-                        if progress:
-                            progress(f"Interpreting slice {current} of {total}...")
-
-                    if progress:
-                        progress("Analyzing drawing with VLM...")
-                    found = interpret_drawing_vlm(
-                        image, parameters["total_duration_seconds"], client, progress_callback=on_progress,
-                    )
-                segments = [segment.__dict__.copy() for segment in found]
-            return Prepared(list(inputs), {"segments": [dict(s) for s in segments]})
-
-        def generate(self, inputs, parameters, rng, context=None):
-            from core.remix.drawing_segment import DrawingSegment
-
-            raw = list((context or {}).get("segments") or [])
-            segments = [DrawingSegment(**{k: (tuple(v) if k == "target_color" and v is not None else v) for k, v in s.items()}) for s in raw]
-            if not segments:
-                return SequenceProposal("provider", (), notes=("No drawing content found",))
-            matches = match_clips_to_segments(segments, list(inputs), allow_reuse=True)
-            placed = build_sequence_from_matches(matches, parameters["fps"])
-            entries = tuple(
-                ProposedEntry(clip.id, source.id, in_point, out_point)
-                for clip, source, in_point, out_point in placed
-            )
-            return SequenceProposal(
-                "provider", entries, notes=(f"{len(segments)} drawing segments, {len(entries)} clips matched",),
-                provider_outputs={"segments": raw, "mode": parameters["mode"]},
-            )
-
-    return SignatureStyleDefinition
-
-
-SignatureStyleDefinition = _definition()
+        return SequenceProposal(
+            "provider", entries, notes=(f"{len(segments)} drawing segments, {len(entries)} clips matched",),
+            provider_outputs={"segments": raw, "mode": parameters["mode"]},
+        )

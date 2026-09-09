@@ -52,51 +52,52 @@ class _EyesWorker(CancellableWorker):
         self._clips = clips
         self._mode = mode
         self._params = params
+        self.recipe = None  # SequenceRecipe once generation has run
 
     def run(self):
-        """Run the selected gaze sequencing algorithm."""
+        """Run the selected gaze sequencing algorithm through the registry."""
         self._log_start()
         try:
-            from core.remix.gaze import eyeline_match, gaze_filter, gaze_rotation
+            from core.remix import run_registry_algorithm
 
             if self.is_cancelled():
                 self._log_cancelled()
                 return
 
-            if self._mode == "eyeline_match":
-                self.progress_message.emit("Pairing eyeline matches...")
-                result = eyeline_match(
-                    self._clips,
-                    tolerance=self._params.get("tolerance", 20.0),
-                )
-            elif self._mode == "filter":
-                category = self._params.get("category", "at_camera")
-                self.progress_message.emit(f"Filtering by gaze: {category}...")
-                result = gaze_filter(self._clips, category=category)
-            elif self._mode == "rotation":
-                self.progress_message.emit("Computing gaze rotation sequence...")
-                result = gaze_rotation(
-                    self._clips,
-                    axis=self._params.get("axis", "yaw"),
-                    range_start=self._params.get("range_start", -30.0),
-                    range_end=self._params.get("range_end", 30.0),
-                    ascending=self._params.get("ascending", True),
-                )
-            else:
+            mode = {"filter": "gaze_filter", "rotation": "gaze_rotation"}.get(self._mode, self._mode)
+            if mode not in ("eyeline_match", "gaze_filter", "gaze_rotation"):
                 self.error.emit(f"Unknown mode: {self._mode}")
                 return
-
-            if self.is_cancelled():
+            labels = {
+                "eyeline_match": "Pairing eyeline matches...",
+                "gaze_filter": f"Filtering by gaze: {self._params.get('category', 'at_camera')}...",
+                "gaze_rotation": "Computing gaze rotation sequence...",
+            }
+            self.progress_message.emit(labels[mode])
+            run = run_registry_algorithm(
+                "eyes_without_a_face", self._clips,
+                parameters={
+                    "mode": mode,
+                    "tolerance": float(self._params.get("tolerance", 20.0)),
+                    "category": self._params.get("category", "at_camera") if mode == "gaze_filter" else "",
+                    "axis": self._params.get("axis", "yaw"),
+                    "range_start": float(self._params.get("range_start", -30.0)),
+                    "range_end": float(self._params.get("range_end", 30.0)),
+                    "ascending": bool(self._params.get("ascending", True)),
+                },
+                cancel_event=self._cancel_event,
+            )
+            if run is None or self.is_cancelled():
                 self._log_cancelled()
                 return
-
-            self.finished_sequence.emit(result)
+            self.recipe = run.recipe
+            self.finished_sequence.emit(run.ordered_clips)
             self._log_complete()
 
         except Exception as e:
             if not self.is_cancelled():
                 logger.error(f"Eyes Without a Face generation error: {e}", exc_info=True)
-                self.error.emit("Gaze sequencing failed. Check logs for details.")
+                self.error.emit(str(e) if isinstance(e, ValueError) and str(e) else "Gaze sequencing failed. Check logs for details.")
 
 
 class EyesWithoutAFaceDialog(QDialog):
@@ -481,6 +482,11 @@ class EyesWithoutAFaceDialog(QDialog):
         self.progress_label.setText(message)
 
     @Slot(list)
+    @property
+    def recipe(self):
+        """Recipe of the emitted sequence, or None."""
+        return getattr(self.worker, "recipe", None)
+
     def _on_finished(self, sequence: list):
         """Handle generation completion."""
         if not sequence:

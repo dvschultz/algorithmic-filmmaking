@@ -670,15 +670,24 @@ class StorytellerDialog(QDialog):
              "narrative_role": line.narrative_role, "line_number": line.line_number}
             for line in self.narrative_lines
         ]
-        run = run_registry_algorithm(
-            "storyteller", pairs,
-            parameters={
-                "theme": self._last_theme or "", "structure": self._last_structure,
-                "target_duration_minutes": self._last_duration or 0,
-                "order_override": [line.clip_id for line in reordered_lines],
-            },
-            resources={"narrative_lines": composed},
-        )
+        try:
+            run = run_registry_algorithm(
+                "storyteller", pairs,
+                parameters={
+                    "theme": self._last_theme or "", "structure": self._last_structure,
+                    "target_duration_minutes": self._last_duration or 0,
+                    "order_override": (
+                        [line.clip_id for line in reordered_lines]
+                        if [line.clip_id for line in reordered_lines] != [line.clip_id for line in self.narrative_lines]
+                        else []
+                    ),
+                },
+                resources={"narrative_lines": composed},
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the dialog alive on bad inputs
+            logger.error("%s recipe publication failed: %s", "storyteller", exc)
+            QMessageBox.critical(self, "Error", f"Could not build the sequence: {exc}")
+            return
         self.recipe = run.recipe
         sequence = run.ordered_clips
 

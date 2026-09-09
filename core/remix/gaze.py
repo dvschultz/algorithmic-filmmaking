@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from core.remix.engine import (
+    AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,56 +191,47 @@ def gaze_rotation(
     return result
 
 
-def _definition():
-    from core.remix.engine import (
-        AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
+
+class EyesWithoutAFaceDefinition(AlgorithmDefinition):
+    """Eyeline matching, gaze filtering, or monotonic gaze rotation."""
+
+    key = "eyes_without_a_face"
+    version = 1
+    prerequisites = ("gaze",)
+    parameters = (
+        ParameterSpec(
+            "mode", "string", "eyeline_match", "eyeline_match, gaze_filter, or gaze_rotation",
+            choices=("eyeline_match", "gaze_filter", "gaze_rotation"),
+        ),
+        ParameterSpec("tolerance", "number", 20.0, "Eyeline: max |yaw_a + yaw_b| in degrees", minimum=0.0, maximum=180.0),
+        ParameterSpec(
+            "category", "string", "", "Gaze filter: category to keep",
+            choices=("", "at_camera", "looking_left", "looking_right", "looking_up", "looking_down"),
+        ),
+        ParameterSpec("axis", "string", "yaw", "Rotation axis", choices=("yaw", "pitch")),
+        ParameterSpec("range_start", "number", -30.0, "Rotation: minimum angle in degrees", minimum=-180.0, maximum=180.0),
+        ParameterSpec("range_end", "number", 30.0, "Rotation: maximum angle in degrees", minimum=-180.0, maximum=180.0),
+        ParameterSpec("ascending", "boolean", True, "Rotation: ascending angle order"),
     )
 
-    class EyesWithoutAFaceDefinition(AlgorithmDefinition):
-        """Eyeline matching, gaze filtering, or monotonic gaze rotation."""
-
-        key = "eyes_without_a_face"
-        version = 1
-        prerequisites = ("gaze",)
-        parameters = (
-            ParameterSpec(
-                "mode", "string", "eyeline_match", "eyeline_match, gaze_filter, or gaze_rotation",
-                choices=("eyeline_match", "gaze_filter", "gaze_rotation"),
-            ),
-            ParameterSpec("tolerance", "number", 20.0, "Eyeline: max |yaw_a + yaw_b| in degrees", minimum=0.0, maximum=180.0),
-            ParameterSpec(
-                "category", "string", "", "Gaze filter: category to keep",
-                choices=("", "at_camera", "looking_left", "looking_right", "looking_up", "looking_down"),
-            ),
-            ParameterSpec("axis", "string", "yaw", "Rotation axis", choices=("yaw", "pitch")),
-            ParameterSpec("range_start", "number", -30.0, "Rotation: minimum angle in degrees", minimum=-180.0, maximum=180.0),
-            ParameterSpec("range_end", "number", 30.0, "Rotation: maximum angle in degrees", minimum=-180.0, maximum=180.0),
-            ParameterSpec("ascending", "boolean", True, "Rotation: ascending angle order"),
-        )
-
-        def generate(self, inputs, parameters, rng, context=None):
-            mode = parameters["mode"]
-            items = list(inputs)
-            if mode == "eyeline_match":
-                ordered = eyeline_match(items, tolerance=parameters["tolerance"])
-            elif mode == "gaze_filter":
-                if not parameters["category"]:
-                    raise ValueError("gaze_filter requires a category")
-                ordered = gaze_filter(items, category=parameters["category"])
-            else:
-                if parameters["range_end"] < parameters["range_start"]:
-                    raise ValueError("range_end must not be below range_start")
-                ordered = gaze_rotation(
-                    items, axis=parameters["axis"], range_start=parameters["range_start"],
-                    range_end=parameters["range_end"], ascending=parameters["ascending"],
-                )
-            missing = sum(1 for clip, _ in items if clip.gaze_category is None)
-            notes = (f"{missing} clips lack gaze data (appended at end)",) if missing else ()
-            return SequenceProposal(
-                "ordering", tuple(ProposedEntry(c.id, s.id) for c, s in ordered), notes=notes,
+    def generate(self, inputs, parameters, rng, context=None):
+        mode = parameters["mode"]
+        items = list(inputs)
+        if mode == "eyeline_match":
+            ordered = eyeline_match(items, tolerance=parameters["tolerance"])
+        elif mode == "gaze_filter":
+            if not parameters["category"]:
+                raise ValueError("gaze_filter requires a category")
+            ordered = gaze_filter(items, category=parameters["category"])
+        else:
+            if parameters["range_end"] < parameters["range_start"]:
+                raise ValueError("range_end must not be below range_start")
+            ordered = gaze_rotation(
+                items, axis=parameters["axis"], range_start=parameters["range_start"],
+                range_end=parameters["range_end"], ascending=parameters["ascending"],
             )
-
-    return EyesWithoutAFaceDefinition
-
-
-EyesWithoutAFaceDefinition = _definition()
+        missing = sum(1 for clip, _ in items if clip.gaze_category is None)
+        notes = (f"{missing} clips lack gaze data (appended at end)",) if missing else ()
+        return SequenceProposal(
+            "ordering", tuple(ProposedEntry(c.id, s.id) for c, s in ordered), notes=notes,
+        )

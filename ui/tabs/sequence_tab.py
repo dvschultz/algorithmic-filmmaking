@@ -1741,14 +1741,17 @@ class SequenceTab(BaseTab):
         from ui.dialogs.eyes_without_a_face_dialog import EyesWithoutAFaceDialog
 
         dialog = EyesWithoutAFaceDialog(clips=clips, parent=self)
-        dialog.sequence_ready.connect(self._apply_eyes_without_a_face_sequence)
+        dialog.sequence_ready.connect(
+            lambda clips_, owner=dialog: self._apply_eyes_without_a_face_sequence(clips_, recipe=owner.recipe)
+        )
         dialog.exec()
 
     @Slot(list)
-    def _apply_eyes_without_a_face_sequence(self, sequence_clips: list):
+    def _apply_eyes_without_a_face_sequence(self, sequence_clips: list, recipe=None):
         """Apply the sequence from Eyes Without a Face dialog."""
         self._apply_dialog_sequence(
             sequence_clips, "eyes_without_a_face", "Eyes Without a Face",
+            sequence_metadata={"recipe": recipe},
         )
 
     def _show_dice_roll_dialog(self, clips: list):

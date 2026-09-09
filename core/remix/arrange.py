@@ -108,6 +108,7 @@ class ProximityDefinition(_DirectionalDefinition):
 
 class _ScalarDefinition(_DirectionalDefinition):
     operation: str = ""
+    long_running = True
 
     def prepare(self, inputs, parameters, *, cancel_event: Event | None = None, progress=None, resources=None):
         # The package-level helpers are the patchable prerequisite seam shared

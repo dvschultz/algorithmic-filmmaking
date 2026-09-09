@@ -3513,6 +3513,57 @@ def list_sorting_algorithms(project) -> dict:
     return _impl(project)
 
 
+def _entries_from_result(project, result: dict) -> list:
+    """(Clip, Source) pairs for a spine result's clip order, skipping unknown ids."""
+    entries = []
+    for clip_id in result.get("clip_ids", []):
+        clip = project.clips_by_id.get(clip_id)
+        source = project.sources_by_id.get(clip.source_id) if clip else None
+        if clip is not None and source is not None:
+            entries.append((clip, source))
+    return entries
+
+
+@tools.register(
+    description="Generate a sequence with any registry algorithm using its own parameters "
+                "(see list_sorting_algorithms 'engine' schemas). Covers every sequencer, including "
+                "word_sequencer, word_llm_composer and free_association. Publishes a new sequence "
+                "with a recipe as one undoable edit. Provider-assisted algorithms call their model "
+                "during this tool.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def generate_sequence(
+    project,
+    algorithm: str,
+    parameters: Optional[dict] = None,
+    clip_ids: Optional[list[str]] = None,
+    seed: Optional[int] = None,
+    name: Optional[str] = None,
+    gui_state=None,
+) -> dict:
+    """Run a registry algorithm on the selected (or given) clips.
+
+    Args:
+        algorithm: Registry algorithm key
+        parameters: Algorithm parameters (registry contract; unknown keys are rejected)
+        clip_ids: Clip IDs in candidate order; defaults to the current selection, then all enabled clips
+        seed: Explicit seed for seeded algorithms (0 is a valid seed)
+        name: Sequence name
+    """
+    from core.spine.sequences import generate_sequence as _generate
+
+    if clip_ids is None and gui_state is not None:
+        selected = getattr(gui_state, "analyze_selected_ids", None) or getattr(gui_state, "cut_selected_ids", None)
+        if selected:
+            clip_ids = [cid for cid in selected if cid in project.clips_by_id]
+    result = _generate(project, algorithm, clip_ids=clip_ids, parameters=parameters, seed=seed, name=name)
+    if result.get("success"):
+        _add_sequence_summary_for_agent(project, result, _entries_from_result(project, result))
+    return result
+
+
 @tools.register(
     description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
                 "Available algorithms: color, duration, brightness, volume, "
@@ -3760,7 +3811,7 @@ def generate_eyes_without_a_face(
     if result.get("success"):
         result["algorithm"] = f"eyes_without_a_face ({mode})"
         result["mode"] = mode
-        entries = [(project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id]) for c in result["clip_ids"]]
+        entries = _entries_from_result(project, result)
         _add_sequence_summary_for_agent(project, result, entries)
     return result
 
@@ -3854,10 +3905,7 @@ def generate_exquisite_corpus(
     sequence = next((s for s in project.sequences if s.id == result["sequence_id"]), None)
     poem = sequence.readable_recipe.provider_outputs.get("poem", []) if sequence and sequence.readable_recipe else []
     result.update({"algorithm": "exquisite_corpus", "poem_lines": len(poem), "mood": mood, "form": form})
-    entries = [
-        (project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id])
-        for c in result["clip_ids"]
-    ]
+    entries = _entries_from_result(project, result)
     return _add_sequence_summary_for_agent(project, result, entries)
 
 
@@ -3922,10 +3970,7 @@ def generate_storyteller(
             return {"success": False, "error": "LLM could not generate a narrative from the available clips."}
         return result
     result.update({"algorithm": "storyteller", "structure": structure, "theme": theme})
-    entries = [
-        (project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id])
-        for c in result["clip_ids"]
-    ]
+    entries = _entries_from_result(project, result)
     return _add_sequence_summary_for_agent(project, result, entries)
 
 
@@ -4014,10 +4059,7 @@ def generate_cassette_tape(
         {"phrase": p, "match_count": sum(1 for m in matches if m["phrase"] == p)}
         for p, _ in phrases_with_counts
     ]
-    entries = [
-        (project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id])
-        for c in result["clip_ids"]
-    ]
+    entries = _entries_from_result(project, result)
     return _add_sequence_summary_for_agent(project, result, entries)
 
 

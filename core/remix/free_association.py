@@ -23,11 +23,15 @@ import random
 from typing import Any, Optional
 
 import numpy as np
+from core.remix.engine import (
+    AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SHORTLIST_SIZE = 12
 DEFAULT_RECENT_RATIONALES = 4  # middle of the 3-5 window
+MAX_PROPOSAL_ATTEMPTS = 3
 
 
 def format_clip_digest(clip: Any) -> str:
@@ -463,12 +467,14 @@ def build_association_chain(
     temperature: Optional[float] = None,
     cancel_event=None,
     progress=None,
+    notes: list[str] | None = None,
 ) -> list[dict]:
     """Run the proposal loop without a human, accepting every proposal.
 
     Returns ordered ``{"clip_id", "rationale"}`` steps; the first step has a
     ``None`` rationale. Stops when ``max_clips`` (0 = no limit) is reached,
-    the pool is empty, or the model returns an unusable proposal.
+    the pool is empty, or the model returns no usable proposal after
+    ``MAX_PROPOSAL_ATTEMPTS`` tries (recorded in ``notes`` when given).
     """
     if not inputs:
         return []
@@ -490,69 +496,76 @@ def build_association_chain(
         recent = [s["rationale"] for s in steps[-DEFAULT_RECENT_RATIONALES:] if s["rationale"]]
         if progress:
             progress(f"Proposing clip {len(steps) + 1}...")
-        short_id, rationale = propose_next_clip(
-            format_clip_full_metadata(current_clip), digests, recent, [],
-            model=model, temperature=temperature,
-        )
-        chosen = short_to_full.get(short_id)
+        chosen = None
+        rationale = ""
+        for attempt in range(MAX_PROPOSAL_ATTEMPTS):
+            try:
+                short_id, rationale = propose_next_clip(
+                    format_clip_full_metadata(current_clip), digests, recent, [],
+                    model=model, temperature=temperature,
+                )
+            except ValueError as exc:  # empty, malformed, or out-of-set reply
+                logger.warning("Free Association proposal %d attempt %d failed: %s", len(steps) + 1, attempt + 1, exc)
+                continue
+            chosen = short_to_full.get(short_id)
+            if chosen is not None:
+                break
         if chosen is None:
+            stopped = f"stopped after {len(steps)} clips: the model gave no usable proposal"
+            if notes is not None:
+                notes.append(stopped)
+            logger.warning("Free Association %s", stopped)
             break
         steps.append({"clip_id": chosen, "rationale": rationale})
         pool = [pair for pair in pool if pair[0].id != chosen]
     return steps
 
 
-def _definition():
-    from core.remix.engine import (
-        AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+
+class FreeAssociationDefinition(AlgorithmDefinition):
+    """Build a sequence one clip at a time with an LLM collaborator.
+
+    The dialog supplies its accepted steps through ``resources["steps"]``;
+    headless callers run the autonomous loop. Steps and rationales are
+    provider output, so reconstruction replays them without model calls.
+    """
+
+    key = "free_association"
+    version = 1
+    kind = "provider"
+    provider = True
+    long_running = True
+    prerequisites = ("describe", "embeddings")
+    parameters = (
+        ParameterSpec("start_clip_id", "string", "", "Clip to open with; empty uses the first input"),
+        ParameterSpec("max_clips", "integer", 0, "Stop after this many clips; 0 places clips until the pool is empty", minimum=0, maximum=500),
+        ParameterSpec("model", "string", "", "LLM model override; empty uses settings"),
     )
 
-    class FreeAssociationDefinition(AlgorithmDefinition):
-        """Build a sequence one clip at a time with an LLM collaborator.
-
-        The dialog supplies its accepted steps through ``resources["steps"]``;
-        headless callers run the autonomous loop. Steps and rationales are
-        provider output, so reconstruction replays them without model calls.
-        """
-
-        key = "free_association"
-        version = 1
-        kind = "provider"
-        provider = True
-        prerequisites = ("describe", "embeddings")
-        parameters = (
-            ParameterSpec("start_clip_id", "string", "", "Clip to open with; empty uses the first input"),
-            ParameterSpec("max_clips", "integer", 0, "Stop after this many clips; 0 places clips until the pool is empty", minimum=0, maximum=500),
-            ParameterSpec("model", "string", "", "LLM model override; empty uses settings"),
-        )
-
-        def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
-            resources = resources or {}
-            steps = resources.get("steps")
-            if steps is None:
-                steps = build_association_chain(
-                    list(inputs), start_clip_id=parameters["start_clip_id"] or None,
-                    max_clips=parameters["max_clips"], model=parameters["model"] or None,
-                    cancel_event=cancel_event, progress=progress,
-                )
-            return Prepared(list(inputs), {"steps": [dict(s) for s in steps]})
-
-        def generate(self, inputs, parameters, rng, context=None):
-            steps = list((context or {}).get("steps") or [])
-            by_id = {clip.id: (clip, source) for clip, source in inputs}
-            entries = []
-            for step in steps:
-                pair = by_id.get(step["clip_id"])
-                if pair is None:
-                    raise ValueError(f"Step references unknown clip {step['clip_id']!r}")
-                clip, source = pair
-                entries.append(ProposedEntry(clip.id, source.id, rationale=step.get("rationale")))
-            return SequenceProposal(
-                "provider", tuple(entries), notes=(f"{len(entries)} accepted proposals",),
-                provider_outputs={"steps": steps},
+    def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
+        resources = resources or {}
+        steps = resources.get("steps")
+        notes: list[str] = []
+        if steps is None:
+            steps = build_association_chain(
+                list(inputs), start_clip_id=parameters["start_clip_id"] or None,
+                max_clips=parameters["max_clips"], model=parameters["model"] or None,
+                cancel_event=cancel_event, progress=progress, notes=notes,
             )
+        return Prepared(list(inputs), {"steps": [dict(s) for s in steps], "notes": notes})
 
-    return FreeAssociationDefinition
-
-
-FreeAssociationDefinition = _definition()
+    def generate(self, inputs, parameters, rng, context=None):
+        steps = list((context or {}).get("steps") or [])
+        by_id = {clip.id: (clip, source) for clip, source in inputs}
+        entries = []
+        for step in steps:
+            pair = by_id.get(step["clip_id"])
+            if pair is None:
+                raise ValueError(f"Step references unknown clip {step['clip_id']!r}")
+            clip, source = pair
+            entries.append(ProposedEntry(clip.id, source.id, rationale=step.get("rationale")))
+        notes = [f"{len(entries)} accepted proposals", *((context or {}).get("notes") or [])]
+        return SequenceProposal(
+            "provider", tuple(entries), notes=tuple(notes),
+            provider_outputs={"steps": steps},
+        )

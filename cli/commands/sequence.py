@@ -61,7 +61,10 @@ def _mutate(ctx: click.Context, project_file: Path, operation) -> None:
     """Load under ownership, apply one spine operation, save when it succeeded."""
     path = own_project(ctx, project_file)
     project = _load(path)
-    result = operation(project)
+    try:
+        result = operation(project)
+    except Exception as exc:  # noqa: BLE001 - provider/network errors become results
+        result = {"success": False, "error": str(exc)}
     if not result.get("success"):
         if _json(ctx):
             output_result(result, as_json=True)
@@ -148,7 +151,10 @@ def recipe(ctx: click.Context, project_file: Path, sequence_id: Optional[str]) -
     """Show a sequence's stored recipe and whether it can be reconstructed."""
     from core.spine.sequences import get_sequence_recipe
 
-    result = get_sequence_recipe(_load(project_file), sequence_id)
+    try:
+        result = get_sequence_recipe(_load(project_file), sequence_id)
+    except Exception as exc:  # noqa: BLE001
+        result = {"success": False, "error": str(exc)}
     if not result.get("success"):
         if _json(ctx):
             output_result(result, as_json=True)

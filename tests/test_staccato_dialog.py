@@ -238,3 +238,31 @@ def test_drums_profile_auto_switch_does_not_schedule_duplicate_reanalysis(
     assert dialog._onset_profile_combo.currentData() == "drums"
     assert starts == []
     assert analyzes == [True]
+
+
+def test_generate_worker_runs_the_registry_and_keeps_the_recipe(qapp, monkeypatch):
+    """The real worker projects a registry run back to the dialog shape and stores the recipe."""
+    from core.analysis.audio import AudioAnalysis
+    from models.clip import Clip, Source
+    from ui.dialogs.staccato_dialog import StaccatoGenerateWorker
+
+    source = Source(id="s", file_path=Path("/tmp/v.mp4"), fps=24.0, duration_seconds=10)
+    clips = [
+        (Clip(id=f"c{i}", source_id="s", start_frame=i * 24, end_frame=(i + 1) * 24, embedding=[1.0 if j == i else 0.0 for j in range(4)]), source)
+        for i in range(3)
+    ]
+    analysis = AudioAnalysis(
+        tempo_bpm=120.0, beat_times=[0.0, 1.0, 2.0], onset_times=[0.0, 1.0, 2.0],
+        onset_strengths=[1.0, 0.5, 0.2], downbeat_times=[0.0], duration_seconds=3.0,
+    )
+    worker = StaccatoGenerateWorker(clips, analysis, "beats", parent=None, project=None, music_path=Path("/tmp/song.wav"))
+    monkeypatch.setattr(worker, "_auto_compute_embeddings", lambda: None)
+    delivered = []
+    worker.finished_sequence.connect(delivered.append)
+    worker.run()
+    assert delivered, "worker did not emit a sequence"
+    result = delivered[0]
+    assert worker.recipe is not None and worker.recipe.algorithm == "staccato"
+    assert worker.recipe.parameters["music_path"] == "/tmp/song.wav"
+    assert [c.id for c, _, _ in result] == [s["clip_id"] for s in worker.recipe.provider_outputs["slots"]]
+    assert result.debug.total_slots == len(result)

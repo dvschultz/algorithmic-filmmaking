@@ -146,12 +146,16 @@ class RoseHobartWorker(CancellableWorker):
                 },
                 cancel_event=self._cancel_event,
                 progress=self.progress_message.emit,
-                resources={"face_cache": self.cache, "on_match": self.match_found.emit},
+                resources={
+                    "face_cache": self.cache, "on_match": self.match_found.emit,
+                    "on_outcome": self._record_outcome,
+                    "install_dependencies": True,  # desktop opt-in, never headless
+                },
             )
             if run is None or self.is_cancelled():
                 self._log_cancelled()
                 return
-            self.outcomes = tuple(run.context.get("face_outcomes", ()))
+            self.outcomes = tuple(run.context.get("face_outcomes", ())) or self.outcomes
             self._reference_execution = run.context.get("reference_execution")
             identity = run.context.get("reference_identity") or {}
             self._reference_packages = (identity.get("runtime") or {}).get("packages")
@@ -162,9 +166,16 @@ class RoseHobartWorker(CancellableWorker):
 
         except Exception as e:
             if not self.is_cancelled():
-                self.failure = "Face matching failed. Check logs for details."
+                self.failure = (
+                    str(e) if isinstance(e, (ValueError, RuntimeError)) and str(e)
+                    else "Face matching failed. Check logs for details."
+                )
                 logger.error(f"Rose Hobart generation error: {e}", exc_info=True)
                 self.error.emit(self.failure)
+
+    def _record_outcome(self, outcome) -> None:
+        """Keep verified face analysis as it arrives so failures still publish it."""
+        self.outcomes = self.outcomes + (outcome,)
 
     def references_current(self) -> bool:
         if self._reference_execution is not None:

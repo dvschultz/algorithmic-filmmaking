@@ -344,6 +344,10 @@ async def generate_sequence(
     """
     from core.spine.sequences import generate_sequence as _generate
 
+    refusal = _refuse_long_running(algorithm)
+    if refusal is not None:
+        return refusal
+
     def operation(project):
         return _generate(
             project, algorithm, clip_ids=clip_ids, parameters=parameters, seed=seed, name=name,
@@ -351,6 +355,25 @@ async def generate_sequence(
         )
 
     return await _editorial_call(project_path, ctx, operation)
+
+
+def _refuse_long_running(algorithm: str) -> str | None:
+    """Keep provider and model-prerequisite algorithms off the serial editorial path."""
+    from core.remix.registry import registry
+
+    definition = registry.get(algorithm) if isinstance(algorithm, str) else None
+    if definition is not None and definition.long_running:
+        return json.dumps({
+            "success": False,
+            "error": {
+                "code": "use_job",
+                "message": (
+                    f"Algorithm {algorithm!r} runs provider or model work; start it with "
+                    "start_generate_sequence (or start_regenerate_sequence) and poll get_job_status."
+                ),
+            },
+        })
+    return None
 
 
 @mcp.tool()
@@ -478,6 +501,24 @@ async def regenerate_sequence(
     offline.
     """
     from core.spine.sequences import regenerate_sequence as _impl
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        from core.spine.project_io import load_with_mtime
+
+        project, _mtime = load_with_mtime(path)
+        target = project.sequence if sequence_id is None else next((s for s in project.sequences if s.id == sequence_id), None)
+        recipe = target.readable_recipe if target is not None else None
+        if recipe is not None:
+            refusal = _refuse_long_running(recipe.algorithm)
+            if refusal is not None:
+                return refusal
+    except Exception as exc:
+        from core.spine.project_io import project_error
+
+        return json.dumps({"success": False, "error": project_error(exc)})
 
     def operation(project):
         return _impl(project, sequence_id, parameters=parameters, seed=seed, keep_seed=keep_seed, name=name)

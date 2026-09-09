@@ -129,3 +129,63 @@ async def test_reconstruction_reports_changed_inputs_without_editing(path, conte
     rebuilt = json.loads(await legacy.reconstruct_sequence(str(path), result["sequence_id"]))
     assert not rebuilt["success"] and "clip1" in rebuilt["error"]
     assert path.read_bytes() == expected
+
+
+@pytest.mark.asyncio
+async def test_start_generate_sequence_job_records_recipe_before_publishing(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from scene_ripper_mcp.jobs.runtime import JobRuntime
+    from scene_ripper_mcp.jobs.store import JobStore
+    from scene_ripper_mcp.tests.test_jobs_tools import _wait_for_status
+    from scene_ripper_mcp.tools.jobs import get_job_result, start_generate_sequence
+    from scene_ripper_mcp.tools.sequence import get_sequence_recipe
+
+    calls = []
+
+    def fake_narrative(clips_with_descriptions, target_duration_minutes, narrative_structure, theme=None, model=None):
+        from core.remix.storyteller import NarrativeLine
+
+        calls.append(1)
+        return [NarrativeLine(clip.id, desc, "beat", i + 1) for i, (clip, desc) in enumerate(reversed(clips_with_descriptions))]
+
+    monkeypatch.setattr("core.remix.storyteller.generate_narrative", fake_narrative)
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"0")
+    sources = [Source(id="s0", file_path=video, fps=25, duration_seconds=30)]
+    clips = [
+        Clip(id=f"clip{i}", source_id="s0", start_frame=i * 25, end_frame=(i + 1) * 25, description=f"scene {i}")
+        for i in range(3)
+    ]
+    project = Project(sources=sources, clips=clips, sequences=[Sequence(name="Active")])
+    path = tmp_path / "job.sceneripper"
+    assert project.save(path)
+
+    store = JobStore(tmp_path / "jobs.db")
+    runtime = JobRuntime(store, max_workers=2)
+    ctx = AsyncMock()
+    ctx.request_context = SimpleNamespace(lifespan_context={"job_store": store, "job_runtime": runtime})
+    try:
+        started = json.loads(await start_generate_sequence(
+            str(path), "storyteller", parameters={"structure": "three_act"}, name="Story", ctx=ctx,
+        ))
+        assert started["success"], started
+        assert _wait_for_status(store, started["task_id"], "completed") == "completed"
+        output = json.loads(await get_job_result(started["task_id"], ctx=ctx))
+        result = output["result"]
+        result = result.get("result", result)
+        assert result["clip_ids"] == ["clip2", "clip1", "clip0"] and result["replayed"] is False
+        assert calls == [1]
+        loaded = Project.load(path)
+        assert loaded.sequence.name == "Story" and loaded.sequence.readable_recipe.algorithm == "storyteller"
+        inspected = json.loads(await get_sequence_recipe(str(path)))
+        assert inspected["recipe"]["provider_outputs"]["narrative"]
+
+        assert not json.loads(await start_generate_sequence(str(path), "nope", ctx=ctx))["success"]
+        assert not json.loads(await start_generate_sequence(str(path), "shuffle", seed=-1, ctx=ctx))["success"]
+        missing_asset = json.loads(await start_generate_sequence(
+            str(path), "staccato", parameters={"music_path": str(tmp_path / "none.wav")}, ctx=ctx,
+        ))
+        assert not missing_asset["success"]
+    finally:
+        runtime.shutdown(wait=True)

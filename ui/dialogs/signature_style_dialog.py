@@ -98,8 +98,10 @@ class SignatureStyleWorker(QThread):
                 resources={"image": self._image, "llm_client": self._llm_client},
             )
             if self._cancelled or run is None:
+                self._discard_drawing()
                 return
             if not run.recipe.realized:
+                self._discard_drawing()
                 if not run.context.get("segments"):
                     self.error.emit(
                         "No drawing content found. Draw something on the canvas first."
@@ -118,9 +120,20 @@ class SignatureStyleWorker(QThread):
             ]
             self.finished_sequence.emit(sequence)
         except Exception as e:
+            self._discard_drawing()
             if not self._cancelled:
                 logger.error(f"Signature Style generation error: {e}")
                 self.error.emit(str(e))
+
+    def _discard_drawing(self) -> None:
+        """Remove the saved canvas when no recipe references it."""
+        path = self.drawing_path
+        self.drawing_path = None
+        if path is not None:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                logger.debug("Could not remove drawing %s", path)
 
     def cancel(self):
         """Cancel the worker."""
@@ -521,8 +534,8 @@ class SignatureStyleDialog(QDialog):
         llm_client = None
         if mode == "vlm":
             try:
-                from core.llm_client import get_llm_client
-                llm_client = get_llm_client()
+                from core.llm_client import LLMClient, create_provider_config_from_settings
+                llm_client = LLMClient(create_provider_config_from_settings())
             except Exception as e:
                 QMessageBox.warning(
                     self, "VLM Not Available",
@@ -557,12 +570,12 @@ class SignatureStyleDialog(QDialog):
         """Update progress label."""
         self.progress_label.setText(message)
 
-    @Slot(list)
     @property
     def recipe(self):
         """Recipe of the emitted sequence, or None."""
         return getattr(self.worker, "recipe", None)
 
+    @Slot(list)
     def _on_finished(self, sequence: list):
         """Handle generation completion."""
         self.sequence_ready.emit(sequence)

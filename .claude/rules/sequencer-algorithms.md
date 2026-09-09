@@ -28,6 +28,7 @@ Source of truth: `ui/algorithm_config.py`. Dialog-based algorithms have `is_dial
 | `signature_style` | Signature Style | colors | yes |
 | `rose_hobart` | Rose Hobart | — | yes |
 | `staccato` | Staccato | embeddings | yes |
+| `cassette_tape` | Cassette Tape | transcribe | yes |
 | `gaze_sort` | Gaze Sort | gaze | |
 | `gaze_consistency` | Gaze Consistency | gaze | |
 | `eyes_without_a_face` | Eyes Without a Face | gaze | yes |

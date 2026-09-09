@@ -658,14 +658,23 @@ class ExquisiteCorpusDialog(QDialog):
             {"text": line.text, "clip_id": line.clip_id, "line_number": line.line_number}
             for line in self.poem_lines
         ]
-        run = run_registry_algorithm(
-            "exquisite_corpus", pairs,
-            parameters={
-                "mood": self._last_mood, "length": self._last_length, "form": self._last_form,
-                "order_override": [line.clip_id for line in reordered_lines],
-            },
-            resources={"poem_lines": composed, "clip_texts": self._clip_texts()},
-        )
+        try:
+            run = run_registry_algorithm(
+                "exquisite_corpus", pairs,
+                parameters={
+                    "mood": self._last_mood, "length": self._last_length, "form": self._last_form,
+                    "order_override": (
+                    [line.clip_id for line in reordered_lines]
+                    if [line.clip_id for line in reordered_lines] != [line.clip_id for line in self.poem_lines]
+                    else []
+                ),
+                },
+                resources={"poem_lines": composed, "clip_texts": self._clip_texts()},
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the dialog alive on bad inputs
+            logger.error("%s recipe publication failed: %s", "exquisite_corpus", exc)
+            QMessageBox.critical(self, "Error", f"Could not build the sequence: {exc}")
+            return
         self.recipe = run.recipe
         sequence = run.ordered_clips
 

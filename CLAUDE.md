@@ -32,10 +32,10 @@ ui/                  (21 files)  # Main window, chat, player, browser, theme, al
   session_history.py            # Qt actions projecting shared project history
 core/                (54 files)  # Business logic, FFmpeg, settings, project, LLM
   analysis/          (18 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
-  remix/             (25 files)  # Sequencer algorithm implementations; engine.py/registry.py hold the Qt-free algorithm registry (23 algorithms labeled in ui/algorithm_config.py)
+  remix/             (30 files)  # Sequencer algorithm definitions; engine.py/registry.py hold the Qt-free algorithm registry (23 algorithms labeled in ui/algorithm_config.py)
   spine/             (23 files)  # GUI-agnostic shared tool implementations (no PySide6/mpv/av imports)
 models/              (11 files)  # Source, Clip, Frame, SequenceClip, Sequence, SequenceRecipe, AudioSource, CinematographyAnalysis, SequenceAnalysis, Plan
-cli/                 (15 files)  # Click CLI with detect, analyze, transcribe, youtube, export commands
+cli/                 (21 files)  # Click CLI with detect, analyze, transcribe, youtube, export, sequence commands
 scene_ripper_mcp/                # MCP server for external agent access
   tools/                         #   Tool registrations (project / clips / sequence / analyze / export / youtube / jobs)
   schemas/                       #   Pydantic input schemas for MCP tools

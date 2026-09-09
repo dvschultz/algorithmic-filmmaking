@@ -15,10 +15,17 @@ from core.remix.engine import (
 )
 
 
-def _entries_from_sequence_clips(sequence_clips, inputs: Sequence[ClipInput]) -> tuple[ProposedEntry, ...]:
+def _entries_from_sequence_clips(
+    sequence_clips, inputs: Sequence[ClipInput], labels: Sequence[Any] | None = None,
+) -> tuple[ProposedEntry, ...]:
+    """Project materialized word clips onto proposed entries.
+
+    ``labels`` (one per sequence clip) travel with their entry as
+    ``provider_output`` so dropped zero-length words never shift the labels.
+    """
     by_id = {clip.id: clip for clip, _ in inputs}
     entries = []
-    for entry in sequence_clips:
+    for index, entry in enumerate(sequence_clips):
         clip = by_id.get(entry.source_clip_id)
         if clip is None:
             raise ValueError(f"Word sequence referenced unknown clip {entry.source_clip_id!r}")
@@ -28,6 +35,7 @@ def _entries_from_sequence_clips(sequence_clips, inputs: Sequence[ClipInput]) ->
             continue
         entries.append(ProposedEntry(
             clip.id, entry.source_id, max(0, in_offset), min(out_offset, clip.duration_frames),
+            provider_output=labels[index] if labels is not None else None,
         ))
     return tuple(entries)
 
@@ -77,6 +85,7 @@ class WordLLMComposerDefinition(AlgorithmDefinition):
     kind = "provider"
     seeded = True
     provider = True
+    long_running = True
     allow_duplicates = True
     prerequisites = ("transcribe",)
     parameters = (
@@ -131,18 +140,22 @@ class WordLLMComposerDefinition(AlgorithmDefinition):
         from core.spine.words import WordInstance
 
         words = list((context or {}).get("words") or [])
+        by_id = {clip.id for clip, _ in inputs}
+        # instances_to_sequence_clips drops zero-duration words and words whose
+        # clip is absent; keep the same words here so labels stay aligned.
+        kept = [w for w in words if w["end"] > w["start"] and w["clip_id"] in by_id]
         instances = [
             WordInstance(
                 source_id=w["source_id"], clip_id=w["clip_id"], segment_index=w["segment_index"],
                 word_index=w["word_index"], start=w["start"], end=w["end"], text=w["text"],
             )
-            for w in words
+            for w in kept
         ]
         sequence_clips = instances_to_sequence_clips(instances, list(inputs), parameters["handle_frames"])
-        entries = _entries_from_sequence_clips(sequence_clips, inputs)
-        entries = tuple(
-            ProposedEntry(e.clip_id, e.source_id, e.in_offset, e.out_offset, provider_output={"word": w["text"]})
-            for e, w in zip(entries, words)
+        if len(sequence_clips) != len(kept):
+            raise ValueError("Composed words and materialized clips diverged")
+        entries = _entries_from_sequence_clips(
+            sequence_clips, inputs, labels=[{"word": w["text"]} for w in kept],
         )
         return SequenceProposal(
             "provider", entries,

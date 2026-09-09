@@ -78,7 +78,7 @@ def sequence_clips_from_run(run) -> list["SequenceClip"]:
 # ---------------------------------------------------------------------------
 
 
-class MissingWordDataError(Exception):
+class MissingWordDataError(ValueError):
     """Raised when any selected clip has segments lacking word-level data.
 
     ``clip_ids`` lists the offending clip ids. The dialog (U6) catches this

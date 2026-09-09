@@ -25,6 +25,9 @@ from typing import Callable, Optional
 
 from models.clip import Clip, Source
 from core.transcription import TranscriptSegment
+from core.remix.engine import (
+    AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -322,83 +325,74 @@ def flatten_matches_in_phrase_order(
     return flat
 
 
-def _definition():
-    from core.remix.engine import (
-        AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
+
+class CassetteTapeDefinition(AlgorithmDefinition):
+    """Find clips whose transcripts say specific phrases; cut to the matching segments.
+
+    ``phrases`` is an ordered list of ``{"phrase": str, "count": int}``.
+    ``excluded_matches`` lists ``[phrase, clip_id, segment_index]`` triples the
+    user switched off, so a dialog's choices replay exactly.
+    """
+
+    key = "cassette_tape"
+    version = 1
+    kind = "timed"
+    allow_duplicates = True
+    prerequisites = ("transcribe",)
+    parameters = (
+        ParameterSpec("phrases", "array", [], "Ordered list of {phrase, count} objects (count 1-5)"),
+        ParameterSpec("excluded_matches", "array", [], "[phrase, clip_id, segment_index] triples to leave out"),
     )
 
-    class CassetteTapeDefinition(AlgorithmDefinition):
-        """Find clips whose transcripts say specific phrases; cut to the matching segments.
+    @staticmethod
+    def parse_phrases(raw: list) -> list[tuple[str, int]]:
+        phrases: list[tuple[str, int]] = []
+        for entry in raw:
+            if isinstance(entry, str):
+                phrase, count = entry, SLIDER_DEFAULT
+            elif isinstance(entry, dict):
+                phrase, count = entry.get("phrase", ""), entry.get("count", SLIDER_DEFAULT)
+            else:
+                raise ValueError("Each phrase must be text or a {phrase, count} object")
+            if not isinstance(phrase, str):
+                raise ValueError("Phrase text must be a string")
+            phrase = phrase.strip()
+            if isinstance(count, bool) or not isinstance(count, int):
+                raise ValueError(f"Count for {phrase!r} must be an integer")
+            if phrase:
+                phrases.append((phrase, clamp_count(count)))
+        if not phrases:
+            raise ValueError("Provide at least one non-empty phrase")
+        return phrases
 
-        ``phrases`` is an ordered list of ``{"phrase": str, "count": int}``.
-        ``excluded_matches`` lists ``[phrase, clip_id, segment_index]`` triples the
-        user switched off, so a dialog's choices replay exactly.
-        """
-
-        key = "cassette_tape"
-        version = 1
-        kind = "timed"
-        allow_duplicates = True
-        prerequisites = ("transcribe",)
-        parameters = (
-            ParameterSpec("phrases", "array", [], "Ordered list of {phrase, count} objects (count 1-5)"),
-            ParameterSpec("excluded_matches", "array", [], "[phrase, clip_id, segment_index] triples to leave out"),
+    def generate(self, inputs, parameters, rng, context=None):
+        phrases = self.parse_phrases(parameters["phrases"])
+        excluded = set()
+        for item in parameters["excluded_matches"]:
+            if not isinstance(item, list) or len(item) != 3:
+                raise ValueError("excluded_matches entries must be [phrase, clip_id, segment_index]")
+            excluded.add((str(item[0]), str(item[1]), int(item[2])))
+        clips = [clip for clip, _ in inputs]
+        results = match_phrases(phrases, clips)
+        flat = [
+            match for match in flatten_matches_in_phrase_order(results)
+            if (match.phrase, match.clip_id, match.segment_index) not in excluded
+        ]
+        clips_by_id = {clip.id: clip for clip, _ in inputs}
+        sources_by_id = {source.id: source for _, source in inputs}
+        entries = []
+        for clip, source, in_frame, out_frame in build_sequence_data(flat, clips_by_id, sources_by_id):
+            out_frame = min(out_frame, clip.duration_frames)
+            in_frame = min(in_frame, max(0, out_frame - 1))
+            entries.append(ProposedEntry(clip.id, source.id, in_frame, out_frame))
+        matched = [m for m in flat]
+        notes = [f"{len(matched)} matches across {sum(1 for v in results.values() if v)} of {len(phrases)} phrases"]
+        return SequenceProposal(
+            "timed", tuple(entries), notes=tuple(notes),
+            provider_outputs={
+                "matches": [
+                    {"phrase": m.phrase, "clip_id": m.clip_id, "segment_index": m.segment_index, "score": m.score}
+                    for m in matched
+                ],
+            },
         )
-
-        @staticmethod
-        def parse_phrases(raw: list) -> list[tuple[str, int]]:
-            phrases: list[tuple[str, int]] = []
-            for entry in raw:
-                if isinstance(entry, str):
-                    phrase, count = entry, SLIDER_DEFAULT
-                elif isinstance(entry, dict):
-                    phrase, count = entry.get("phrase", ""), entry.get("count", SLIDER_DEFAULT)
-                else:
-                    raise ValueError("Each phrase must be text or a {phrase, count} object")
-                if not isinstance(phrase, str):
-                    raise ValueError("Phrase text must be a string")
-                phrase = phrase.strip()
-                if isinstance(count, bool) or not isinstance(count, int):
-                    raise ValueError(f"Count for {phrase!r} must be an integer")
-                if phrase:
-                    phrases.append((phrase, clamp_count(count)))
-            if not phrases:
-                raise ValueError("Provide at least one non-empty phrase")
-            return phrases
-
-        def generate(self, inputs, parameters, rng, context=None):
-            phrases = self.parse_phrases(parameters["phrases"])
-            excluded = set()
-            for item in parameters["excluded_matches"]:
-                if not isinstance(item, list) or len(item) != 3:
-                    raise ValueError("excluded_matches entries must be [phrase, clip_id, segment_index]")
-                excluded.add((str(item[0]), str(item[1]), int(item[2])))
-            clips = [clip for clip, _ in inputs]
-            results = match_phrases(phrases, clips)
-            flat = [
-                match for match in flatten_matches_in_phrase_order(results)
-                if (match.phrase, match.clip_id, match.segment_index) not in excluded
-            ]
-            clips_by_id = {clip.id: clip for clip, _ in inputs}
-            sources_by_id = {source.id: source for _, source in inputs}
-            entries = []
-            for clip, source, in_frame, out_frame in build_sequence_data(flat, clips_by_id, sources_by_id):
-                out_frame = min(out_frame, clip.duration_frames)
-                in_frame = min(in_frame, max(0, out_frame - 1))
-                entries.append(ProposedEntry(clip.id, source.id, in_frame, out_frame))
-            matched = [m for m in flat]
-            notes = [f"{len(matched)} matches across {sum(1 for v in results.values() if v)} of {len(phrases)} phrases"]
-            return SequenceProposal(
-                "timed", tuple(entries), notes=tuple(notes),
-                provider_outputs={
-                    "matches": [
-                        {"phrase": m.phrase, "clip_id": m.clip_id, "segment_index": m.segment_index, "score": m.score}
-                        for m in matched
-                    ],
-                },
-            )
-
-    return CassetteTapeDefinition
-
-
-CassetteTapeDefinition = _definition()

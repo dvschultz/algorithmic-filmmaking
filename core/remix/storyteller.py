@@ -359,38 +359,6 @@ def _determine_narrative_role(position: int, total: int, structure: str) -> str:
         else:
             return "development"
 
-
-def sequence_by_narrative(
-    narrative_lines: list[NarrativeLine],
-    clips_by_id: dict,
-    sources_by_id: dict,
-) -> list[tuple]:
-    """Create a clip sequence matching the narrative order.
-
-    Args:
-        narrative_lines: List of NarrativeLine objects in desired order
-        clips_by_id: Dict mapping clip_id to Clip objects
-        sources_by_id: Dict mapping source_id to Source objects
-
-    Returns:
-        List of (Clip, Source) tuples in narrative order
-    """
-    sequence = []
-    for line in narrative_lines:
-        if line.clip_id in clips_by_id:
-            clip = clips_by_id[line.clip_id]
-            source = sources_by_id.get(clip.source_id)
-            if source:
-                sequence.append((clip, source))
-            else:
-                logger.warning(f"Source not found for clip {line.clip_id}")
-        else:
-            logger.warning(f"Clip not found: {line.clip_id}")
-
-    logger.info(f"Created sequence with {len(sequence)} clips")
-    return sequence
-
-
 def calculate_sequence_duration(
     clips: list[tuple],  # [(Clip, Source), ...]
 ) -> float:

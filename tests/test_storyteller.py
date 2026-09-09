@@ -9,7 +9,6 @@ from core.remix.storyteller import (
     NarrativeLine,
     StorytellerResult,
     generate_narrative,
-    sequence_by_narrative,
     calculate_sequence_duration,
     _determine_narrative_role,
     DURATION_TARGETS,
@@ -302,69 +301,6 @@ class TestGenerateNarrative:
                     target_duration_minutes=None,
                     narrative_structure="auto",
                 )
-
-
-class TestSequenceByNarrative:
-    """Tests for the sequence_by_narrative function."""
-
-    def test_sequence_by_narrative_success(self):
-        """Test creating sequence from narrative lines."""
-        # Create mock clips and sources
-        clips = {}
-        sources = {}
-        for i in range(3):
-            clip = Mock()
-            clip.id = f"clip-{i}"
-            clip.source_id = f"source-{i}"
-            clips[clip.id] = clip
-
-            source = Mock()
-            source.id = f"source-{i}"
-            sources[source.id] = source
-
-        narrative_lines = [
-            NarrativeLine("clip-2", "Desc", "opening", 1),
-            NarrativeLine("clip-0", "Desc", "development", 2),
-            NarrativeLine("clip-1", "Desc", "closing", 3),
-        ]
-
-        result = sequence_by_narrative(narrative_lines, clips, sources)
-
-        assert len(result) == 3
-        assert result[0][0].id == "clip-2"
-        assert result[1][0].id == "clip-0"
-        assert result[2][0].id == "clip-1"
-
-    def test_sequence_by_narrative_missing_clip(self):
-        """Test handling of missing clip in narrative."""
-        clips = {"clip-1": Mock(id="clip-1", source_id="source-1")}
-        sources = {"source-1": Mock(id="source-1")}
-
-        narrative_lines = [
-            NarrativeLine("clip-1", "Desc", "opening", 1),
-            NarrativeLine("clip-missing", "Desc", "closing", 2),
-        ]
-
-        result = sequence_by_narrative(narrative_lines, clips, sources)
-
-        # Should only include the valid clip
-        assert len(result) == 1
-        assert result[0][0].id == "clip-1"
-
-    def test_sequence_by_narrative_missing_source(self):
-        """Test handling of missing source for clip."""
-        clip = Mock(id="clip-1", source_id="source-missing")
-        clips = {"clip-1": clip}
-        sources = {}  # No sources
-
-        narrative_lines = [
-            NarrativeLine("clip-1", "Desc", "opening", 1),
-        ]
-
-        result = sequence_by_narrative(narrative_lines, clips, sources)
-
-        # Should skip clips without sources
-        assert len(result) == 0
 
 
 class TestCalculateSequenceDuration:

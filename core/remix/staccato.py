@@ -12,6 +12,9 @@ from typing import Optional
 import numpy as np
 
 from core.analysis.audio import AudioAnalysis
+from core.remix.engine import (
+    AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -349,89 +352,93 @@ def expand_staccato_slot_segments(clip, source, slot_duration: float) -> list[tu
     return segments
 
 
-def _definition():
-    from core.remix.engine import (
-        AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+MAX_CUT_TIMES = 10000
+
+
+
+class StaccatoDefinition(AlgorithmDefinition):
+    """Cut clips to a music track's beats; short clips loop to fill their slot.
+
+    ``music_path`` is an asset path validated by the calling surface. The
+    music analysis happens in ``prepare`` (or is supplied through
+    ``resources["audio_analysis"]`` by a dialog that already analyzed it);
+    ``cut_times`` pins explicit markers so a run can be repeated exactly.
+    """
+
+    key = "staccato"
+    version = 1
+    kind = "timed"
+    long_running = True
+    allow_duplicates = True
+    prerequisites = ("embeddings",)
+    asset_parameters = ("music_path",)
+    parameters = (
+        ParameterSpec("music_path", "string", "", "Music file that drives the cuts"),
+        ParameterSpec("strategy", "string", "onsets", "beats, downbeats, or onsets", choices=("beats", "downbeats", "onsets")),
+        ParameterSpec("cut_times", "array", [], "Explicit cut markers in seconds; empty uses the strategy"),
     )
 
-    class StaccatoDefinition(AlgorithmDefinition):
-        """Cut clips to a music track's beats; short clips loop to fill their slot.
+    def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
+        from pathlib import Path
 
-        ``music_path`` is an asset path validated by the calling surface. The
-        music analysis happens in ``prepare`` (or is supplied through
-        ``resources["audio_analysis"]`` by a dialog that already analyzed it);
-        ``cut_times`` pins explicit markers so a run can be repeated exactly.
-        """
+        import core.remix as remix
+        from core.analysis.audio import analyze_music_file
 
-        key = "staccato"
-        version = 1
-        kind = "timed"
-        allow_duplicates = True
-        prerequisites = ("embeddings",)
-        asset_parameters = ("music_path",)
-        parameters = (
-            ParameterSpec("music_path", "string", "", "Music file that drives the cuts"),
-            ParameterSpec("strategy", "string", "onsets", "beats, downbeats, or onsets", choices=("beats", "downbeats", "onsets")),
-            ParameterSpec("cut_times", "array", [], "Explicit cut markers in seconds; empty uses the strategy"),
-        )
-
-        def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
-            from pathlib import Path
-
-            import core.remix as remix
-            from core.analysis.audio import analyze_music_file
-
-            if not parameters["music_path"]:
-                raise ValueError("music_path is required")
-            for value in parameters["cut_times"]:
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-                    raise ValueError("cut_times must be non-negative numbers")
-            analysis = (resources or {}).get("audio_analysis")
-            if analysis is None:
-                if progress:
-                    progress("Analyzing music...")
-                analysis = analyze_music_file(Path(parameters["music_path"]))
+        if not parameters["music_path"]:
+            raise ValueError("music_path is required")
+        cut_times = parameters["cut_times"]
+        if len(cut_times) > MAX_CUT_TIMES:
+            raise ValueError(f"cut_times supports at most {MAX_CUT_TIMES} markers")
+        previous = -1.0
+        for value in cut_times:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or value != value:
+                raise ValueError("cut_times must be non-negative numbers")
+            if value <= previous:
+                raise ValueError("cut_times must be strictly ascending")
+            previous = float(value)
+        analysis = (resources or {}).get("audio_analysis")
+        if analysis is None:
             if progress:
-                progress("Computing clip embeddings...")
-            prepared = remix._auto_compute_embeddings(list(inputs), cancel_event=cancel_event)
-            return Prepared(prepared, {"audio_analysis": analysis})
+                progress("Analyzing music...")
+            analysis = analyze_music_file(Path(parameters["music_path"]))
+        if cut_times and cut_times[-1] > analysis.duration_seconds:
+            raise ValueError("cut_times must not exceed the music duration")
+        if progress:
+            progress("Computing clip embeddings...")
+        prepared = remix._auto_compute_embeddings(list(inputs), cancel_event=cancel_event)
+        return Prepared(prepared, {"audio_analysis": analysis})
 
-        def generate(self, inputs, parameters, rng, context=None):
-            analysis = (context or {}).get("audio_analysis")
-            if analysis is None:
-                raise ValueError("Staccato requires music analysis")
-            missing = [clip.id for clip, _ in inputs if clip.embedding is None]
-            if missing:
-                raise ValueError(f"Staccato requires embeddings for every clip; missing for {len(missing)}")
-            cut_times = list(parameters["cut_times"]) or None
-            result = generate_staccato_sequence(
-                clips=list(inputs), audio_analysis=analysis,
-                strategy=parameters["strategy"], cut_times=cut_times,
-            )
-            entries = []
-            for clip, source, slot_duration in result:
-                for in_point, out_point in expand_staccato_slot_segments(clip, source, slot_duration):
-                    entries.append(ProposedEntry(
-                        clip.id, source.id, in_point - clip.start_frame, out_point - clip.start_frame,
-                    ))
-            debug = result.debug
-            provider_outputs = {
-                "tempo_bpm": float(analysis.tempo_bpm),
-                "resolved_cut_times": [float(s.start_time) for s in debug.slots] if debug else [],
-                "slots": [
-                    {"index": s.slot_index, "start": s.start_time, "end": s.end_time,
-                     "clip_id": s.clip_id, "onset_strength": s.onset_strength, "needs_loop": s.needs_loop,
-                     "cosine_distance": s.cosine_distance, "distance_score": s.distance_score}
-                    for s in debug.slots
-                ] if debug else [],
-            }
-            notes = [f"{debug.total_slots if debug else len(result)} beat slots at {analysis.tempo_bpm:.1f} BPM"]
-            return SequenceProposal(
-                "timed", tuple(entries), provider_outputs=provider_outputs, notes=tuple(notes),
-                sequence_settings={"music_path": parameters["music_path"]},
-            )
-
-    return StaccatoDefinition
-
-
-StaccatoDefinition = _definition()
+    def generate(self, inputs, parameters, rng, context=None):
+        analysis = (context or {}).get("audio_analysis")
+        if analysis is None:
+            raise ValueError("Staccato requires music analysis")
+        missing = [clip.id for clip, _ in inputs if clip.embedding is None]
+        if missing:
+            raise ValueError(f"Staccato requires embeddings for every clip; missing for {len(missing)}")
+        cut_times = list(parameters["cut_times"]) or None
+        result = generate_staccato_sequence(
+            clips=list(inputs), audio_analysis=analysis,
+            strategy=parameters["strategy"], cut_times=cut_times,
+        )
+        entries = []
+        for clip, source, slot_duration in result:
+            for in_point, out_point in expand_staccato_slot_segments(clip, source, slot_duration):
+                entries.append(ProposedEntry(
+                    clip.id, source.id, in_point - clip.start_frame, out_point - clip.start_frame,
+                ))
+        debug = result.debug
+        provider_outputs = {
+            "tempo_bpm": float(analysis.tempo_bpm),
+            "resolved_cut_times": [float(s.start_time) for s in debug.slots] if debug else [],
+            "slots": [
+                {"index": s.slot_index, "start": s.start_time, "end": s.end_time,
+                 "clip_id": s.clip_id, "onset_strength": s.onset_strength, "needs_loop": s.needs_loop,
+                 "cosine_distance": s.cosine_distance, "distance_score": s.distance_score}
+                for s in debug.slots
+            ] if debug else [],
+        }
+        notes = [f"{debug.total_slots if debug else len(result)} beat slots at {analysis.tempo_bpm:.1f} BPM"]
+        return SequenceProposal(
+            "timed", tuple(entries), provider_outputs=provider_outputs, notes=tuple(notes),
+            sequence_settings={"music_path": parameters["music_path"]},
+        )

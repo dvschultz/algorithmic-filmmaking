@@ -305,34 +305,3 @@ def validate_poem_phrases(
                 f"Modified phrase detected. Expected: '{original_phrases[line.clip_id]}'"
             ))
     return errors
-
-
-def sequence_by_poem(
-    poem_lines: list[PoemLine],
-    clips_by_id: dict,
-    sources_by_id: dict,
-) -> list[tuple]:
-    """Create a clip sequence matching the poem order.
-
-    Args:
-        poem_lines: List of PoemLine objects in desired order
-        clips_by_id: Dict mapping clip_id to Clip objects
-        sources_by_id: Dict mapping source_id to Source objects
-
-    Returns:
-        List of (Clip, Source) tuples in poem order
-    """
-    sequence = []
-    for line in poem_lines:
-        if line.clip_id in clips_by_id:
-            clip = clips_by_id[line.clip_id]
-            source = sources_by_id.get(clip.source_id)
-            if source:
-                sequence.append((clip, source))
-            else:
-                logger.warning(f"Source not found for clip {line.clip_id}")
-        else:
-            logger.warning(f"Clip not found: {line.clip_id}")
-
-    logger.info(f"Created sequence with {len(sequence)} clips")
-    return sequence

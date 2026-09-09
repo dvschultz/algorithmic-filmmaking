@@ -1923,3 +1923,151 @@ async def start_detect_scenes_new_project(
         idempotency_key=idempotency_key,
         run=run,
     )
+
+
+@mcp.tool()
+async def start_generate_sequence(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    algorithm: Annotated[str, "Registry algorithm key (see list_sequence_algorithms)"],
+    clip_ids: Annotated[Optional[list[str]], "Clip IDs in candidate order; omit for all enabled clips"] = None,
+    parameters: Annotated[Optional[dict], "Algorithm parameters; unknown keys are rejected"] = None,
+    seed: Annotated[Optional[int], "Explicit seed for seeded algorithms (0 is valid)"] = None,
+    name: Annotated[Optional[str], "Sequence name"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that generates a sequence with a registry algorithm.
+
+    Use this instead of the synchronous ``generate_sequence`` for provider-
+    assisted or analysis-heavy algorithms (Storyteller, Exquisite Corpus,
+    Free Association, LLM Word Composer, Rose Hobart, Signature Style,
+    Staccato, similarity chains). The algorithm runs first and its recipe is
+    recorded in the job store; publication into the project is one saved
+    edit. A retry after a crash replays the recorded recipe rather than
+    repeating paid inference; cancellation publishes nothing.
+    """
+    from scene_ripper_mcp.security import validate_project_path, validate_path
+    from core.jobs.sequence_generation import run_sequence_generation_job, sequence_generation_job_spec
+    from core.remix.registry import registry
+    from core.spine.project_io import load_with_mtime
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        definition = registry.get(algorithm) if isinstance(algorithm, str) else None
+        if definition is None:
+            raise ValueError(
+                f"Algorithm {algorithm!r} is not available through the registry. "
+                f"Registry algorithms: {', '.join(registry.keys())}"
+            )
+        parameters = dict(parameters or {})
+        for pname in definition.asset_parameters:
+            value = parameters.get(pname)
+            if value in (None, "", []):
+                continue
+            values = value if isinstance(value, list) else [value]
+            resolved = []
+            for item in values:
+                ok, err, resolved_path = validate_path(str(item), must_exist=True, must_be_file=True)
+                if not ok:
+                    raise ValueError(f"Parameter {pname!r}: {err}")
+                resolved.append(str(resolved_path))
+            parameters[pname] = resolved if isinstance(value, list) else resolved[0]
+        if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
+            raise ValueError("Seed must be a non-negative integer")
+        project, mtime = load_with_mtime(path)
+        operation = sequence_generation_job_spec(
+            project, algorithm, clip_ids=clip_ids, parameters=parameters, seed=seed, name=name,
+        )
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress, cancel):
+            return run_sequence_generation_job(store, path, operation, progress, cancel)
+
+        return _start_job(
+            ctx, kind=operation.kind, args=operation.arguments,
+            project_path=str(path), project_mtime_at_start=mtime,
+            idempotency_key=idempotency_key, run=run, operation=operation,
+        )
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))
+
+
+@mcp.tool()
+async def start_regenerate_sequence(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    sequence_id: Annotated[Optional[str], "Sequence ID; omit for the active sequence"] = None,
+    parameters: Annotated[Optional[dict], "Parameter overrides merged over the recipe"] = None,
+    seed: Annotated[Optional[int], "Explicit seed; omitted seeds are drawn fresh"] = None,
+    keep_seed: Annotated[bool, "Reuse the recipe's seed instead of drawing a new one"] = False,
+    name: Annotated[Optional[str], "Name for the variation"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that regenerates a sequence's recipe as a new variation.
+
+    Same checks as ``regenerate_sequence`` (inputs, algorithm version), but the
+    algorithm and any provider calls run on the job runtime with cancellation,
+    and the recorded recipe is replayed on retry instead of paying again.
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.jobs.sequence_generation import run_sequence_generation_job, sequence_generation_job_spec
+    from core.remix.registry import registry
+    from core.spine.project_io import load_with_mtime
+    from core.spine.sequences import recipe_input_problems
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        project, mtime = load_with_mtime(path)
+        sequence = project.sequence if sequence_id is None else next(
+            (s for s in project.sequences if s.id == sequence_id), None
+        )
+        if sequence is None:
+            raise ValueError("Sequence not found")
+        recipe = sequence.readable_recipe
+        if recipe is None:
+            raise ValueError("This sequence has no readable recipe")
+        definition = registry.get(recipe.algorithm)
+        if definition is None:
+            raise ValueError(f"Algorithm {recipe.algorithm!r} is not available in this build")
+        if definition.version != recipe.algorithm_version:
+            raise ValueError(
+                f"Recipe was made with {recipe.algorithm} version {recipe.algorithm_version}; "
+                f"this build has version {definition.version}"
+            )
+        problems = recipe_input_problems(project, recipe)
+        if problems:
+            raise ValueError("Recipe inputs changed: " + "; ".join(problems))
+        merged = dict(recipe.parameters)
+        for key in definition.variation_resets:
+            merged.pop(key, None)
+        if parameters is not None:
+            if not isinstance(parameters, dict):
+                raise ValueError("Parameters must be an object")
+            merged.update(parameters)
+        if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
+            raise ValueError("Seed must be a non-negative integer")
+        if definition.seeded and seed is None and keep_seed:
+            seed = recipe.seed
+        if not definition.seeded:
+            seed = None
+        label = name.strip() if isinstance(name, str) and name.strip() else f"{sequence.name} variation"
+        operation = sequence_generation_job_spec(
+            project, recipe.algorithm, clip_ids=[item.clip_id for item in recipe.inputs],
+            parameters=merged, seed=seed, name=label, parent_recipe_id=recipe.id,
+        )
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress, cancel):
+            return run_sequence_generation_job(store, path, operation, progress, cancel)
+
+        return _start_job(
+            ctx, kind=operation.kind, args=operation.arguments,
+            project_path=str(path), project_mtime_at_start=mtime,
+            idempotency_key=idempotency_key, run=run, operation=operation,
+        )
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))

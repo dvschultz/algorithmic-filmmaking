@@ -160,6 +160,17 @@ def clear_custom_queries(project, clip_ids: Optional[list[str]] = None) -> dict:
     }
 
 
+_REGISTRY_ONLY_LABELS = {
+    "free_association": ("Free Association", "Build a sequence one clip at a time with an LLM collaborator"),
+    "word_sequencer": ("Word Sequencer", "Compose a film from individual spoken words"),
+    "word_llm_composer": ("LLM Word Composer", "Compose a sentence-collage from your clips' spoken words with a local LLM"),
+    "reference_guided": ("Reference Guide", "Match your clips to a reference video's structure"),
+    "signature_style": ("Signature Style", "Interpret a drawing as an editing guide"),
+    "staccato": ("Staccato", "Cut clips to the rhythm of a music track"),
+    "eyes_without_a_face": ("Eyes Without a Face", "Eyeline matching, gaze filtering, and rotation sequencing"),
+}
+
+
 def list_sorting_algorithms(project) -> dict:
     """List all sequencer algorithms with availability flags."""
     clips = project.clips
@@ -343,6 +354,18 @@ def list_sorting_algorithms(project) -> dict:
     # parameters, seed contract) so agents can inspect and reproduce recipes.
     from core.remix.registry import registry
 
+    listed = {str(entry["key"]) for entry in algorithms}
+    for key in registry.keys():
+        if key in listed:
+            continue
+        # Registry algorithms without a hand-written catalog entry are still discoverable;
+        # run them with the generic generate_sequence chat tool.
+        label, description = _REGISTRY_ONLY_LABELS.get(key, (key.replace("_", " ").title(), ""))
+        algorithms.append({
+            "key": key, "name": label, "description": description,
+            "available": True, "reason": None, "parameters": [],
+            "tool": "generate_sequence",
+        })
     for entry in algorithms:
         definition = registry.get(str(entry["key"]))
         if definition is not None:
@@ -350,7 +373,7 @@ def list_sorting_algorithms(project) -> dict:
             entry["engine_note"] = (
                 "engine.parameters are the registry's normalized parameters; generate_remix "
                 "maps random_hflip/random_vflip/random_reverse to hflip/vflip/reverse and "
-                "stores a recipe with the seed it used."
+                "stores a recipe with the seed it used. generate_sequence accepts engine.parameters directly."
             )
 
     return {

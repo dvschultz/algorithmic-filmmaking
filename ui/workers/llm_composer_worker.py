@@ -100,6 +100,7 @@ class LLMComposerWorker(CancellableWorker):
             run = run_registry_algorithm(
                 "word_llm_composer", self._clips,
                 seed=self._seed,
+                explicit_seed=self._seed is not None,  # the dialog's seed box is an explicit seed
                 parameters={
                     "prompt": self._prompt,
                     "target_length": self._target_length,

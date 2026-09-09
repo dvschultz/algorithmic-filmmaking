@@ -76,7 +76,7 @@ delegate through `core.spine.sources`; MCP retains its response and save contrac
 `Generate sequence` command publishes it. Empty-sequence reuse and replacement
 restore the original sequence on Undo; Redo restores realized output without
 calling algorithms or providers. Desktop callback families share this draft
-lifecycle. Agent ordering paths use `apply_generated_order`, with explicit source
+lifecycle. Agent ordering paths use `core.spine.sequences.generate_sequence / publish_recipe`, with explicit source
 ranges for trimmed results. Failed population discards the draft; saved project
 data never includes that partial output. Draft view updates do not mark the
 project dirty. Actual analysis updates remain outside editorial history.

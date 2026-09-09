@@ -101,6 +101,7 @@ def run_registry_algorithm(
     resolve_prerequisites: bool = True,
     progress: Optional[Callable[[str], None]] = None,
     resources: Optional[dict[str, Any]] = None,
+    explicit_seed: bool = False,
 ):
     """Run a registry algorithm from legacy keyword arguments.
 
@@ -108,6 +109,7 @@ def run_registry_algorithm(
     ``no_color_handling``, ``transform_options``) through its
     ``legacy_parameters`` hook; explicit ``parameters`` override them. Legacy
     ``seed=0``/``None`` means "draw a fresh seed", which the recipe records.
+    ``explicit_seed=True`` keeps the registry contract instead (0 is a seed).
     Repeated clips (a timeline that placed one clip twice) collapse to their
     first occurrence because recipes describe unique inputs. Returns a
     :class:`core.remix.engine.GenerationRun` or ``None`` when cancelled.
@@ -124,7 +126,7 @@ def run_registry_algorithm(
     unique = [pair for pair in clips if not (pair[0].id in seen or seen.add(pair[0].id))]
     return run_algorithm(
         definition, unique, merged,
-        seed=legacy_seed(seed) if definition.seeded else None,
+        seed=(seed if explicit_seed else legacy_seed(seed)) if definition.seeded else None,
         cancel_event=cancel_event,
         resolve_prerequisites=resolve_prerequisites,
         progress=progress,

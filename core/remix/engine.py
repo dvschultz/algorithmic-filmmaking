@@ -191,6 +191,10 @@ class AlgorithmDefinition:
     """Parameter names that hold file paths (validated by the calling surface)."""
     provider: bool = False
     """Whether prepare/generate call an external or local model provider."""
+    long_running: bool = False
+    """Whether generation should run as a job on headless surfaces (provider calls, model prerequisites)."""
+    variation_resets: tuple[str, ...] = ()
+    """Parameters that capture a manual edit of one run and must not carry into a regenerated variation."""
 
     def legacy_parameters(
         self,
@@ -246,6 +250,8 @@ class AlgorithmDefinition:
             "seeded": self.seeded,
             "allow_duplicates": self.allow_duplicates,
             "provider": self.provider,
+            "long_running": self.long_running,
+            "variation_resets": list(self.variation_resets),
             "prerequisites": list(self.prerequisites),
             "source_parameters": list(self.source_parameters),
             "asset_parameters": list(self.asset_parameters),
@@ -422,8 +428,11 @@ def run_algorithm(
     )
     if isinstance(outcome, Prepared):
         inputs, context = list(outcome.inputs), dict(outcome.context)
-    else:
+    elif resolve_prerequisites:
         inputs, context = list(outcome), {}
+    else:
+        # The caller resolved prerequisites itself; its resources are the context.
+        inputs, context = list(outcome), dict(run_resources)
     if cancel_event is not None and cancel_event.is_set():
         return None
     if prepared is not None:

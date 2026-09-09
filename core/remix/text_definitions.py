@@ -34,6 +34,8 @@ class ExquisiteCorpusDefinition(AlgorithmDefinition):
     version = 1
     kind = "provider"
     provider = True
+    long_running = True
+    variation_resets = ("order_override",)
     allow_duplicates = True
     prerequisites = ("extract_text",)
     parameters = (
@@ -95,6 +97,8 @@ class StorytellerDefinition(AlgorithmDefinition):
     version = 1
     kind = "provider"
     provider = True
+    long_running = True
+    variation_resets = ("order_override",)
     prerequisites = ("describe",)
     parameters = (
         ParameterSpec("theme", "string", "", "Optional theme or focus for the narrative"),

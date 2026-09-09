@@ -8,7 +8,11 @@ Uses boundary frame CLIP embeddings (last frame → first frame similarity).
 import logging
 from typing import Any, List, Optional, Tuple
 
+from threading import Event
+
 import numpy as np
+
+from core.remix.engine import AlgorithmDefinition, ProposedEntry, SequenceProposal
 
 logger = logging.getLogger(__name__)
 
@@ -166,35 +170,27 @@ def _two_opt_refine(
     return chain
 
 
-def _definition():
-    from threading import Event
 
-    from core.remix.engine import AlgorithmDefinition, ProposedEntry, SequenceProposal
+class MatchCutDefinition(AlgorithmDefinition):
+    """Match Cut: chain last-frame to first-frame boundary similarity, then 2-opt."""
 
-    class MatchCutDefinition(AlgorithmDefinition):
-        """Match Cut: chain last-frame to first-frame boundary similarity, then 2-opt."""
+    key = "match_cut"
+    version = 1
+    long_running = True
+    prerequisites = ("boundary_embeddings",)
 
-        key = "match_cut"
-        version = 1
-        prerequisites = ("boundary_embeddings",)
+    def prepare(self, inputs, parameters, *, cancel_event: Event | None = None, progress=None, resources=None):
+        import core.remix as remix  # patchable prerequisite seam shared with the legacy dispatcher
 
-        def prepare(self, inputs, parameters, *, cancel_event: Event | None = None, progress=None, resources=None):
-            import core.remix as remix  # patchable prerequisite seam shared with the legacy dispatcher
+        return remix._auto_compute_boundary_embeddings(list(inputs), cancel_event=cancel_event)
 
-            return remix._auto_compute_boundary_embeddings(list(inputs), cancel_event=cancel_event)
-
-        def generate(self, inputs, parameters, rng, context=None):
-            ordered = match_cut_chain(list(inputs), start_clip_id=None)
-            missing = sum(
-                1 for clip, _ in inputs
-                if clip.first_frame_embedding is None or clip.last_frame_embedding is None
-            )
-            notes = (f"{missing} clips lack boundary embeddings (appended at end)",) if missing else ()
-            return SequenceProposal(
-                "ordering", tuple(ProposedEntry(c.id, s.id) for c, s in ordered), notes=notes,
-            )
-
-    return MatchCutDefinition
-
-
-MatchCutDefinition = _definition()
+    def generate(self, inputs, parameters, rng, context=None):
+        ordered = match_cut_chain(list(inputs), start_clip_id=None)
+        missing = sum(
+            1 for clip, _ in inputs
+            if clip.first_frame_embedding is None or clip.last_frame_embedding is None
+        )
+        notes = (f"{missing} clips lack boundary embeddings (appended at end)",) if missing else ()
+        return SequenceProposal(
+            "ordering", tuple(ProposedEntry(c.id, s.id) for c, s in ordered), notes=notes,
+        )

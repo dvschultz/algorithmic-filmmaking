@@ -65,6 +65,8 @@ def match_person(
     progress: Callable[[str], None] | None = None,
     face_cache: Any = None,
     on_match: Callable[[int], None] | None = None,
+    install_dependencies: bool = False,
+    on_outcome: Callable[[Any], None] | None = None,
 ) -> PersonMatches | None:
     """Scan ``clips`` for the person in ``reference_paths``.
 
@@ -85,9 +87,16 @@ def match_person(
 
     available, _missing = check_feature_ready("face_detect")
     if not available:
+        # Installation is an explicit, interactive decision (desktop dialog);
+        # headless callers must not trigger package installs during generation.
+        if not install_dependencies:
+            raise ValueError(
+                "Face detection dependencies are not installed. Install them from "
+                "Settings > Dependencies (or run the Rose Hobart dialog) first."
+            )
         say("Installing face detection dependencies...")
         if not install_for_feature("face_detect"):
-            raise RuntimeError("Failed to install face detection dependencies (insightface)")
+            raise ValueError("Failed to install face detection dependencies (insightface)")
 
     stamps: dict[str, list[Any]] = {}
     for path in reference_paths:
@@ -131,6 +140,8 @@ def match_person(
 
     def deliver(outcome: FaceOutcome) -> None:
         outcomes.append(outcome)
+        if on_outcome is not None:
+            on_outcome(outcome)
 
     def analysis_progress(current: int, count: int) -> None:
         say(f"Analyzing clip {current} of {count}...")
@@ -203,6 +214,7 @@ class RoseHobartDefinition(AlgorithmDefinition):
     kind = "provider"
     seeded = True
     provider = True
+    long_running = True
     prerequisites = ("face_embeddings",)
     asset_parameters = ("reference_image_paths",)
     parameters = (
@@ -225,6 +237,8 @@ class RoseHobartDefinition(AlgorithmDefinition):
             cancel_event=cancel_event, progress=progress,
             face_cache=(resources or {}).get("face_cache"),
             on_match=(resources or {}).get("on_match"),
+            install_dependencies=bool((resources or {}).get("install_dependencies", False)),
+            on_outcome=(resources or {}).get("on_outcome"),
         )
         if result is None:
             return Prepared([], {"cancelled": True})

@@ -570,7 +570,14 @@ before the edit, so malformed transcript input cannot partially change a clip.
   `reference_image_paths`) must be existing files under the allowed roots.
 - `generate_sequence(project_path, algorithm, clip_ids?, parameters?, seed?, name?)`
   runs one algorithm on the given clips (default: all enabled clips, library
-  order) and publishes a new sequence as one undoable edit. Unknown parameters,
+  order) and publishes a new sequence as one undoable edit. Algorithms whose
+  `long_running` flag is set (provider calls or model prerequisites: the LLM
+  and VLM sequencers, Rose Hobart, Staccato, brightness, volume, similarity
+  chain, match cut) are refused here with error code `use_job`; start them with
+  `start_generate_sequence` / `start_regenerate_sequence` and poll
+  `get_job_status`. The job records the recipe before publishing, so a retry
+  replays the recorded result rather than repeating paid inference, and
+  cancellation publishes nothing. Unknown parameters,
   invalid choices, unknown clip IDs, and seeds for unseeded algorithms are
   rejected without writing. Seeded algorithms treat `seed: 0` as an explicit
   seed; an omitted seed is drawn and returned so the run can be repeated.

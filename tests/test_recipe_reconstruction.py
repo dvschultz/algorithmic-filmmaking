@@ -231,3 +231,148 @@ def test_dialog_free_recipes_match_the_engine_run_directly(tmp_path, fakes):
     via_spine = generate_sequence(project, "color", parameters={"direction": "warm_to_cool"})
     assert via_spine["clip_ids"] == [e.clip_id for e in direct.recipe.realized]
     assert via_spine["parameters"] == direct.recipe.parameters
+
+
+# --- Review follow-ups (run 20260909-030011) ----------------------------------
+
+
+def test_skipping_prerequisites_still_hands_caller_resources_to_generate(tmp_path, fakes):
+    """Regression: dialog/chat Staccato pass audio analysis via resources with prerequisites resolved."""
+    from core.remix import run_registry_algorithm
+
+    project = _rich_project(tmp_path)
+    pairs = [(c, project.sources_by_id[c.source_id]) for c in project.clips]
+    run = run_registry_algorithm(
+        "staccato", pairs,
+        parameters={"music_path": _assets(tmp_path)["music"], "strategy": "beats"},
+        resolve_prerequisites=False, resources={"audio_analysis": fakes.audio()},
+    )
+    assert run is not None and run.recipe.realized
+    assert run.recipe.provider_outputs["tempo_bpm"] == 120.0
+
+
+def test_reconstruction_keeps_music_and_reference_settings(tmp_path, fakes):
+    project = _rich_project(tmp_path)
+    assets = _assets(tmp_path)
+    assert generate_sequence(project, "staccato", parameters={"music_path": assets["music"], "strategy": "beats"})["success"]
+    original = project.sequence
+    assert original.music_path == assets["music"]
+    assert reconstruct_sequence(project, original.id)["success"]
+    assert project.sequence.music_path == assets["music"]
+    assert generate_sequence(project, "reference_guided", parameters={"reference_source_id": "s1", "weights": {"color": 1.0}})["success"]
+    guided = project.sequence
+    assert reconstruct_sequence(project, guided.id)["success"]
+    rebuilt = project.sequence
+    assert (rebuilt.reference_source_id, rebuilt.dimension_weights, rebuilt.allow_repeats) == (
+        guided.reference_source_id, guided.dimension_weights, guided.allow_repeats,
+    )
+
+
+def test_regeneration_drops_manual_order_override_and_uses_the_new_provider_result(tmp_path, fakes, monkeypatch):
+    project = _rich_project(tmp_path)
+    monkeypatch.setattr(type(project.clips[0]), "combined_text", property(lambda self: f"text of {self.id}"), raising=False)
+    first = generate_sequence(project, "storyteller", parameters={"structure": "auto"})
+    assert first["success"]
+    original = project.sequence
+    # Simulate a dialog reorder captured on the stored recipe.
+    override = list(reversed(first["clip_ids"]))
+    edited = original.readable_recipe.derive(parameters={**original.readable_recipe.parameters, "order_override": override})
+    original.recipe = edited
+
+    def reversed_narrative(clips_with_descriptions, *args, **kwargs):
+        from core.remix.storyteller import NarrativeLine
+
+        fakes.calls += 1
+        return [NarrativeLine(clip.id, desc, "beat", i + 1) for i, (clip, desc) in enumerate(clips_with_descriptions)]
+
+    monkeypatch.setattr("core.remix.storyteller.generate_narrative", reversed_narrative)
+    variation = regenerate_sequence(project, original.id)
+    assert variation["success"], variation
+    assert variation["parameters"]["order_override"] == []
+    assert variation["clip_ids"] == [i.clip_id for i in edited.inputs]  # the new provider order, not the stale override
+
+
+def test_provider_outputs_carry_the_expected_replay_data(tmp_path, fakes, monkeypatch):
+    project = _rich_project(tmp_path)
+    monkeypatch.setattr(type(project.clips[0]), "combined_text", property(lambda self: f"text of {self.id}"), raising=False)
+    assets = _assets(tmp_path)
+    expectations = {
+        "free_association": "steps", "staccato": "slots", "rose_hobart": "reference_stamps",
+        "exquisite_corpus": "poem", "storyteller": "narrative", "word_llm_composer": "words",
+        "cassette_tape": "matches", "signature_style": "segments",
+    }
+    for key, field in expectations.items():
+        result = generate_sequence(project, key, parameters=parameters_for(key, project, assets), seed=1 if registry.require(key).seeded else None)
+        assert result["success"], (key, result)
+        assert project.sequence.readable_recipe.provider_outputs.get(field), key
+
+
+def test_word_composer_labels_survive_dropped_words(tmp_path, fakes, monkeypatch):
+    from core.spine.words import WordInstance
+
+    project = _rich_project(tmp_path)
+
+    def compose(inventory, **kwargs):
+        first = inventory.by_word[sorted(inventory.by_word)[0]][0]
+        zero = WordInstance(first.source_id, first.clip_id, first.segment_index, first.word_index, 0.3, 0.3, "GHOST")
+        return [zero, first]
+
+    monkeypatch.setattr("core.spine.words.compose_with_llm", compose)
+    result = generate_sequence(project, "word_llm_composer", parameters={"prompt": "x", "target_length": 2}, seed=0)
+    assert result["success"], result
+    realized = project.sequence.readable_recipe.realized
+    assert len(realized) == 1 and realized[0].provider_output == {"word": realized[0].provider_output["word"]}
+    assert realized[0].provider_output["word"] != "GHOST"
+
+
+def test_signature_style_vlm_mode_records_interpreted_segments(tmp_path, fakes, monkeypatch):
+    from core.remix.drawing_segment import DrawingSegment
+
+    def fake_vlm(image, total_duration, client, progress_callback=None):
+        return [
+            DrawingSegment(0, 60, 4.0, 0.8, (220, 40, 40), False, shot_type="close-up", energy=0.9, brightness=0.7, color_mood="warm"),
+            DrawingSegment(60, 120, 4.0, 0.2, (40, 40, 220), False, shot_type="wide shot", energy=0.2, brightness=0.3, color_mood="cool"),
+        ]
+
+    monkeypatch.setattr("core.remix.drawing_vlm.interpret_drawing_vlm", fake_vlm)
+    project = _rich_project(tmp_path)
+    result = generate_sequence(project, "signature_style", parameters={
+        "drawing_path": _assets(tmp_path)["drawing"], "mode": "vlm", "total_duration_seconds": 8.0, "fps": 24.0,
+    })
+    assert result["success"], result
+    outputs = project.sequence.readable_recipe.provider_outputs
+    assert outputs["mode"] == "vlm" and outputs["segments"][0]["shot_type"] == "close-up"
+    assert reconstruct_sequence(project)["success"]
+
+
+def test_headless_rose_hobart_never_installs_packages(tmp_path, monkeypatch):
+    from core.remix import rose_hobart
+
+    monkeypatch.setattr("core.feature_registry.check_feature_ready", lambda name: (False, ["package:insightface"]))
+    installs = []
+    monkeypatch.setattr("core.feature_registry.install_for_feature", lambda name: installs.append(name) or True)
+    project = _rich_project(tmp_path)
+    result = generate_sequence(project, "rose_hobart", parameters={"reference_image_paths": [_assets(tmp_path)["face"]]}, seed=0)
+    assert not result["success"] and "not installed" in result["error"]
+    assert installs == []
+    with pytest.raises(ValueError, match="not installed"):
+        rose_hobart.match_person([_assets(tmp_path)["face"]], [], threshold=0.5, sample_interval=1.0)
+
+
+def test_asset_parameters_must_be_existing_files(tmp_path, fakes):
+    project = _rich_project(tmp_path)
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    result = generate_sequence(project, "signature_style", parameters={"drawing_path": str(directory)})
+    assert not result["success"] and "drawing_path" in result["error"]
+    result = generate_sequence(project, "staccato", parameters={"music_path": str(tmp_path / "missing.wav")})
+    assert not result["success"] and "music_path" in result["error"]
+
+
+def test_missing_word_data_is_a_validation_result_not_a_traceback(tmp_path, fakes):
+    project = _rich_project(tmp_path)
+    for clip in project.clips:
+        for segment in clip.transcript:
+            segment.words = None
+    result = generate_sequence(project, "word_sequencer", parameters={"mode": "alphabetical"})
+    assert not result["success"] and "word" in result["error"].lower()

@@ -306,7 +306,7 @@ def generate_sequence(
         for item in values:
             if not isinstance(item, str):
                 return {"success": False, "error": f"Parameter {name!r} must hold file paths"}
-            ok, error, path = validate_path(item, must_exist=True)
+            ok, error, path = validate_path(item, must_exist=True, must_be_file=True)
             if not ok:
                 return {"success": False, "error": f"Parameter {name!r}: {error}"}
             resolved.append(str(path))
@@ -327,7 +327,8 @@ def generate_sequence(
             definition, snapshots, parameters, seed=seed,
             cancel_event=cancel_event, parent_recipe_id=parent_recipe_id,
         )
-    except ValueError as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
+        # Provider, loader and prerequisite failures surface as results, never tracebacks.
         return {"success": False, "error": str(exc)}
     if run is None:
         return {"success": False, "error": "Generation was cancelled", "cancelled": True}
@@ -420,6 +421,10 @@ def reconstruct_sequence(
             project, recipe.derive(), name=label,
             show_chromatic_color_bar=sequence.show_chromatic_color_bar,
             fps=sequence.fps,
+            sequence_settings={
+                field: getattr(sequence, field) for field in SEQUENCE_SETTING_FIELDS
+                if getattr(sequence, field) not in (None, False, {})
+            },
         )
     except (ValueError, RuntimeError) as exc:
         return {"success": False, "error": str(exc)}
@@ -612,6 +617,8 @@ def regenerate_sequence(
             "error": "Recipe inputs changed: " + "; ".join(problems + [f"clip {c} is no longer in the project" for c in missing]),
         }
     merged = dict(recipe.parameters)
+    for key in definition.variation_resets:
+        merged.pop(key, None)  # a manual edit of the previous run must not override the new one
     if parameters is not None:
         if not isinstance(parameters, dict):
             return {"success": False, "error": "Parameters must be an object"}

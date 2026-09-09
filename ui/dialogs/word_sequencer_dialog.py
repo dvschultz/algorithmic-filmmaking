@@ -618,6 +618,8 @@ class WordSequencerDialog(QDialog):
             parameters = {"mode": mode, "handle_frames": self._handle_spin.value()}
             parameters.update(self._collect_mode_params())
             run = run_registry_algorithm("word_sequencer", ready_clips, parameters=parameters)
+            if run is None:
+                return
             self.recipe = run.recipe
             sequence_clips = sequence_clips_from_run(run)
         except MissingWordDataError as exc:
