@@ -397,6 +397,20 @@ replace the final full-suite and code-review gates.
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
+**2026-09-08 static-check audit:** Fixed the 34 scoped typing diagnostics by
+giving operation-specific checkpoint values distinct names and declaring the
+analysis batch response shape. The shared 136-file scope now passes mypy;
+156 checkpoint/import/analysis regressions pass. The expanded 142-file check
+has one existing `core/paths.py` PyInstaller `_MEIPASS` diagnostic, with the
+same source line in baseline `11bfdf6`. Full Ruff has only the six previously
+verified MainWindow unused imports. A full-tree baseline comparison found
+876 errors in 129 files at `11bfdf6`, versus 839 in 117 files at `c1f689a`.
+Matching by file and diagnostic text exposed 20 unmatched diagnostics; four
+are addressed by this typing cleanup. The other 16 still need individual
+classification or correction before sign-off. Counts alone do not establish
+that the remaining diagnostics are baseline exceptions. Full-suite process
+started at `c1f689a` remains active; no completion claim is made here.
+
 **2026-09-08 artifact-loading review fix:** GUI project loading now hydrates
 detached analysis and prerender data in a worker before constructing the new
 project owner. Its progress dialog services UI events; cancellation, shutdown,

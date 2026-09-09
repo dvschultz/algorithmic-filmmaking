@@ -118,12 +118,12 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.operations.image_import import ImageImportOutcome
             from models.frame import Frame
 
-            recorded = ImageImportRecord.from_dict(json.loads(row["payload_json"]))
-            if recorded.batch_id != identity["target_id"] or recorded.batch_id != identity["inputs"]["source_id"]:
+            image_record = ImageImportRecord.from_dict(json.loads(row["payload_json"]))
+            if image_record.batch_id != identity["target_id"] or image_record.batch_id != identity["inputs"]["source_id"]:
                 raise StaleJobResult("Saved image import does not match its batch")
-            outcome = ImageImportOutcome.from_dict(recorded.outcome)
+            image_outcome = ImageImportOutcome.from_dict(image_record.outcome)
             matches = True
-            for imported in outcome.frames:
+            for imported in image_outcome.frames:
                 saved = frames.get(imported.id)
                 if saved is None:
                     matches = False
@@ -140,15 +140,15 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.operations.audio_import import AudioImportTask, AudioImportOutcome
             from models.audio_source import AudioSource
 
-            recorded = AudioImportRecord.from_dict(json.loads(row["payload_json"]))
-            if recorded.path != identity["target_id"] or recorded.path != identity["inputs"]["source_id"]:
+            audio_record = AudioImportRecord.from_dict(json.loads(row["payload_json"]))
+            if audio_record.path != identity["target_id"] or audio_record.path != identity["inputs"]["source_id"]:
                 raise StaleJobResult("Saved audio import does not match its target")
-            task = AudioImportTask.from_dict(recorded.task)
-            outcome = AudioImportOutcome.from_dict(recorded.outcome)
-            saved = audio_sources.get(outcome.audio_source_id)
+            audio_task = AudioImportTask.from_dict(audio_record.task)
+            audio_outcome = AudioImportOutcome.from_dict(audio_record.outcome)
+            saved = audio_sources.get(audio_outcome.audio_source_id)
             if saved is not None:
                 actual = AudioSource.from_dict(saved, path.parent).to_dict()
-                expected = outcome.to_model(task).to_dict()
+                expected = audio_outcome.to_model(audio_task).to_dict()
                 if all(actual.get(key) == expected.get(key) for key in ("id", "file_path", "duration_seconds", "sample_rate", "channels")):
                     pending.append((result_id, receipt_digest))
             continue
@@ -158,12 +158,12 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             audio = audio_sources.get(identity["target_id"])
             if audio is None or audio["id"] != identity["inputs"]["source_id"]:
                 continue
-            outcome = AudioTranscriptionOutcome.from_dict(json.loads(row["payload_json"]))
-            if outcome.audio_source_id != audio["id"] or outcome.status != "succeeded":
+            transcription_outcome = AudioTranscriptionOutcome.from_dict(json.loads(row["payload_json"]))
+            if transcription_outcome.audio_source_id != audio["id"] or transcription_outcome.status != "succeeded":
                 raise StaleJobResult("Saved audio transcription does not match its target")
-            if outcome.record_json is not None and audio.get("analysis_records", {}).get("transcribe") != json.loads(outcome.record_json):
+            if transcription_outcome.record_json is not None and audio.get("analysis_records", {}).get("transcribe") != json.loads(transcription_outcome.record_json):
                 continue
-            if audio.get("transcript") == [segment.to_dict() for segment in outcome.segments]:
+            if audio.get("transcript") == [segment.to_dict() for segment in transcription_outcome.segments]:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_extract_frames":
@@ -171,21 +171,21 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.operations.frame_extraction import FrameExtractionTask, FrameExtractionOutcome
             from models.frame import Frame
 
-            recorded = FrameExtractionRecord.from_dict(json.loads(row["payload_json"]))
-            if recorded.source_id != identity["target_id"] or recorded.source_id != identity["inputs"]["source_id"]:
+            extraction_record = FrameExtractionRecord.from_dict(json.loads(row["payload_json"]))
+            if extraction_record.source_id != identity["target_id"] or extraction_record.source_id != identity["inputs"]["source_id"]:
                 raise StaleJobResult("Saved extraction does not match its source")
-            task = FrameExtractionTask.from_dict(recorded.task)
-            outcome = FrameExtractionOutcome.from_dict(recorded.outcome)
-            if not any(source["id"] == task.source_id for source in snapshot.get("sources", [])):
+            extraction_task = FrameExtractionTask.from_dict(extraction_record.task)
+            extraction_outcome = FrameExtractionOutcome.from_dict(extraction_record.outcome)
+            if not any(source["id"] == extraction_task.source_id for source in snapshot.get("sources", [])):
                 continue
             matches = True
-            for extracted in outcome.frames:
+            for extracted in extraction_outcome.frames:
                 saved = frames.get(extracted.id)
                 if saved is None:
                     matches = False
                     break
                 actual = Frame.from_dict(saved, path.parent).to_dict()
-                expected = extracted.to_model(task).to_dict()
+                expected = extracted.to_model(extraction_task).to_dict()
                 fields = ("id", "file_path", "source_id", "clip_id", "frame_number", "width", "height", "thumbnail_path")
                 if any(actual.get(key) != expected.get(key) for key in fields):
                     matches = False
@@ -210,12 +210,12 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["kind"] in ("gui_ocr_clip", "gui_ocr_frame"):
             from core.operations.ocr import OcrOutcome
 
-            outcome = OcrOutcome.from_dict(payload)
-            if outcome.target_type != ("frame" if is_frame else "clip"):
+            ocr_outcome = OcrOutcome.from_dict(payload)
+            if ocr_outcome.target_type != ("frame" if is_frame else "clip"):
                 raise StaleJobResult("Saved OCR target type changed")
-            if outcome.record_json is not None and clip.get("analysis_records", {}).get("extract_text") != json.loads(outcome.record_json):
+            if ocr_outcome.record_json is not None and clip.get("analysis_records", {}).get("extract_text") != json.loads(ocr_outcome.record_json):
                 continue
-            if clip.get("extracted_texts") == [text.to_dict() for text in outcome.to_models()]:
+            if clip.get("extracted_texts") == [text.to_dict() for text in ocr_outcome.to_models()]:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_embeddings":
@@ -238,14 +238,14 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.jobs.gaze import _saved_gaze
             from core.operations.gaze import GazeOutcome
 
-            outcome = GazeOutcome.from_dict(payload)
-            if outcome.record_json is not None and clip.get("analysis_records", {}).get("gaze") != json.loads(outcome.record_json):
+            gaze_outcome = GazeOutcome.from_dict(payload)
+            if gaze_outcome.record_json is not None and clip.get("analysis_records", {}).get("gaze") != json.loads(gaze_outcome.record_json):
                 continue
             expected = _saved_gaze(
                 {
-                    "gaze_yaw": outcome.yaw,
-                    "gaze_pitch": outcome.pitch,
-                    "gaze_category": outcome.category,
+                    "gaze_yaw": gaze_outcome.yaw,
+                    "gaze_pitch": gaze_outcome.pitch,
+                    "gaze_category": gaze_outcome.category,
                 }
             )
             if {key: clip.get(key) for key in expected} == expected:
@@ -255,8 +255,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.jobs.faces import _saved_faces
             from core.operations.faces import FaceOutcome
 
-            expected = _saved_faces(FaceOutcome.from_dict(payload).face_dicts())
-            if _saved_array_matches(clip, "face_embeddings", {"face_embeddings": expected}, payload.get("record_json")):
+            expected_faces = _saved_faces(FaceOutcome.from_dict(payload).face_dicts())
+            if _saved_array_matches(clip, "face_embeddings", {"face_embeddings": expected_faces}, payload.get("record_json")):
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_object_detection":
@@ -298,7 +298,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 payload["record_json"]
             ):
                 continue
-            expected = [
+            expected_queries = [
                 *identity["inputs"]["task"]["previous_queries"],
                 {
                     "query": payload["query"],
@@ -308,7 +308,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 },
             ]
             # Later appends may follow this result before the explicit save.
-            if (clip.get("custom_queries") or [])[: len(expected)] == expected:
+            if (clip.get("custom_queries") or [])[: len(expected_queries)] == expected_queries:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_describe":
@@ -324,7 +324,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["kind"] == "gui_transcribe":
             if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("transcribe") != json.loads(payload["record_json"]):
                 continue
-            expected = [
+            expected_transcript = [
                 TranscriptSegment.from_dict(s).to_dict() for s in payload["segments"]
             ]
         else:
@@ -340,8 +340,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             distribute_words_to_segments(
                 segments, [WordTimestamp.from_dict(w) for w in payload["words"]]
             )
-            expected = [segment.to_dict() for segment in segments]
-        if clip.get("transcript") == expected:
+            expected_transcript = [segment.to_dict() for segment in segments]
+        if clip.get("transcript") == expected_transcript:
             pending.append((result_id, receipt_digest))
     if pending:
         store.checkpoint_results(pending)

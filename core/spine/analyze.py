@@ -9,23 +9,30 @@ cancel_event inside the per-frame iteration loops in ``core/analysis/*.py``
 is a follow-up; coarse-grained cancel between clips is sufficient for v1
 and matches the existing pure-function APIs.
 
-Skip-existing semantics: operations skip already-populated analysis fields.
-Colors retain their historical truthy-palette check; an empty palette is retried.
-This makes re-issuing the same op
-after a crashed/cancelled run a no-op for clips that succeeded (R18 —
-preserve on-disk progress).
+Skip-existing decisions belong to the shared operations, which validate record
+identity and state. Legacy projections retain unknown provenance until explicitly
+reused or recomputed. Successful results can survive a cancelled run without
+making failed or stale results reusable.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from core.project import Project
 
 logger = logging.getLogger(__name__)
+
+
+class _AnalysisBatchResult(TypedDict):
+    succeeded: list[dict]
+    failed: list[dict]
+    skipped: list[dict]
+    unprocessed: list[dict]
+    total_clips: int
 
 
 def _check_cancel(cancel_event: Optional[threading.Event]) -> bool:
@@ -56,8 +63,8 @@ def analyze_colors(
 ) -> dict:
     """Extract dominant colors for each clip in ``clip_ids`` (or all clips).
 
-    Per-clip granularity: cancel checked between clips. Skips clips whose
-    ``dominant_colors`` is already set unless ``skip_existing=False``.
+    Cancellation is checked between clips. The shared operation validates saved
+    provenance before skipping; ``skip_existing=False`` requests recomputation.
     """
     from core.operations.colors import ColorApplication, color_request, compute_colors
 
@@ -370,7 +377,7 @@ def detect_objects(
 
     clips = _resolve_clip_ids(project, clip_ids)
     clips_by_id = {clip.id: clip for clip in clips}
-    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(clips)}
+    result: _AnalysisBatchResult = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(clips)}
     tasks = tuple(object_detection_task(clip, project.sources_by_id.get(clip.source_id), image_path=_thumbnail_for_clip(clip), skip_existing=skip_existing, detect_all=detect_all) for clip in clips)
     options = ObjectDetectionOptions(confidence, detect_all)
     application = ObjectDetectionApplication(project, tasks, options)
@@ -649,7 +656,7 @@ def gaze(
     )
     options = GazeOptions(sample_interval)
     application = GazeApplication(project, tasks, options)
-    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
+    result: _AnalysisBatchResult = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
 
     def deliver(outcome):
         accepted = application.apply(project, outcome) if outcome.can_apply else False
@@ -698,7 +705,7 @@ def embeddings(
         for c in _resolve_clip_ids(project, clip_ids)
     )
     application = EmbeddingApplication(project, tasks)
-    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
+    result: _AnalysisBatchResult = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
 
     def deliver(outcome):
         if outcome.status == "succeeded":
@@ -808,7 +815,7 @@ def boundary_embeddings(
     clips = _resolve_clip_ids(project, clip_ids)
     tasks = tuple(boundary_embedding_task(clip, project.sources_by_id.get(clip.source_id), skip_existing=skip_existing) for clip in clips)
     application = BoundaryEmbeddingApplication(project, tasks)
-    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
+    result: _AnalysisBatchResult = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
     for outcome in run_boundary_embeddings(tasks, cancel_event=cancel_event):
         accepted = application.apply(project, outcome) if outcome.can_apply else False
         if outcome.can_apply and not accepted:
