@@ -382,6 +382,13 @@ jobs:
           Invoke-SceneRipperSmokeTarget -Target "project"
           Invoke-SceneRipperSmokeTarget -Target "scene-detect"
           Invoke-SceneRipperSmokeTarget -Target "transcription"
+          # U13 gate: managed-interpreter worker launch and real inference from the packaged app.
+          $env:SCENE_RIPPER_SMOKE_INSTALL_PROFILES = "1"
+          try {
+            Invoke-SceneRipperSmokeTarget -Target "native-worker"
+          } finally {
+            Remove-Item Env:\SCENE_RIPPER_SMOKE_INSTALL_PROFILES -ErrorAction SilentlyContinue
+          }
           if ($env:UPDATER_ENABLED -eq "true") {
             Invoke-SceneRipperSmokeTarget -Target "updater"
           } else {

@@ -561,6 +561,7 @@ class Settings:
 
     # Transcription settings
     transcription_model: str = "medium.en"  # tiny.en, small.en, medium.en, large-v3
+    native_worker_isolation: bool = True  # Run faster-whisper in the managed worker process
     transcription_language: str = "en"  # en, auto, or specific language code
     transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper, groq
     transcription_cloud_model: str = "whisper-large-v3-turbo"  # Groq cloud model
@@ -874,6 +875,8 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if updates := data.get("updates"):
         if "check_for_updates" in updates:
             settings.check_for_updates = bool(updates["check_for_updates"])
+        if "native_worker_isolation" in updates:
+            settings.native_worker_isolation = bool(updates["native_worker_isolation"])
         if "automatically_download_updates" in updates:
             settings.automatically_download_updates = bool(updates["automatically_download_updates"])
         if "skipped_update_version" in updates:
@@ -1078,6 +1081,7 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "updates": {
             "check_for_updates": settings.check_for_updates,
+            "native_worker_isolation": settings.native_worker_isolation,
             "automatically_download_updates": settings.automatically_download_updates,
             "skipped_update_version": settings.skipped_update_version,
             "last_prompted_update_version": settings.last_prompted_update_version,

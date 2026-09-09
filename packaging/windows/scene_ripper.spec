@@ -105,7 +105,7 @@ a = Analysis(
         (str(UPDATE_FEED_FILE), "core"),
         (str(UPDATE_BETA_FEED_FILE), "core"),
         (str(UPDATE_PUBLIC_KEY_FILE), "core"),
-    ] + core_requirement_datas,
+    ] + core_requirement_datas + build_support.collect_runtime_worker_datas(PROJECT_ROOT),
     hiddenimports=_unique([
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",

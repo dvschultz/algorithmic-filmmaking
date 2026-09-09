@@ -406,6 +406,9 @@ jobs:
           run_smoke_target "project"
           run_smoke_target "scene-detect"
           run_smoke_target "transcription"
+          # U13 gate: managed-interpreter worker launch and real inference from the packaged app.
+          # The target installs the transcription profile into the managed runtime when allowed.
+          SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 run_smoke_target "native-worker"
 
       - name: Import signing certificate
         if: env.MACOS_CERTIFICATE != ''

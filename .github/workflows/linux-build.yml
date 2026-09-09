@@ -133,6 +133,26 @@ jobs:
           VERSION="${APP_VERSION}"
           ./build-appimage.sh "$VERSION"
 
+      - name: Native worker runtime smoke (AppImage)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET: native-worker
+          SCENE_RIPPER_SMOKE_INSTALL_PROFILES: "1"
+        run: |
+          # U13 gate: the installed AppImage must launch the worker under its own
+          # interpreter and run real inference. --appimage-extract-and-run avoids FUSE.
+          APPIMAGE="$(ls -1 ./*.AppImage packaging/linux/*.AppImage 2>/dev/null | head -n1)"
+          test -n "$APPIMAGE" || { echo "No AppImage produced"; exit 1; }
+          chmod +x "$APPIMAGE"
+          LOG="$(mktemp)"
+          if ! timeout 900 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
+            tail -200 "$LOG"; echo "native-worker smoke failed"; exit 1
+          fi
+          grep -q "Runtime smoke test 'native-worker' completed successfully" "$LOG" \
+            || { tail -200 "$LOG"; echo "native-worker success marker missing"; exit 1; }
+          tail -20 "$LOG"
+
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:

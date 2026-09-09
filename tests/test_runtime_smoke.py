@@ -20,6 +20,7 @@ def test_runtime_smoke_targets_are_stable():
         "sequence-build",
         "render-short",
         "mcp-stdio",
+        "native-worker",
     )
 
 
@@ -85,3 +86,15 @@ def test_updater_runtime_smoke_surfaces_unavailable_status(monkeypatch):
 
     with pytest.raises(RuntimeError, match="missing metadata"):
         run_runtime_smoke_target("updater")
+
+
+def test_native_worker_runtime_smoke_passes_in_source_mode(monkeypatch):
+    """Handshake under an explicit interpreter plus real inference through the worker."""
+    import importlib.util
+
+    if importlib.util.find_spec("faster_whisper") is None:
+        import pytest
+
+        pytest.skip("faster-whisper not installed in this environment")
+    monkeypatch.delenv("SCENE_RIPPER_WORKER_PYTHON", raising=False)
+    assert run_runtime_smoke_target("native-worker") == "native-worker"

@@ -469,6 +469,79 @@ def _build_word_timestamps(raw_words) -> Optional[list[WordTimestamp]]:
     return result
 
 
+# --- managed worker isolation (KTD8) ------------------------------------------
+
+def native_worker_enabled() -> bool:
+    """Whether faster-whisper runs in the managed worker instead of this process.
+
+    ``SCENE_RIPPER_NATIVE_WORKERS=0`` disables isolation (tests, diagnostics);
+    ``1`` forces it. Otherwise the setting ``native_worker_isolation`` decides.
+    """
+    override = os.environ.get("SCENE_RIPPER_NATIVE_WORKERS")
+    if override in ("0", "1"):
+        return override == "1"
+    try:
+        from core.settings import load_settings
+
+        return bool(getattr(load_settings(), "native_worker_isolation", True))
+    except Exception:  # noqa: BLE001 - settings problems must not disable transcription
+        return True
+
+
+def _transcribe_in_worker(
+    media_path: Path,
+    model_name: str,
+    language: Optional[str],
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    *,
+    extract_audio: bool,
+    cancel_event=None,
+) -> tuple[list[TranscriptSegment], Optional[str]]:
+    """Run faster-whisper inside the transcription worker; returns segments and language."""
+    import json
+
+    from core.runtime_supervisor import (
+        WorkerCancelled, WorkerCrashed, WorkerError, WorkerTaskError, default_supervisor,
+    )
+
+    args: dict = {"media_path": str(media_path), "model": model_name, "language": language, "device": "auto", "compute_type": "int8"}
+    if extract_audio:
+        args["ffmpeg"] = _require_ffmpeg()
+    try:
+        result = default_supervisor().run(
+            "transcription", "transcribe", args,
+            cancel_event=cancel_event, progress=progress_callback,
+        )
+    except WorkerCancelled:
+        raise
+    except WorkerCrashed as exc:
+        tail = (exc.stderr_tail or "")[-300:]
+        raise TranscriptionError(
+            f"Transcription worker crashed (exit {exc.returncode}); the editor is unaffected. {tail}".strip()
+        ) from exc
+    except WorkerTaskError as exc:
+        raise TranscriptionError(f"Transcription failed in worker: {exc}") from exc
+    except WorkerError as exc:
+        raise TranscriptionError(f"Transcription worker error: {exc}") from exc
+    payload = json.loads(Path(result["result_path"]).read_text())
+    if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
+        raise TranscriptionError("Transcription worker returned a malformed result")
+    detected = payload.get("language")
+    segments = []
+    for item in payload["segments"]:
+        words = item.get("words")
+        segments.append(TranscriptSegment(
+            start_time=float(item["start"]), end_time=float(item["end"]), text=str(item["text"]),
+            confidence=float(item.get("confidence", 0.0)),
+            words=[
+                WordTimestamp(start=float(w["start"]), end=float(w["end"]), text=str(w["text"]), probability=w.get("probability"))
+                for w in words
+            ] if words else None,
+            language=detected,
+        ))
+    return segments, detected
+
+
 def _transcribe_video_faster_whisper(
     video_path: Path,
     model_name: str,
@@ -478,6 +551,12 @@ def _transcribe_video_faster_whisper(
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> list[TranscriptSegment]:
     """Transcribe using faster-whisper backend."""
+    if native_worker_enabled():
+        results, _language = _transcribe_in_worker(
+            video_path, model_name, language, progress_callback, extract_audio=True,
+        )
+        return refine_transcript_segments(results, mode=segmentation_mode, max_seconds=segment_max_seconds)
+
     model = get_model(model_name)
 
     if progress_callback:
@@ -690,6 +769,13 @@ def transcribe_clip(
             )
 
         # faster-whisper backend
+        if native_worker_enabled():
+            results, _language = _transcribe_in_worker(
+                tmp_path, model_name, language, extract_audio=False,
+            )
+            return refine_transcript_segments(
+                results, mode=segmentation_mode, max_seconds=segment_max_seconds,
+            )
         model = get_model(model_name)
         segments, info = model.transcribe(
             str(tmp_path),

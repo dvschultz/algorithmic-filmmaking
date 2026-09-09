@@ -700,3 +700,25 @@ def collect_macos_sparkle_datas(project_root: Path) -> list[tuple[str, str]]:
             target = target / destination
         collected.append((source_path, str(target)))
     return collected
+
+
+def collect_runtime_worker_datas(project_root: Path) -> list[tuple[str, str]]:
+    """Stage the managed worker package as plain source for frozen builds.
+
+    The worker runs under the managed Python interpreter, never the frozen
+    executable, so its package must exist as importable source files at
+    ``<resources>/runtime_worker_src/runtime_worker``. Only that package is
+    staged; it is stdlib-only at import time by design.
+    """
+    package_dir = project_root / "core" / "runtime_worker"
+    if not (package_dir / "__main__.py").is_file():
+        raise RuntimeError(f"runtime_worker package not found at {package_dir}")
+    collected = []
+    for file_path in sorted(package_dir.glob("*.py")):
+        collected.append((str(file_path), str(Path("runtime_worker_src") / "runtime_worker")))
+    return collected
+
+
+def runtime_worker_staged_layout() -> tuple[str, str]:
+    """(resource-relative directory, module name) the app uses to launch workers."""
+    return ("runtime_worker_src", "runtime_worker")

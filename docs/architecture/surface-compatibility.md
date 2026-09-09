@@ -150,6 +150,20 @@ removed. MCP `shuffle_sequence` remains a timeline reorder, not a generation.
 Dialog workers now project registry runs back onto their existing emitted
 shapes; the dialogs themselves remain the desktop parameter collectors.
 
+## Native worker isolation (U13)
+
+`core/runtime_supervisor.py` launches `core/runtime_worker` under an explicit
+interpreter (managed python-build-standalone when frozen, `sys.executable` from
+source) over a bounded newline-JSON protocol (version 1, 1 MiB per line, logs on
+stderr). faster-whisper transcription runs in the worker on every surface when
+`native_worker_isolation` is on (default; `SCENE_RIPPER_NATIVE_WORKERS=0`
+disables). Crashes are contained (`WorkerCrashed` → `TranscriptionError`),
+cancellation tears down the process tree after a grace period, results must
+stay inside the task's staging directory, and installs go through allowlisted
+profiles in `core/runtime_profiles.py`. mlx-whisper and the cloud backend still
+run in-process (U14). Packaged-platform proof is the `native-worker` runtime
+smoke target in the release workflows.
+
 ## Persistence and media-time defects
 
 `tests/fixtures/projects/v1.0.json` through `v1.4.json` exercise the currently

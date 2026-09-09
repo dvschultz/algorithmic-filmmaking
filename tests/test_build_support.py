@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -410,3 +412,38 @@ def test_litellm_uses_curated_collection_rules():
     assert not use_full_package_collection("litellm")
     assert "**/proxy/**" in get_pyinstaller_data_excludes("litellm")
     assert "litellm.proxy" in get_pyinstaller_hiddenimport_excludes("litellm")
+
+
+def test_collect_runtime_worker_datas_stages_the_worker_package_as_source(tmp_path):
+    root = tmp_path / "repo"
+    package = root / "core" / "runtime_worker"
+    package.mkdir(parents=True)
+    for name in ("__init__.py", "__main__.py", "protocol.py", "tasks.py"):
+        (package / name).write_text("# stub\n")
+    (package / "notes.txt").write_text("not python")
+    collected = build_support.collect_runtime_worker_datas(root)
+    assert {Path(src).name for src, _ in collected} == {"__init__.py", "__main__.py", "protocol.py", "tasks.py"}
+    assert {dest for _, dest in collected} == {str(Path("runtime_worker_src") / "runtime_worker")}
+    assert build_support.runtime_worker_staged_layout() == ("runtime_worker_src", "runtime_worker")
+
+
+def test_collect_runtime_worker_datas_requires_the_package(tmp_path):
+    with pytest.raises(RuntimeError, match="runtime_worker"):
+        build_support.collect_runtime_worker_datas(tmp_path)
+
+
+def test_real_runtime_worker_package_is_stdlib_only_at_import():
+    """The staged worker must import without project or model dependencies."""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1] / "core"
+    code = (
+        "import sys; sys.modules.pop('core', None); import runtime_worker, runtime_worker.tasks;"
+        "bad=[m for m in sys.modules if m.split('.')[0] in ('core','models','PySide6','torch','numpy','faster_whisper')];"
+        "assert not bad, bad; print('ok')"
+    )
+    # -I ignores PYTHONPATH; put the worker root on the path explicitly instead.
+    code = f"import sys; sys.path.insert(0, {str(root)!r}); " + code
+    result = subprocess.run([sys.executable, "-I", "-c", code], cwd=str(root), capture_output=True, text=True)
+    assert result.returncode == 0 and "ok" in result.stdout, result.stderr

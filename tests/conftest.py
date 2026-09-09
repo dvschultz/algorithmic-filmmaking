@@ -16,6 +16,10 @@ from core.transcription import TranscriptSegment  # noqa: E402
 from models.clip import Source, Clip  # noqa: E402
 
 
+# In-process transcription for the existing suites; worker isolation has its own tests
+# (tests/test_runtime_supervisor.py) that enable it explicitly.
+os.environ.setdefault("SCENE_RIPPER_NATIVE_WORKERS", "0")
+
 @pytest.fixture(scope="session", autouse=True)
 def qt_application_lifetime() -> object | None:
     """Keep one application alive when collected GUI tests already loaded Qt.

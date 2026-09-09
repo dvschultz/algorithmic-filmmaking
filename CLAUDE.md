@@ -30,7 +30,8 @@ ui/                  (21 files)  # Main window, chat, player, browser, theme, al
   widgets/           (24 files)  # Cards, grids, timeline preview, empty states
   timeline/          (8 files)   # Timeline widget, tracks, clips, playhead
   session_history.py            # Qt actions projecting shared project history
-core/                (54 files)  # Business logic, FFmpeg, settings, project, LLM
+core/                (57 files)  # Business logic, FFmpeg, settings, project, LLM, runtime_supervisor (managed workers)
+  runtime_worker/    (4 files)   # Self-contained worker package run by the managed interpreter (stdlib-only imports)
   analysis/          (18 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
   remix/             (30 files)  # Sequencer algorithm definitions; engine.py/registry.py hold the Qt-free algorithm registry (23 algorithms labeled in ui/algorithm_config.py)
   spine/             (23 files)  # GUI-agnostic shared tool implementations (no PySide6/mpv/av imports)

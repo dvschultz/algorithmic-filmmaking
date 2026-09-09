@@ -16,7 +16,7 @@ Start with U11. Use the order below by default, delivering one algorithm or runt
 
 - [x] **U11:** Algorithm registry and recipe model; prove shuffle and color first. Evidence recorded below.
 - [x] **U12:** Migrate every sequencer and expose variation commands. Evidence recorded below.
-- [ ] **U13:** Prove managed native-worker isolation with transcription on all supported packaged platforms.
+- [ ] **U13:** Prove managed native-worker isolation with transcription on all supported packaged platforms. Source-mode proof and CI gates landed; packaged evidence pending the next release builds (see evidence below).
 - [ ] **U14:** Migrate the remaining native features and unify runtime install/repair.
 - [ ] **U15:** Shared clip/frame item models with measured large-library performance.
 - [ ] **U16:** Recipe inspection and A/B variation comparison in the existing workspace.
@@ -124,6 +124,28 @@ This work does not add new creative algorithms, a new frontend, general composit
 5. A result pointing outside assigned staging is rejected, and install requests cannot name arbitrary packages or executables.
 
 **Verification:** Platform smoke evidence proves managed interpreter launch and real inference. Do not remove existing startup safeguards or expand the migration until this gate passes.
+
+**Decisions (recorded 2026-09-09):**
+
+- *Managed executable layout.* Workers run as ``<interpreter> -X utf8 -m runtime_worker`` with ``PYTHONPATH`` = worker root + the package directories built for that interpreter. Frozen apps stage `core/runtime_worker/*.py` as plain source at `<resources>/runtime_worker_src/runtime_worker` (`packaging/build_support.collect_runtime_worker_datas`, wired into both PyInstaller specs) and launch the managed python-build-standalone interpreter from `get_managed_python_dir()`, never the frozen executable. Source runs use `sys.executable`; `SCENE_RIPPER_WORKER_PYTHON` overrides. The Linux AppImage runs from source, so its own `usr/bin/python3` is the worker interpreter.
+- *Compatible runtime families.* Managed package directories are compiled for the managed Python; they join the worker path only when that interpreter runs the worker (`default_launch`). A developer interpreter never has those wheels prepended (this shadowing broke NumPy on the first local run).
+- *Protocol/message bounds.* Protocol 1, newline-delimited JSON, ASCII-only, 1 MiB per line both ways; results reference files instead of inlining data; logs on stderr only. Unknown message types, oversized or malformed lines, and version mismatches are protocol violations; a violating worker is retired.
+- *Cancellation.* The host sends `cancel`; cooperative tasks answer `cancelled` and the warm worker survives. After `cancel_grace` (3 s default) the host terminates the whole process tree (POSIX session `killpg` SIGTERM then SIGKILL; Windows `taskkill /T /F`). Task timeouts terminate the same way.
+- *Worker idle policy.* One warm worker per runtime family; tasks per family are serialized (accelerator admission = one task per family). Workers live until supervisor shutdown or failure; no idle reaper yet (U14 may add one with the profile work).
+- *Result validation.* Every `*_path`/`path` value in a result must resolve (following symlinks) inside the task's staging directory.
+- *Install requests.* `core/runtime_profiles.py` maps allowlisted profile ids (`transcription-whisper`) to feature-registry names; package pins come from `core/package_manifest.json`. Callers cannot name packages, URLs, or executables. Headless Rose Hobart no longer installs packages on demand (fixed in U12 review); worker features must be installed explicitly.
+- *Credentials.* Worker environments drop `PYTHONPATH`/`PYTHONHOME`/`VIRTUAL_ENV` and any `*_API_KEY`/`*_TOKEN`/`*_SECRET` variables; provider calls stay in the host.
+
+**Evidence (2026-09-09, source mode on macOS):**
+
+- Files: `core/runtime_worker/{__init__,protocol,tasks,__main__}.py`, `core/runtime_supervisor.py`, `core/runtime_profiles.py`, `core/transcription.py` (`native_worker_enabled`, `_transcribe_in_worker`; faster-whisper video and clip paths route through the worker; `SCENE_RIPPER_NATIVE_WORKERS` and the `native_worker_isolation` setting control it), `core/runtime_smoke.py` (`native-worker` target), `packaging/build_support.py` + both `.spec` files, `.github/workflows/{build-macos,build-windows,linux-build}.yml` (smoke gate with `SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1`).
+- Scenario 1 (crash containment): `tests/test_runtime_supervisor.py::test_worker_crash_is_contained_and_project_edits_continue` and `::test_worker_exit_during_a_task_surfaces_as_a_crash_not_a_hang`.
+- Scenario 2 (blocked-task cancellation with tree teardown): `::test_cancelling_a_blocked_task_kills_the_worker_tree_after_grace` (child process recorded and verified dead), `::test_cooperative_cancellation_returns_promptly`, `::test_task_timeout_terminates_the_worker`.
+- Scenario 3 (protocol mismatch, truncated, excessive, malformed): `::test_protocol_mismatch_is_refused`, `::test_excessive_and_malformed_output_fail_the_task_without_a_result`, `::test_truncated_output_from_a_dying_worker_is_a_crash`, and `tests/test_runtime_worker_protocol.py` (10 tests incl. version refusal, oversize, malformed host lines, pre-task cancel).
+- Scenario 5 (staging escape, install allowlist): `::test_result_paths_outside_staging_are_rejected` (traversal, relative, symlink), `::test_install_requests_cannot_name_packages_or_executables`, credential stripping and explicit-interpreter tests.
+- Real inference: `tests/test_runtime_smoke.py::test_native_worker_runtime_smoke_passes_in_source_mode` runs `native-worker` (handshake + tiny.en transcription of a synthetic tone through the worker) with the developer interpreter; the same target was also run by hand under the managed interpreter at `~/Library/Application Support/Scene Ripper/python` for the handshake/echo half (its faster-whisper profile is not installed locally).
+- Scenario 4 (installed macOS/Windows/Linux packages): **not yet proven.** The `native-worker` smoke target is wired into all three release workflows and fails the build if the worker resolves to the frozen executable, the staged package is missing, the handshake fails, or transcription cannot run. Evidence must be recorded from the next `build-macos.yml`, `build-windows.yml`, and `linux-build.yml` runs before U14 begins; existing Torch/MLX startup safeguards stay in place until then.
+- Validation: `python -m pytest tests/test_runtime_supervisor.py tests/test_runtime_worker_protocol.py tests/test_runtime_smoke.py tests/test_build_support.py -q` → 60 passed; transcription and settings suites pass with `SCENE_RIPPER_NATIVE_WORKERS=0` defaulted in `tests/conftest.py` (the existing suites patch in-process models). Scoped mypy clean for the new modules; ruff clean.
 
 ## U14. Migrate native features and runtime installation
 

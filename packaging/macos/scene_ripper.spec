@@ -103,7 +103,7 @@ a = Analysis(
         (str(VERSION_FILE), "core"),
         (str(BUILD_VERSION_FILE), "core"),
         (str(UPDATE_CHANNEL_FILE), "core"),
-    ] + sparkle_datas + core_requirement_datas,
+    ] + sparkle_datas + core_requirement_datas + build_support.collect_runtime_worker_datas(PROJECT_ROOT),
     hiddenimports=_unique([
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",

@@ -37,6 +37,7 @@ def get_runtime_smoke_targets() -> tuple[str, ...]:
         "sequence-build",
         "render-short",
         "mcp-stdio",
+        "native-worker",
     )
 
 
@@ -53,6 +54,7 @@ def run_runtime_smoke_target(target: str) -> str:
         "sequence-build": _run_sequence_build_smoke,
         "render-short": _run_render_short_smoke,
         "mcp-stdio": _run_mcp_stdio_smoke,
+        "native-worker": _run_native_worker_smoke,
     }
     handler = handlers.get(normalized)
     if handler is None:
@@ -673,3 +675,75 @@ def _create_synthetic_audio(path: Path) -> Path:
             value = int(amplitude * math.sin(2 * math.pi * 440 * index / sample_rate))
             wav.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
     return path
+
+
+def _run_native_worker_smoke() -> None:
+    """Prove the managed worker launches under an explicit interpreter and can infer.
+
+    Frozen apps must launch the worker from the staged ``runtime_worker_src``
+    package under the managed Python, never the frozen executable. The
+    handshake and a stdlib task are mandatory. Real transcription runs when the
+    ``transcription-whisper`` profile is installed; set
+    ``SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1`` to install it first, otherwise a
+    missing profile is a reported failure so packaged evidence stays honest.
+    """
+    import math
+    import os
+    import wave
+
+    from core.paths import get_managed_python_dir, is_frozen
+    from core.runtime_profiles import install_profile, profile_status
+    from core.runtime_supervisor import RuntimeSupervisor, default_launch, worker_package_root
+    from core.transcription import _transcribe_in_worker
+
+    launch = default_launch("transcription", ensure_interpreter=is_frozen())
+    if is_frozen():
+        if launch.interpreter.resolve() == Path(sys.executable).resolve():
+            raise RuntimeError("Frozen app resolved the worker interpreter to its own executable.")
+        managed_dir = get_managed_python_dir().resolve()
+        if managed_dir not in launch.interpreter.resolve().parents:
+            raise RuntimeError(f"Worker interpreter is not the managed Python: {launch.interpreter}")
+        if worker_package_root().name != "runtime_worker_src":
+            raise RuntimeError("Frozen app did not resolve the staged runtime_worker_src package.")
+
+    supervisor = RuntimeSupervisor(allow_test_tasks=True)
+    supervisor.launch_factory = lambda family: launch
+    try:
+        worker = supervisor.worker("transcription")
+        if worker.python is None or Path(worker.python).resolve() != launch.interpreter.resolve():
+            raise RuntimeError(f"Worker reported interpreter {worker.python}, expected {launch.interpreter}")
+        echoed = supervisor.run("transcription", "echo", {"value": "smoke"})
+        if echoed.get("echo") != "smoke" or echoed.get("pid") == os.getpid():
+            raise RuntimeError("Worker echo task did not run in a separate process.")
+        logger.info("Native worker handshake OK: pid=%s python=%s", worker.pid, worker.python)
+
+        status = profile_status("transcription-whisper")
+        if not status["installed"]:
+            if os.environ.get("SCENE_RIPPER_SMOKE_INSTALL_PROFILES") == "1":
+                status = install_profile("transcription-whisper")
+            if not status["installed"]:
+                raise RuntimeError(
+                    "transcription-whisper profile is not installed; missing "
+                    + ", ".join(status["missing"]) + ". Set SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 to install."
+                )
+        with tempfile.TemporaryDirectory(prefix="scene-ripper-native-worker-smoke-") as tmp:
+            wav = Path(tmp) / "tone.wav"
+            with wave.open(str(wav), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                for index in range(16000):
+                    value = int(8000 * math.sin(2 * math.pi * 220 * index / 16000))
+                    handle.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
+            os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
+            import core.runtime_supervisor as supervisor_module
+
+            previous = supervisor_module._default
+            supervisor_module._default = supervisor
+            try:
+                segments, language = _transcribe_in_worker(wav, "tiny.en", "en", None, extract_audio=True)
+            finally:
+                supervisor_module._default = previous
+            logger.info("Native worker transcription OK: %d segments, language=%s", len(segments), language)
+    finally:
+        supervisor.shutdown()
