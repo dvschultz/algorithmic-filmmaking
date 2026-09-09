@@ -1294,6 +1294,7 @@ def duplicate_sequence(project, sequence_id: Optional[str] = None, name: Optiona
                 "plus any overrides, a fresh seed unless keep_seed or seed is given. The original "
                 "sequence is untouched; provider-assisted algorithms make new calls. This can be undone.",
     requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+    conflicts_with_workers=True,
 )
 def regenerate_sequence(
     project,
@@ -3709,7 +3710,7 @@ def get_sequence_recipe(project, sequence_id: Optional[str] = None) -> dict:
     modifies_gui_state=False
 )
 def compare_sequences(project, sequence_a: str, sequence_b: str) -> dict:
-    """Return recipe and timeline differences between two sequences."""
+    """Return recipe and timeline differences between two sequences."""  # modifies_project_state defaults False
     from core.spine.sequences import compare_sequences as _impl
 
     return _impl(project, sequence_a, sequence_b)

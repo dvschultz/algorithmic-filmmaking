@@ -230,7 +230,7 @@ This work does not add new creative algorithms, a new frontend, general composit
 - Regeneration in the desktop splits `regenerate_sequence` into `prepare_regeneration` (GUI thread, validates inputs/version/parameters and snapshots candidates) and a `VariationWorker` that runs `run_algorithm` with a cancel event; publishing happens on the GUI thread only when the worker's project/session still match. A cancelled or failed run publishes nothing. Progress and per-sequence busy state flow into the panel; the regenerate dialog shows the same cost/missing-dependency summary as the confirm step.
 - Switching A/B keeps the elapsed playhead time and clamps to the arriving sequence's end (`comparable_seconds` in the comparison). The rendered-proxy probe lives in MainWindow; a missing preview offers rendering for that side without hiding the recipe differences.
 - Deleting a compared sequence clears only its selector (selection is kept by sequence id across refreshes). Agent- or MCP-created variations appear through the existing `sequences_changed` sync. Read-only projects keep Show/Recipe and disable Duplicate/Regenerate.
-- Keyboard: `A`/Left and `B`/Right switch while the panel has focus; `Ctrl+Shift+C` toggles it.
+- Keyboard: `A`/Left and `B`/Right switch while the panel (or one of its children) has focus; `Ctrl+Shift+B` toggles it (`Ctrl+Shift+C` already toggles the chat panel).
 
 **Evidence (2026-09-09, macOS source mode):**
 

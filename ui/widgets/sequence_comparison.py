@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Callable, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
@@ -109,6 +109,7 @@ class SequenceComparisonPanel(QWidget):
     duplicate_requested = Signal(str)       # sequence_id
     regenerate_requested = Signal(str)      # sequence_id
     render_preview_requested = Signal(str)  # sequence_id
+    cancel_requested = Signal()             # stop the running variation
     selection_changed = Signal()            # A or B changed
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -116,8 +117,15 @@ class SequenceComparisonPanel(QWidget):
         self._project: Optional["Project"] = None
         self._preview_ready: Callable[["Sequence"], bool] = lambda _sequence: False
         self._busy: dict[str, str] = {}  # sequence_id -> progress text
+        self._preview_ready_by_slot: dict[str, bool] = {SLOT_A: False, SLOT_B: False}
         self.setFocusPolicy(Qt.StrongFocus)
         self._setup_ui()
+        # A/B keys must work even while a selector or button has focus, so the
+        # panel filters its children's key presses instead of relying on focus.
+        for side in (self.side_a, self.side_b):
+            for child in (side.selector, side.show_btn, side.inspect_btn, side.duplicate_btn,
+                          side.regenerate_btn, side.render_btn):
+                child.installEventFilter(self)
 
     # -- UI ---------------------------------------------------------------
 
@@ -152,10 +160,19 @@ class SequenceComparisonPanel(QWidget):
         self.difference_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         body_layout.addWidget(self.difference_label)
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(Spacing.SM)
         self.status_label = QLabel("")
         self.status_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
         self.status_label.setWordWrap(True)
-        body_layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label, 1)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Stop the running variation; nothing is added")
+        self.cancel_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self.cancel_requested.emit)
+        status_row.addWidget(self.cancel_btn)
+        body_layout.addLayout(status_row)
         layout.addWidget(self.body)
 
         for side in (self.side_a, self.side_b):
@@ -195,6 +212,7 @@ class SequenceComparisonPanel(QWidget):
             else:
                 self._busy.pop(sequence_id, None)
         self.status_label.setText(message if running else "")
+        self.cancel_btn.setVisible(bool(self._busy))
         self._update_actions()
 
     def refresh(self) -> None:
@@ -246,19 +264,22 @@ class SequenceComparisonPanel(QWidget):
                 side.values["seed"].setText("no recipe" if sequence.recipe is None else "unreadable recipe")
             else:
                 side.values["seed"].setText("--" if recipe.seed is None else str(recipe.seed))
-            side.values["preview"].setText(self._preview_text(sequence))
+            ready = self._probe_preview(sequence)
+            self._preview_ready_by_slot[side.slot] = ready
+            side.values["preview"].setText(
+                "empty" if not sequence.get_all_clips() else "ready" if ready else "not rendered"
+            )
         self._update_differences()
         self._update_actions()
 
-    def _preview_text(self, sequence: "Sequence") -> str:
+    def _probe_preview(self, sequence: "Sequence") -> bool:
         if not sequence.get_all_clips():
-            return "empty"
+            return False
         try:
-            ready = bool(self._preview_ready(sequence))
+            return bool(self._preview_ready(sequence))
         except Exception:  # a probe failure must not break the panel
-            logger.debug("Preview probe failed for %s", sequence.id, exc_info=True)
-            ready = False
-        return "ready" if ready else "not rendered"
+            logger.warning("Preview probe failed for sequence %s", sequence.id, exc_info=True)
+            return False
 
     def _update_differences(self) -> None:
         a_id, b_id = self.selected_ids()
@@ -291,8 +312,32 @@ class SequenceComparisonPanel(QWidget):
         )
         self.difference_label.setText("\n".join(lines))
 
+    # -- keyboard ---------------------------------------------------------
+
+    _SWITCH_KEYS = {Qt.Key_A: SLOT_A, Qt.Key_Left: SLOT_A, Qt.Key_B: SLOT_B, Qt.Key_Right: SLOT_B}
+
+    def _switch_for_key(self, key: int) -> bool:
+        slot = self._SWITCH_KEYS.get(key)
+        if slot is None:
+            return False
+        self._emit_for(self.side_a if slot == SLOT_A else self.side_b, self.switch_requested)
+        return True
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.modifiers() in (Qt.NoModifier, Qt.KeypadModifier) and self._switch_for_key(event.key()):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.KeyPress and event.modifiers() in (Qt.NoModifier, Qt.KeypadModifier):
+            if self._switch_for_key(event.key()):
+                return True
+        return super().eventFilter(watched, event)
+
     def _update_actions(self) -> None:
         read_only = bool(self._project is not None and self._project.is_read_only)
+        any_busy = bool(self._busy)  # one variation at a time, on either side
         for side in (self.side_a, self.side_b):
             sequence = self._sequence(side.selected_id())
             present = sequence is not None
@@ -301,22 +346,9 @@ class SequenceComparisonPanel(QWidget):
             has_recipe = present and sequence.readable_recipe is not None
             side.show_btn.setEnabled(present and not busy)
             side.inspect_btn.setEnabled(present and sequence.recipe is not None)
-            side.duplicate_btn.setEnabled(present and not read_only and not busy)
-            side.regenerate_btn.setEnabled(has_recipe and not read_only and not busy)
-            preview_ready = has_clips and side.values["preview"].text() == "ready"
+            side.duplicate_btn.setEnabled(present and not read_only and not any_busy)
+            side.regenerate_btn.setEnabled(has_recipe and not read_only and not any_busy)
+            preview_ready = has_clips and self._preview_ready_by_slot[side.slot]
             side.render_btn.setEnabled(has_clips and not preview_ready and not busy)
             side.render_btn.setText("Preview ready" if preview_ready else "Render preview")
 
-    # -- keyboard ---------------------------------------------------------
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        key = event.key()
-        if key in (Qt.Key_A, Qt.Key_Left):
-            self._emit_for(self.side_a, self.switch_requested)
-            event.accept()
-            return
-        if key in (Qt.Key_B, Qt.Key_Right):
-            self._emit_for(self.side_b, self.switch_requested)
-            event.accept()
-            return
-        super().keyPressEvent(event)

@@ -700,6 +700,44 @@ def _sequence_summary(sequence: Sequence) -> dict:
     }
 
 
+def _timeline_identity(entry: Any) -> tuple:
+    """Everything that makes two placed entries the same cut: media, range, place, transforms."""
+    return (
+        entry.source_clip_id, entry.frame_id, entry.track_index, entry.start_frame,
+        entry.in_point, entry.out_point, entry.hold_frames, entry.hflip, entry.vflip, entry.reverse,
+    )
+
+
+def regeneration_candidates(project: Project, plan: RegenerationPlan) -> list[tuple[Clip, Source]]:
+    """Candidate (Clip, Source) pairs for a plan, including source-parameter clips.
+
+    Mirrors ``generate_sequence`` so the desktop worker and the headless path
+    feed the algorithm the same inputs. Raises ``ValueError`` when a clip or
+    parameter source has left the project.
+    """
+    from core.remix.registry import registry
+
+    definition = registry.require(plan.algorithm)
+    candidates: list[tuple[Clip, Source]] = []
+    for clip_id in plan.clip_ids:
+        clip = project.clips_by_id.get(clip_id)
+        source = project.sources_by_id.get(clip.source_id) if clip is not None else None
+        if clip is None or source is None:
+            raise ValueError(f"Clip {clip_id} is no longer in the project")
+        candidates.append((clip, source))
+    for name in definition.source_parameters:
+        source_id = plan.parameters.get(name)
+        source = project.sources_by_id.get(source_id) if isinstance(source_id, str) else None
+        if source is None:
+            raise ValueError(f"Parameter {name!r} must name a source in this project")
+        present = {clip.id for clip, _ in candidates}
+        candidates.extend(
+            (clip, source) for clip in project.clips_by_source.get(source.id, [])
+            if clip.id not in present and not clip.disabled
+        )
+    return candidates
+
+
 def compare_sequences(project: Project, sequence_a: str, sequence_b: str) -> dict:
     """Side-by-side summary of two sequences and their recipe differences.
 
@@ -734,8 +772,8 @@ def compare_sequences(project: Project, sequence_a: str, sequence_b: str) -> dic
         and (recipe_a.parent_id == recipe_b.id or recipe_b.parent_id == recipe_a.id
              or (recipe_a.parent_id is not None and recipe_a.parent_id == recipe_b.parent_id))
     )
-    entries_a = [(e.source_clip_id, e.in_point, e.out_point) for e in first.get_all_clips()]
-    entries_b = [(e.source_clip_id, e.in_point, e.out_point) for e in second.get_all_clips()]
+    entries_a = [_timeline_identity(e) for e in first.get_all_clips()]
+    entries_b = [_timeline_identity(e) for e in second.get_all_clips()]
     return {
         "success": True,
         "a": summary_a,

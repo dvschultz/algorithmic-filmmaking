@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QDialog
 
 from core.project import Project
-from core.spine.sequences import compare_sequences, generate_sequence, regenerate_sequence
+from core.spine.sequences import compare_sequences, duplicate_sequence, generate_sequence, regenerate_sequence
 from models.clip import Clip, Source
 from models.sequence import Sequence
 
@@ -35,6 +36,15 @@ def _project(tmp_path: Path, count: int = 6) -> Project:
     ])
     project.mark_clean()
     return project
+
+
+def _drain_until(qapp, done, *, tries: int = 100) -> None:
+    for _ in range(tries):
+        if done():
+            return
+        qapp.processEvents()
+        QTest.qWait(20)
+    raise AssertionError("timed out waiting for the event loop condition")
 
 
 def _ab(tmp_path: Path):
@@ -62,6 +72,18 @@ class TestCompareSequences:
         assert result["comparable_seconds"] == result["a"]["duration_seconds"]
         assert result["a"]["parent_recipe_id"] is None and result["b"]["parent_recipe_id"] == result["a"]["recipe_id"]
         json.dumps(result)  # MCP-safe
+
+    def test_timelines_identical_sees_transforms_and_placement(self, tmp_path):
+        project, a, b = _ab(tmp_path)
+        copy = duplicate_sequence(project, a.id)
+        assert copy["success"]
+        twin = project.sequence
+        assert compare_sequences(project, a.id, twin.id)["timelines_identical"]
+        twin.tracks[0].clips[0].hflip = True
+        assert not compare_sequences(project, a.id, twin.id)["timelines_identical"]
+        twin.tracks[0].clips[0].hflip = False
+        twin.tracks[0].clips[0].start_frame += 1
+        assert not compare_sequences(project, a.id, twin.id)["timelines_identical"]
 
     def test_manual_sequences_compare_timelines_only(self, tmp_path):
         project = _project(tmp_path)
@@ -166,7 +188,9 @@ class TestComparisonPanel:
         panel.inspect_requested.connect(inspected.append)
         panel.duplicate_requested.connect(duplicated.append)
         panel.regenerate_requested.connect(regenerated.append)
-        QTest.keyClick(panel, Qt.Key_B)
+        panel.show()
+        panel.side_a.selector.setFocus()  # a focused combo must not swallow A/B
+        QTest.keyClick(panel.side_a.selector, Qt.Key_B)
         QTest.keyClick(panel, Qt.Key_Left)
         panel.side_a.inspect_btn.click()
         panel.side_b.duplicate_btn.click()
@@ -176,11 +200,19 @@ class TestComparisonPanel:
 
     def test_generation_state_disables_actions_for_that_sequence(self, panel):
         project, a, b, panel = panel
+        cancelled = []
+        panel.cancel_requested.connect(lambda: cancelled.append(True))
         panel.set_generation_state(a.id, "Regenerating shuffle...", running=True)
         assert panel.status_label.text() == "Regenerating shuffle..."
-        assert not panel.side_a.regenerate_btn.isEnabled() and panel.side_b.regenerate_btn.isEnabled()
+        # One variation at a time: both Regenerate buttons wait, Show/Recipe on B still work.
+        assert not panel.side_a.regenerate_btn.isEnabled() and not panel.side_b.regenerate_btn.isEnabled()
+        assert not panel.side_a.show_btn.isEnabled() and panel.side_b.show_btn.isEnabled()
+        assert not panel.cancel_btn.isHidden()
+        panel.cancel_btn.click()
+        assert cancelled == [True]
         panel.set_generation_state(a.id, running=False)
         assert panel.side_a.regenerate_btn.isEnabled() and panel.status_label.text() == ""
+        assert panel.cancel_btn.isHidden()
 
     def test_read_only_projects_keep_inspection_but_not_mutation(self, panel, monkeypatch):
         project, a, b, panel = panel
@@ -241,11 +273,7 @@ class TestSequenceTabVariations:
         worker = tab._variation_worker
         assert not tab.comparison_panel.side_a.regenerate_btn.isEnabled()
         worker.wait(10000)
-        deadline = 50
-        while tab._variation_worker is not None and deadline:
-            qapp.processEvents()
-            QTest.qWait(20)
-            deadline -= 1
+        _drain_until(qapp, lambda: tab._variation_worker is None)
         new = project.sequence
         assert new.name == "C" and new.readable_recipe.parameters["reverse"] is True
         assert new.readable_recipe.parent_id == a.readable_recipe.id and new.readable_recipe.seed == 3
@@ -277,12 +305,7 @@ class TestSequenceTabVariations:
         assert tab.cancel_variation()
         release.set()
         worker.wait(5000)
-        for _ in range(50):
-            if tab._variation_worker is None:
-                break
-            qapp.processEvents()
-            QTest.qWait(20)
-        assert tab._variation_worker is None
+        _drain_until(qapp, lambda: tab._variation_worker is None)
         assert len(project.sequences) == 2 and all(s.name != "Never" for s in project.sequences)
         assert tab.comparison_panel.side_a.regenerate_btn.isEnabled()
 
@@ -299,6 +322,104 @@ class TestSequenceTabVariations:
         assert "Agent" in names
         assert not tab.comparison_panel.empty_label.isVisibleTo(tab.comparison_panel)
 
+    def test_load_active_sequence_feeds_library_clips_to_the_preview_strip(self, tab, monkeypatch):
+        """Regression: the strip got SequenceClip entries (no thumbnail_path) and raised."""
+        project, a, b, tab = tab
+        received = []
+        monkeypatch.setattr(tab.timeline_preview, "set_clips", lambda clips, sources: received.append(clips))
+        tab._load_active_sequence()
+        assert received and len(received[0]) == 6
+        assert all(hasattr(clip, "thumbnail_path") and clip is project.clips_by_id[clip.id] for clip, _ in received[0])
+
+    def test_failed_variation_leaves_project_unchanged_and_reenables(self, qapp, tab, monkeypatch):
+        import core.remix.registry as registry_module
+
+        project, a, b, tab = tab
+        monkeypatch.setattr(registry_module, "run_algorithm", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("provider down")))
+        monkeypatch.setattr("ui.tabs.sequence_tab.QMessageBox.warning", lambda *args, **kwargs: None)
+        tab.comparison_panel.select("a", a.id)
+        assert tab.start_variation(a.id, name="Broken")["success"]
+        _drain_until(qapp, lambda: tab._variation_worker is None)
+        assert len(project.sequences) == 2 and all(s.name != "Broken" for s in project.sequences)
+        assert tab.comparison_panel.side_a.regenerate_btn.isEnabled()
+
+    def test_project_switch_during_variation_drops_the_result(self, qapp, tab, monkeypatch):
+        import core.remix.registry as registry_module
+
+        project, a, b, tab = tab
+        started, release = threading.Event(), threading.Event()
+        real_run = registry_module.run_algorithm
+
+        def slow_run(*args, **kwargs):
+            started.set()
+            release.wait(5)
+            return real_run(*args, **kwargs)
+
+        monkeypatch.setattr(registry_module, "run_algorithm", slow_run)
+        assert tab.start_variation(a.id, name="Orphan")["success"]
+        assert started.wait(5)
+        other = Project.new()
+        tab.clear()  # what MainWindow does on New/Open Project: cancels and joins the worker
+        tab.set_project(other)
+        release.set()
+        _drain_until(qapp, lambda: tab._variation_worker is None)
+        assert len(project.sequences) == 2 and len(other.sequences) == 1
+        assert all(s.name != "Orphan" for s in project.sequences + other.sequences)
+
+    def test_variation_publish_waits_for_a_pending_generation_draft(self, qapp, tab):
+        project, a, b, tab = tab
+        tab.comparison_panel.select("a", a.id)
+        assert tab.start_variation(a.id, parameters={"vflip": True}, keep_seed=True, name="Late")["success"]
+        worker = tab._variation_worker
+        tab._algorithm_running = True  # a card/dialog generation is holding the timeline
+        worker.wait(10000)
+        _drain_until(qapp, lambda: tab._deferred_variation is not None)
+        assert all(s.name != "Late" for s in project.sequences) and tab._variation_worker is worker
+        assert not tab.comparison_panel.side_a.regenerate_btn.isEnabled()
+        tab._algorithm_running = False
+        tab._publish_deferred_variation()
+        assert project.sequence.name == "Late" and tab._variation_worker is None
+        assert tab.comparison_panel.side_a.regenerate_btn.isEnabled()
+
+    def test_regenerate_button_flow_runs_through_the_dialog(self, qapp, tab, monkeypatch):
+        from ui.dialogs import recipe_dialogs
+
+        project, a, b, tab = tab
+        tab.comparison_panel.select("a", a.id)
+
+        def accept(self):
+            self._fields["reverse"].setText("true")
+            self.keep_seed.setChecked(True)
+            return QDialog.Accepted
+
+        monkeypatch.setattr(recipe_dialogs.RegenerateDialog, "exec", accept)
+        tab.comparison_panel.side_a.regenerate_btn.click()
+        assert tab._variation_worker is not None
+        tab._variation_worker.wait(10000)
+        _drain_until(qapp, lambda: tab._variation_worker is None)
+        assert project.sequence.readable_recipe.parameters["reverse"] is True
+        assert project.sequence.readable_recipe.seed == 3
+
+    def test_compare_toggle_shortcut_and_agent_context(self, qapp, tab):
+        from core.gui_state import GUIState
+
+        project, a, b, tab = tab
+        state = GUIState()
+        tab.set_gui_state(state)
+        assert tab.compare_btn.shortcut().toString() == "Ctrl+Shift+B"  # Ctrl+Shift+C belongs to the chat panel
+        tab.compare_btn.setChecked(True)
+        assert not tab.comparison_panel.isHidden() and state.comparison_panel_visible
+        tab.comparison_panel.select("b", b.id)
+        assert (state.compared_sequence_a_id, state.compared_sequence_b_id) == (project.sequence.id, b.id)
+        assert "COMPARE A/B" in state.to_context_string(project=project)
+
+    def test_show_stops_playback_before_switching(self, tab):
+        project, a, b, tab = tab
+        stops = []
+        tab.stop_requested.connect(lambda: stops.append(True))
+        assert tab.switch_to_sequence(b.id)
+        assert stops == [True]
+
     def test_inspect_dialog_renders_recipe(self, qapp, tab):
         from ui.dialogs.recipe_dialogs import RecipeInspectDialog, RegenerateDialog
         from core.remix.registry import registry
@@ -314,8 +435,8 @@ class TestSequenceTabVariations:
         form._fields["max_consecutive_same_source"].setText("not json")
         with pytest.raises(ValueError):
             form.parameters()
-        form._fields["max_consecutive_same_source"].setText("")
-        assert form.parameters() == {"hflip": True, "vflip": False, "reverse": False}
+        form._fields["max_consecutive_same_source"].setText("")  # cleared -> algorithm default
+        assert form.parameters() == {"hflip": True, "vflip": False, "reverse": False, "max_consecutive_same_source": 1}
         form.explicit_seed.setChecked(True)
         form.seed_spin.setValue(7)
         assert form.seed() == 7 and not form.keeps_seed()

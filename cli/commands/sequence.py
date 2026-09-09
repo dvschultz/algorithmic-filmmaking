@@ -151,8 +151,13 @@ def recipe(ctx: click.Context, project_file: Path, sequence_id: Optional[str]) -
     """Show a sequence's stored recipe and whether it can be reconstructed."""
     from core.spine.sequences import get_sequence_recipe
 
+    _read(ctx, project_file, lambda project: get_sequence_recipe(project, sequence_id))
+
+
+def _read(ctx: click.Context, project_file: Path, operation) -> None:
+    """Run a read-only spine query and print its result (no save)."""
     try:
-        result = get_sequence_recipe(_load(project_file), sequence_id)
+        result = operation(_load(project_file))
     except Exception as exc:  # noqa: BLE001
         result = {"success": False, "error": str(exc)}
     if not result.get("success"):
@@ -172,16 +177,7 @@ def compare(ctx: click.Context, project_file: Path, sequence_a: str, sequence_b:
     """Compare two sequences: counts, durations, seeds and changed recipe parameters."""
     from core.spine.sequences import compare_sequences
 
-    try:
-        result = compare_sequences(_load(project_file), sequence_a, sequence_b)
-    except Exception as exc:  # noqa: BLE001
-        result = {"success": False, "error": str(exc)}
-    if not result.get("success"):
-        if _json(ctx):
-            output_result(result, as_json=True)
-            exit_with(ExitCode.VALIDATION_ERROR)
-        exit_with(ExitCode.VALIDATION_ERROR, str(result.get("error")))
-    output_result(result, as_json=_json(ctx))
+    _read(ctx, project_file, lambda project: compare_sequences(project, sequence_a, sequence_b))
 
 
 @sequence.command("reconstruct")

@@ -80,14 +80,14 @@ Changing the algorithm or direction dropdown on a populated sequence shows a **R
 
 ### Compare A/B (variations)
 
-Click **Compare A/B** in the timeline header (Ctrl+Shift+C) to open the comparison panel. Pick any two sequences as **A** and **B**; the panel shows each one's algorithm, clip count, duration, seed and preview status, and lists every recipe parameter that differs between them (or the timeline delta when a side has no recipe).
+Click **Compare A/B** in the timeline header (Ctrl+Shift+B) to open the comparison panel. Pick any two sequences as **A** and **B**; the panel shows each one's algorithm, clip count, duration, seed and preview status, and lists every recipe parameter that differs between them (or the timeline delta when a side has no recipe).
 
 | Control | Effect |
 |---------|--------|
 | **Show A / Show B** (or the `A`/`B`, Left/Right keys) | Loads that sequence into the timeline at the same elapsed time, clamped to the shorter one's end, so you compare the same moment |
 | **Recipe** | Opens the stored recipe (parameters, seed, inputs, realized placements) and says whether the timeline still matches it |
 | **Duplicate** | Copies the sequence and its recipe as a new sequence; nothing is recomputed |
-| **Regenerate…** | Edits parameters and seed (keep, draw fresh, or set one), shows the cost and missing-dependency summary, then runs the recipe again as a new variation in the background. The original never changes, and cancelling adds nothing |
+| **Regenerate…** | Edits parameters and seed (keep, draw fresh, or set one; a cleared field goes back to the algorithm default), shows the cost and missing-dependency summary, then runs the recipe again as a new variation in the background. A **Cancel** button appears while it runs; the original never changes, and cancelling adds nothing. One variation runs at a time |
 | **Render preview** | Renders the cached proxy for a side that has none; recipe differences stay readable without it |
 
 A newly generated variation fills slot B automatically. Deleting a compared sequence clears only its slot. Variations created by the agent or over MCP appear in the selectors as soon as they are published.

@@ -121,6 +121,7 @@ class SequenceTab(BaseTab):
         self._apply_in_progress = False
         self._sequence_worker: Optional[SequenceWorker] = None
         self._variation_worker: Optional[VariationWorker] = None
+        self._deferred_variation: Optional[tuple] = None
         self._algorithm_running = False  # Prevents dirty flag during algo runs
         self._sequence_dirty = False  # Set on manual user edits (drag, remove)
         self._replace_sequence_index = None  # Deferred removal for Replace flow
@@ -248,6 +249,8 @@ class SequenceTab(BaseTab):
         self.comparison_panel.duplicate_requested.connect(self.duplicate_sequence)
         self.comparison_panel.regenerate_requested.connect(self.regenerate_sequence)
         self.comparison_panel.render_preview_requested.connect(self.sequence_preview_render_requested.emit)
+        self.comparison_panel.cancel_requested.connect(self.cancel_variation)
+        self.comparison_panel.selection_changed.connect(self._sync_comparison_context)
         layout.addWidget(self.comparison_panel)
 
         # Main content splitter
@@ -391,10 +394,10 @@ class SequenceTab(BaseTab):
         layout.addWidget(self.export_edl_btn)
 
         self.compare_btn = QPushButton("Compare A/B")
-        self.compare_btn.setToolTip("Compare two sequences side by side and switch between them (Ctrl+Shift+C)")
+        self.compare_btn.setToolTip("Compare two sequences side by side and switch between them (Ctrl+Shift+B)")
         self.compare_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
         self.compare_btn.setCheckable(True)
-        self.compare_btn.setShortcut("Ctrl+Shift+C")
+        self.compare_btn.setShortcut("Ctrl+Shift+B")  # Ctrl+Shift+C toggles the chat panel
         self.compare_btn.toggled.connect(self._on_compare_toggled)
         layout.addWidget(self.compare_btn)
 
@@ -2024,6 +2027,7 @@ class SequenceTab(BaseTab):
     def clear(self):
         """Clear all state including available clips (called on new project)."""
         self._end_sequence_generation(force=True)
+        self._stop_variation_worker()
         self._replace_sequence_index = None
         self._apply_in_progress = False
         self._clips = []
@@ -2143,6 +2147,7 @@ class SequenceTab(BaseTab):
             self._replace_sequence_index = None
             self._load_active_sequence()
         self.timeline.sequence_refreshed.emit()
+        self._publish_deferred_variation()
 
     def _sync_sequence_dropdown(self):
         """Rebuild both dropdown widgets from project.sequences. Blocks signals."""
@@ -2168,6 +2173,28 @@ class SequenceTab(BaseTab):
             if self._project is not None and self._project.sequence is not None and not a_id:
                 self.comparison_panel.select("a", self._project.sequence.id)
             self.comparison_panel.setFocus()
+        self._sync_comparison_context()
+
+    def _sync_comparison_context(self) -> None:
+        """Let the agent see which sequences are being compared."""
+        state = getattr(self, "_gui_state", None)
+        if state is None:
+            return
+        a_id, b_id = self.comparison_panel.selected_ids()
+        state.compared_sequence_a_id = a_id
+        state.compared_sequence_b_id = b_id
+        state.comparison_panel_visible = not self.comparison_panel.isHidden()
+
+    def _stop_variation_worker(self) -> None:
+        """Cancel and join a running variation (project switch, close)."""
+        worker = self._variation_worker
+        if worker is None:
+            return
+        worker.cancel()
+        worker.wait(5000)
+        self._variation_worker = None
+        self._deferred_variation = None
+        self.comparison_panel.set_generation_state(worker.plan.sequence_id, "", running=False)
 
     def _sequence_index(self, sequence_id: str) -> int:
         if not self._project:
@@ -2182,8 +2209,12 @@ class SequenceTab(BaseTab):
         """
         index = self._sequence_index(sequence_id)
         if index < 0 or self._algorithm_running:
+            if index >= 0:
+                self.status_message.emit("Wait for the running generation before switching sequences")
             return False
         elapsed = self.timeline.get_playhead_time()
+        # Stop playback first so the other sequence's proxy does not keep playing.
+        self.stop_requested.emit()
         if index != self._project.active_sequence_index:
             if self._sequence_dirty:
                 self._persist_current_sequence()
@@ -2226,7 +2257,10 @@ class SequenceTab(BaseTab):
         from core.remix.registry import registry
         from ui.dialogs.recipe_dialogs import RegenerateDialog
 
-        if self._project is None or self._variation_worker is not None:
+        if self._project is None:
+            return
+        if self._variation_worker is not None:
+            self.status_message.emit("A variation is already being generated; cancel it or wait")
             return
         sequence = next((s for s in self._project.sequences if s.id == sequence_id), None)
         recipe = sequence.readable_recipe if sequence is not None else None
@@ -2259,7 +2293,7 @@ class SequenceTab(BaseTab):
         Publishing happens in ``_on_variation_ready`` on the GUI thread; a
         cancelled or failed run never creates a sequence.
         """
-        from core.spine.sequences import prepare_regeneration
+        from core.spine.sequences import prepare_regeneration, regeneration_candidates
 
         if self._project is None:
             return {"success": False, "error": "No project"}
@@ -2271,10 +2305,11 @@ class SequenceTab(BaseTab):
         if isinstance(plan, dict):
             QMessageBox.warning(self, "Regenerate", plan.get("error", "Cannot regenerate"))
             return plan
-        candidates = [
-            (self._project.clips_by_id[c], self._project.sources_by_id[self._project.clips_by_id[c].source_id])
-            for c in plan.clip_ids
-        ]
+        try:
+            candidates = regeneration_candidates(self._project, plan)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Regenerate", str(exc))
+            return {"success": False, "error": str(exc)}
         worker = VariationWorker(plan, candidates, parent=self)
         worker._owner_project = self._project
         worker._owner_session = self._project.session.session_id
@@ -2289,10 +2324,11 @@ class SequenceTab(BaseTab):
         worker.error.connect(lambda error, owner=worker: self._on_variation_error(owner, error))
         worker.finished.connect(lambda owner=worker: self._on_variation_finished(owner))
         self._variation_worker = worker
+        self._deferred_variation = None
         self.comparison_panel.set_generation_state(plan.sequence_id, "Generating variation...", running=True)
         self.status_message.emit(f"Generating variation of {plan.name}...")
         worker.start()
-        return {"success": True, "sequence_id": sequence_id, "started": True}
+        return {"success": True, "source_sequence_id": sequence_id, "started": True}
 
     def cancel_variation(self) -> bool:
         worker = self._variation_worker
@@ -2312,6 +2348,11 @@ class SequenceTab(BaseTab):
         from core.spine.sequences import publish_recipe
 
         if worker is not self._variation_worker or worker.is_cancelled() or not self._variation_owner_current(worker):
+            return
+        if self._algorithm_running or getattr(self, "_pending_sequence_draft", None) is not None:
+            # A dialog/card generation holds a draft on the timeline; publishing now
+            # would break it. Publish once that generation ends (or is cancelled).
+            self._deferred_variation = (worker, recipe, sequence_settings, notes)
             return
         plan = worker.plan
         try:
@@ -2340,11 +2381,23 @@ class SequenceTab(BaseTab):
         QMessageBox.warning(self, "Regenerate", f"Variation failed: {error}")
 
     def _on_variation_finished(self, worker) -> None:
+        deferred = getattr(self, "_deferred_variation", None)
+        if deferred is not None and deferred[0] is worker:
+            return  # still waiting for the running generation to end; keep the busy state
         if self._variation_worker is worker:
             self._variation_worker = None
         self.comparison_panel.set_generation_state(worker.plan.sequence_id, "", running=False)
         if worker.is_cancelled():
             self.status_message.emit("Variation cancelled; nothing was added")
+
+    def _publish_deferred_variation(self) -> None:
+        deferred = getattr(self, "_deferred_variation", None)
+        if deferred is None:
+            return
+        self._deferred_variation = None
+        worker, recipe, sequence_settings, notes = deferred
+        self._on_variation_ready(worker, recipe, sequence_settings, notes)
+        self._on_variation_finished(worker)
 
     def _on_sequence_switched(self, new_index: int):
         """Handle user selecting a different sequence in the dropdown."""

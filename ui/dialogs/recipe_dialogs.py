@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Optional
 
 from PySide6.QtWidgets import (
@@ -47,7 +48,6 @@ class RecipeInspectDialog(QDialog):
         layout.addWidget(self.text)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
 
@@ -67,6 +67,7 @@ class RegenerateDialog(QDialog):
         self.setMinimumWidth(520)
         self._definition = definition
         self._fields: dict[str, QLineEdit] = {}
+        self._defaults: dict[str, Any] = {}
         layout = QVBoxLayout(self)
         intro = QLabel("Change any parameter, then generate a new variation. The original sequence stays as it is.")
         intro.setWordWrap(True)
@@ -96,9 +97,10 @@ class RegenerateDialog(QDialog):
             if spec.choices:
                 hint += " (" + ", ".join(json.dumps(c) for c in spec.choices) + ")"
             edit.setToolTip(hint)
-            edit.setPlaceholderText(json.dumps(spec.default))
+            edit.setPlaceholderText("default: " + json.dumps(spec.default))
             form.addRow(spec.name, edit)
             self._fields[spec.name] = edit
+            self._defaults[spec.name] = spec.default
         if definition.seeded:
             self.keep_seed = QCheckBox("Keep the same seed")
             self.keep_seed.setChecked(False)
@@ -139,6 +141,7 @@ class RegenerateDialog(QDialog):
         for name, edit in self._fields.items():
             raw = edit.text().strip()
             if not raw:
+                values[name] = deepcopy(self._defaults[name])  # a cleared field means "back to default"
                 continue
             try:
                 values[name] = json.loads(raw)

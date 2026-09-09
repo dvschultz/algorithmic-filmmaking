@@ -2011,6 +2011,9 @@ class MainWindow(QMainWindow):
                 "detect_scenes": "detection_worker",
                 "download_video": "download_worker",
             }
+            if tool_name == "regenerate_sequence":
+                variation = getattr(self.sequence_tab, "_variation_worker", None)
+                return variation is not None and variation.isRunning()
             attr = worker_map.get(tool_name)
             if attr and hasattr(self, attr):
                 worker = getattr(self, attr)
@@ -5305,13 +5308,34 @@ class MainWindow(QMainWindow):
 
     def _on_sequence_preview_render_for(self, sequence_id: str) -> None:
         """Render a preview for a compared sequence (loads it first)."""
+        if self.sequence_preview_worker and self.sequence_preview_worker.isRunning():
+            self.status_bar.showMessage("A preview is already rendering; try again when it finishes", 4000)
+            return
         if self.sequence_tab.switch_to_sequence(sequence_id):
             self._start_sequence_preview_render(play_after_frame=None)
 
     def _sequence_preview_ready_for(self, sequence) -> bool:
-        """Whether a cached proxy exists for any project sequence (A/B panel probe)."""
+        """Whether a cached proxy exists for any project sequence (A/B panel probe).
+
+        Compiling the render plan and hashing inputs is not free, so results
+        are memoized per (sequence, project mutation, rendered path); the
+        panel asks on every selector change.
+        """
         if not sequence.get_all_clips() or self.project is None:
             return False
+        cache = getattr(self, "_preview_probe_cache", None)
+        if cache is None:
+            cache = self._preview_probe_cache = {}
+        key = (sequence.id, self.project.mutation_generation, str(self._rendered_sequence_preview_path))
+        if key in cache:
+            return cache[key]
+        if len(cache) > 64:
+            cache.clear()
+        ready = self._probe_sequence_preview(sequence)
+        cache[key] = ready
+        return ready
+
+    def _probe_sequence_preview(self, sequence) -> bool:
         from core.render_plan import compile_render_plan
 
         sources = dict(self.project.sources_by_id)
@@ -8899,7 +8923,9 @@ class MainWindow(QMainWindow):
         analysis_workers += tuple(worker for controller in clip_analyses for worker in controller.workers.values())
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_project_loads", ())) + tuple(getattr(self, "_active_legacy_reuses", ())) + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        variation_worker = getattr(self.sequence_tab, "_variation_worker", None)
+        generation_worker = getattr(self.sequence_tab, "_sequence_worker", None)
+        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_project_loads", ())) + tuple(getattr(self, "_active_legacy_reuses", ())) + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker, variation_worker, generation_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):

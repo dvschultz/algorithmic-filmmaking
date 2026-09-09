@@ -61,6 +61,9 @@ class GUIState:
     # Frame selection state
     selected_frame_ids: list[str] = field(default_factory=list)
     frames_tab_frame_ids: list[str] = field(default_factory=list)
+    compared_sequence_a_id: Optional[str] = None  # Sequence tab Compare A/B slots
+    compared_sequence_b_id: Optional[str] = None
+    comparison_panel_visible: bool = False
     frames_tab_source_filter: Optional[str] = None
 
     # Analyze tab state
@@ -167,6 +170,11 @@ class GUIState:
 
             if self.frames_tab_frame_ids:
                 lines.append(f"FRAMES TAB: {len(self.frames_tab_frame_ids)} frames visible")
+            if self.comparison_panel_visible:
+                lines.append(
+                    f"COMPARE A/B: A={self.compared_sequence_a_id or 'none'} "
+                    f"B={self.compared_sequence_b_id or 'none'} (compare_sequences shows the differences)"
+                )
 
             if self.frames_tab_source_filter:
                 lines.append(f"FRAMES TAB SOURCE FILTER: {self.frames_tab_source_filter}")
@@ -434,6 +442,9 @@ class GUIState:
             # Frame state
             self.selected_frame_ids = []
             self.frames_tab_frame_ids = []
+            self.compared_sequence_a_id = None
+            self.compared_sequence_b_id = None
+            self.comparison_panel_visible = False
             self.frames_tab_source_filter = None
 
             # Plan state
