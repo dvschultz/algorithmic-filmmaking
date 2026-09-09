@@ -164,6 +164,18 @@ profiles in `core/runtime_profiles.py`. mlx-whisper and the cloud backend still
 run in-process (U14). Packaged-platform proof is the `native-worker` runtime
 smoke target in the release workflows.
 
+## Shared library item models (U15)
+
+`ui/models/clip_model.py` and `ui/models/frame_model.py` are the single
+in-process copy of clip/source/frame data for the Cut, Analyze and Frames
+workspaces; `ProjectSignalAdapter` owns and updates them before emitting its
+signals. Browsers keep only membership, selection and filters, mutations are
+refused off the GUI thread, and thumbnails for removed clips are dropped by
+`ClipLibraryModel.thumbnail_ready`. Public browser methods (`add_clip(s)`,
+`set_virtual_clips`, `update_clips`, `remove_clips_by_ids`,
+`get_source_for_clip`) are unchanged; `FrameBrowserModel` remains as an alias
+of `FrameLibraryModel`. Recorded 1k/10k budgets: `docs/architecture/library-models.md`.
+
 ## Persistence and media-time defects
 
 `tests/fixtures/projects/v1.0.json` through `v1.4.json` exercise the currently

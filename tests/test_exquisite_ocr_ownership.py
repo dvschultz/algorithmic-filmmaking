@@ -226,6 +226,7 @@ def test_intention_handoff_is_bound_to_original_workflow(tmp_path, monkeypatch, 
 
     class Dialog:
         def __init__(self, **kwargs):
+            self.recipe = None
             self.sequence_ready = SimpleNamespace(
                 connect=lambda callback: setattr(self, "callback", callback)
             )
@@ -268,6 +269,7 @@ def test_sequence_tab_passes_project_and_rejects_stale_handoff(
     class Dialog:
         def __init__(self, *, clips, sources_by_id, project, parent, is_current):
             assert project is tab._project
+            self.recipe = None
             self.sequence_ready = SimpleNamespace(
                 connect=lambda callback: setattr(self, "callback", callback)
             )
@@ -285,6 +287,6 @@ def test_sequence_tab_passes_project_and_rejects_stale_handoff(
         tab, [(project.clips[0], project.sources[0])]
     )
     if mode == "current":
-        tab._apply_exquisite_corpus_sequence.assert_called_once_with(["proposal"])
+        tab._apply_exquisite_corpus_sequence.assert_called_once_with(["proposal"], recipe=None)
     else:
         tab._apply_exquisite_corpus_sequence.assert_not_called()

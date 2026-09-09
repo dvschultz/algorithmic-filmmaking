@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import (
     Qt,
     Signal,
-    QAbstractListModel,
     QModelIndex,
     QSize,
     QRect,
@@ -27,14 +26,15 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QPixmap, QPixmapCache, QPainter, QColor, QPen
 
 from models.frame import Frame
+from ui.models.frame_model import FrameLibraryModel
 from ui.theme import theme, TypeScale, Spacing, Radii
 
 logger = logging.getLogger(__name__)
 
-# Custom data roles
-FrameIdRole = Qt.UserRole
-AnalyzedRole = Qt.UserRole + 1
-ThumbnailPathRole = Qt.UserRole + 2
+# Custom data roles (defined by the shared model)
+FrameIdRole = FrameLibraryModel.IdRole
+AnalyzedRole = FrameLibraryModel.AnalyzedRole
+ThumbnailPathRole = FrameLibraryModel.ThumbnailPathRole
 
 # Zoom level configuration: level -> (thumb_width, thumb_height, cell_width, cell_height)
 _ZOOM_SIZES = {
@@ -47,60 +47,9 @@ _ZOOM_SIZES = {
 _DEFAULT_ZOOM = 3
 
 
-class FrameBrowserModel(QAbstractListModel):
-    """Backing model for the frame browser QListView.
-
-    Stores a flat list of Frame objects and provides data through
-    Qt's model/view roles.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._frames: list[Frame] = []
-
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        if parent.isValid():
-            return 0
-        return len(self._frames)
-
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
-        if not index.isValid() or index.row() >= len(self._frames):
-            return None
-
-        frame = self._frames[index.row()]
-
-        if role == Qt.DisplayRole:
-            return frame.display_name()
-        elif role == Qt.DecorationRole:
-            if frame.thumbnail_path and frame.thumbnail_path.exists():
-                return str(frame.thumbnail_path)
-            return None
-        elif role == FrameIdRole:
-            return frame.id
-        elif role == AnalyzedRole:
-            return frame.analyzed
-        elif role == ThumbnailPathRole:
-            if frame.thumbnail_path:
-                return str(frame.thumbnail_path)
-            return None
-
-        return None
-
-    def set_frames(self, frames: list[Frame]):
-        """Replace the entire frame list."""
-        self.beginResetModel()
-        self._frames = list(frames)
-        self.endResetModel()
-
-    def get_frame(self, index: QModelIndex) -> Optional[Frame]:
-        """Get the Frame object for a model index."""
-        if not index.isValid() or index.row() >= len(self._frames):
-            return None
-        return self._frames[index.row()]
-
-    def frame_count(self) -> int:
-        """Return the number of frames in the model."""
-        return len(self._frames)
+# Compatibility alias: the frames view now renders straight from the shared
+# library model owned by the project adapter (KTD13).
+FrameBrowserModel = FrameLibraryModel
 
 
 class FrameThumbnailDelegate(QStyledItemDelegate):
@@ -265,8 +214,9 @@ class FrameBrowser(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Model
-        self._model = FrameBrowserModel(self)
+        # Private model until the project adapter's shared one is attached.
+        self._model = FrameLibraryModel(self)
+        self._shared_model = False
 
         # Delegate
         self._delegate = FrameThumbnailDelegate(self)
@@ -301,8 +251,36 @@ class FrameBrowser(QWidget):
 
         layout.addWidget(self._view)
 
+    def set_model(self, model: FrameLibraryModel) -> None:
+        """Render from a shared library model; the view keeps selection/zoom."""
+        if model is self._model:
+            return
+        self._model = model
+        self._shared_model = True
+        self._view.setModel(model)
+        self._view.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self._apply_zoom()
+
+    @property
+    def library_model(self) -> FrameLibraryModel:
+        return self._model
+
+    def uses_shared_model(self) -> bool:
+        """Whether frames come from the project adapter's model (no manual sync)."""
+        return self._shared_model
+
+    def frame_count(self) -> int:
+        return len(self._model)
+
     def set_frames(self, frames: list[Frame]):
-        """Replace the displayed frames."""
+        """Replace the displayed frames.
+
+        With a shared model attached the project already drives the rows, so
+        this only resets when the contents actually differ (a reset drops the
+        view's selection).
+        """
+        if self._shared_model and self._model.ids() == [frame.id for frame in frames]:
+            return
         self._model.set_frames(frames)
 
     def set_zoom(self, level: int):

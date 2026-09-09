@@ -39,6 +39,7 @@ from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.filter_state import FilterState
 from core.film_glossary import get_badge_tooltip
 from models.clip import Clip, Source
+from ui.models.clip_model import ClipLibraryModel
 from models.cinematography import CinematographyAnalysis
 from ui.gradient_glow import paint_gradient_glow, paint_card_body, RoundedTopLabel
 from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
@@ -925,9 +926,15 @@ class ClipBrowser(QWidget):
         self._thumbnail_by_id: dict[str, ClipThumbnail] = {}  # O(1) lookup by clip_id
         self.selected_clips: set[str] = set()  # clip ids
         self._drag_enabled = False
-        self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
+        # Clip/Source objects live in the shared library model (KTD13). The
+        # browser owns only membership (ordered ids), selection, and filters.
+        # A private model backs standalone use (tests, dialogs) until
+        # `attach_model` hands over the project-wide one.
+        self._model: ClipLibraryModel = ClipLibraryModel(self)
+        self._shared_model = False
         self._virtual_mode = False
-        self._virtual_entries: list[tuple[Clip, Source]] = []
+        self._virtual_ids: list[str] = []
+        self._virtual_id_set: set[str] = set()
         self._virtual_display_rows: list[tuple[str, object]] = []
         self._virtual_top_spacer: QWidget | None = None
         self._virtual_bottom_spacer: QWidget | None = None
@@ -1101,14 +1108,14 @@ class ClipBrowser(QWidget):
         new_cols = self._calculate_columns()
         if new_cols != self._last_column_count:
             self._last_column_count = new_cols
-            if self.thumbnails or self._virtual_entries:
+            if self.thumbnails or self._virtual_ids:
                 self._rebuild_grid()
         else:
             self._last_column_count = new_cols
 
     def refresh_layout(self):
         """Force a grid rebuild using the current viewport width."""
-        if not self.thumbnails and not self._virtual_entries:
+        if not self.thumbnails and not self._virtual_ids:
             return
         if self._virtual_mode and self.thumbnails:
             current_columns = self._calculate_columns()
@@ -1147,8 +1154,7 @@ class ClipBrowser(QWidget):
 
     def _create_thumbnail(self, clip: Clip, source: Source) -> ClipThumbnail:
         """Create and wire a thumbnail widget for a clip."""
-        # Store source reference
-        self._source_lookup[clip.id] = source
+        self._model.upsert([(clip, source)])
 
         # Create thumbnail widget
         thumb = ClipThumbnail(clip, source, drag_enabled=self._drag_enabled)
@@ -1161,11 +1167,52 @@ class ClipBrowser(QWidget):
 
         return thumb
 
+    def attach_model(self, model: ClipLibraryModel) -> None:
+        """Read clip and source data from a shared library model.
+
+        Membership already held by the browser is carried into the model so
+        attaching never drops cards. The shared model is owned by the project
+        adapter; the browser never removes rows from it.
+        """
+        if model is self._model:
+            return
+        model.upsert(self._all_entries())
+        self._model = model
+        self._shared_model = True
+
+    @property
+    def library_model(self) -> ClipLibraryModel:
+        """The item model this browser reads clip and source data from."""
+        return self._model
+
+    @property
+    def _virtual_entries(self) -> list[tuple[Clip, Source]]:
+        """Virtual-mode membership as (Clip, Source) pairs from the model."""
+        return self._model.entries(self._virtual_ids)
+
     def _all_entries(self) -> list[tuple[Clip, Source]]:
         """Return all browser clips as data pairs."""
         if self._virtual_mode:
-            return list(self._virtual_entries)
+            return self._virtual_entries
         return [(thumb.clip, thumb.source) for thumb in self.thumbnails]
+
+    def _forget(self, clip_ids) -> None:
+        """Drop clips from a private model; a shared model is project-owned."""
+        if not self._shared_model:
+            self._model.remove(clip_ids)
+
+    def _drop_virtual_ids(self, clip_ids: set[str]) -> bool:
+        """Remove ids from virtual membership; returns whether anything changed."""
+        doomed = clip_ids & self._virtual_id_set
+        if not doomed:
+            return False
+        self._virtual_ids = [cid for cid in self._virtual_ids if cid not in doomed]
+        self._virtual_id_set.difference_update(doomed)
+        self._forget(doomed)
+        return True
+
+    def _virtual_source_ids(self) -> set[str]:
+        return {source.id for _clip, source in self._virtual_entries}
 
     def is_virtualized(self) -> bool:
         """Whether the browser is storing clips as data and rendering a visible window."""
@@ -1174,7 +1221,7 @@ class ClipBrowser(QWidget):
     def get_total_clip_count(self) -> int:
         """Return total clips in the browser, including unrealized virtual clips."""
         if self._virtual_mode:
-            return len(self._virtual_entries)
+            return len(self._virtual_ids)
         return len(self.thumbnails)
 
     def get_realized_clip_count(self) -> int:
@@ -1189,19 +1236,20 @@ class ClipBrowser(QWidget):
         """Load clips in data-backed mode and realize only visible widgets."""
         self.clear()
         self._virtual_mode = True
-        self._virtual_entries = []
-        self._source_lookup = {}
-        seen: set[str] = set()
+        self._virtual_ids = []
+        self._virtual_id_set = set()
+        pairs = []
         for clip, source in clip_source_pairs:
-            if clip.id in seen:
+            if clip.id in self._virtual_id_set:
                 continue
-            seen.add(clip.id)
-            self._virtual_entries.append((clip, source))
-            self._source_lookup[clip.id] = source
+            self._virtual_id_set.add(clip.id)
+            self._virtual_ids.append(clip.id)
+            pairs.append((clip, source))
+        self._model.upsert(pairs)
 
         self._invalidate_virtual_rows()
         self._sync_custom_query_filter_options()
-        for clip, _source in self._virtual_entries:
+        for clip, _source in pairs:
             self._incremental_filter_enable(clip)
         self._update_duration_range()
         self._rebuild_grid()
@@ -1228,7 +1276,7 @@ class ClipBrowser(QWidget):
         # Drop any header whose source_id is no longer represented in the
         # virtual entries; reuse the rest on the next rebuild.
         if self._source_headers:
-            current_source_ids = {source.id for _clip, source in self._virtual_entries}
+            current_source_ids = self._virtual_source_ids()
             stale_ids = [
                 sid for sid in self._source_headers
                 if sid not in current_source_ids
@@ -1289,10 +1337,11 @@ class ClipBrowser(QWidget):
     def add_clip(self, clip: Clip, source: Source):
         """Add a clip to the browser."""
         if self._virtual_mode:
-            if clip.id in self._source_lookup:
+            if clip.id in self._virtual_id_set:
                 return
-            self._virtual_entries.append((clip, source))
-            self._source_lookup[clip.id] = source
+            self._model.upsert([(clip, source)])
+            self._virtual_ids.append(clip.id)
+            self._virtual_id_set.add(clip.id)
             self._sync_custom_query_filter_options()
             self._incremental_filter_enable(clip)
             self._update_duration_range()
@@ -1339,14 +1388,17 @@ class ClipBrowser(QWidget):
         """
         if self._virtual_mode:
             added: list[Clip] = []
+            pairs: list[tuple[Clip, Source]] = []
             for clip, source in clip_source_pairs:
-                if clip.id in self._source_lookup:
+                if clip.id in self._virtual_id_set:
                     continue
-                self._virtual_entries.append((clip, source))
-                self._source_lookup[clip.id] = source
+                self._virtual_ids.append(clip.id)
+                self._virtual_id_set.add(clip.id)
+                pairs.append((clip, source))
                 added.append(clip)
             if not added:
                 return
+            self._model.upsert(pairs)
             if not defer_filter_sync:
                 self._sync_custom_query_filter_options()
             for clip in added:
@@ -1384,6 +1436,10 @@ class ClipBrowser(QWidget):
 
     def clear(self):
         """Clear all clips."""
+        self._forget(
+            list(self._virtual_ids) if self._virtual_mode
+            else [thumb.clip.id for thumb in self.thumbnails]
+        )
         visible_virtual_widget_ids = {id(thumb) for thumb in self.thumbnails}
         for thumb in self.thumbnails:
             self.grid.removeWidget(thumb)
@@ -1408,11 +1464,11 @@ class ClipBrowser(QWidget):
         self.thumbnails = []
         self._thumbnail_by_id = {}
         self.selected_clips = set()
-        self._source_lookup = {}
         self._source_headers = {}
         self._group_expanded_state = {}
         self._virtual_mode = False
-        self._virtual_entries = []
+        self._virtual_ids = []
+        self._virtual_id_set = set()
         self._virtual_display_rows = []
         self._virtual_top_spacer = None
         self._virtual_bottom_spacer = None
@@ -1438,14 +1494,9 @@ class ClipBrowser(QWidget):
             }
             if self._similarity_anchor_id in removed_ids:
                 self._clear_similarity()
-            self._virtual_entries = [
-                (clip, source)
-                for clip, source in self._virtual_entries
-                if source.id != source_id
-            ]
+            self._drop_virtual_ids(removed_ids)
             for clip_id in removed_ids:
                 self.selected_clips.discard(clip_id)
-                self._source_lookup.pop(clip_id, None)
             if removed_ids:
                 selection_changed = self._sync_custom_query_filter_options()
                 self._rebuild_grid()
@@ -1478,7 +1529,7 @@ class ClipBrowser(QWidget):
             self.selected_clips.discard(thumb.clip.id)
             # Remove from lookups
             self._thumbnail_by_id.pop(thumb.clip.id, None)
-            self._source_lookup.pop(thumb.clip.id, None)
+        self._forget([thumb.clip.id for thumb in remove])
 
         # Clean up header for this source
         if source_id in self._source_headers:
@@ -1505,16 +1556,9 @@ class ClipBrowser(QWidget):
         if self._virtual_mode:
             if self._similarity_anchor_id in ids_to_remove:
                 self._clear_similarity()
-            before_count = len(self._virtual_entries)
-            self._virtual_entries = [
-                (clip, source)
-                for clip, source in self._virtual_entries
-                if clip.id not in ids_to_remove
-            ]
-            removed = before_count != len(self._virtual_entries)
+            removed = self._drop_virtual_ids(ids_to_remove)
             for clip_id in ids_to_remove:
                 self.selected_clips.discard(clip_id)
-                self._source_lookup.pop(clip_id, None)
             if removed:
                 selection_changed = self._sync_custom_query_filter_options()
                 self._rebuild_grid()
@@ -1541,7 +1585,7 @@ class ClipBrowser(QWidget):
             thumb.deleteLater()
             self.selected_clips.discard(thumb.clip.id)
             self._thumbnail_by_id.pop(thumb.clip.id, None)
-            self._source_lookup.pop(thumb.clip.id, None)
+        self._forget([thumb.clip.id for thumb in remove])
 
         if remove:
             self.thumbnails = keep
@@ -1702,11 +1746,14 @@ class ClipBrowser(QWidget):
     def _selected_count_for_source(self, source_id: str) -> int:
         """Return selected clip count for a source without depending on row cache."""
         if self._virtual_mode:
-            return sum(
-                1
-                for clip, source in self._virtual_entries
-                if source.id == source_id and clip.id in self.selected_clips
-            )
+            count = 0
+            for clip_id in self.selected_clips:
+                if clip_id not in self._virtual_id_set:
+                    continue
+                clip = self._model.clip(clip_id)
+                if clip is not None and clip.source_id == source_id:
+                    count += 1
+            return count
 
         return sum(
             1
@@ -1839,7 +1886,7 @@ class ClipBrowser(QWidget):
 
     def get_source_for_clip(self, clip_id: str) -> Optional[Source]:
         """Get the source for a clip by ID."""
-        return self._source_lookup.get(clip_id)
+        return self._model.source_for(clip_id)
 
     def update_clip_colors(self, clip_id: str, colors: list[tuple[int, int, int]]):
         """Update the colors for a specific clip thumbnail (O(1) lookup)."""
@@ -1877,7 +1924,7 @@ class ClipBrowser(QWidget):
                 self._refresh_source_header_counts()
             if selection_changed:
                 self.filters_changed.emit()
-        elif self._virtual_mode and clip_id in self._source_lookup:
+        elif self._virtual_mode and clip_id in self._virtual_id_set:
             selection_changed = self._sync_custom_query_filter_options()
             if selection_changed or self._clip_updates_require_rebuild():
                 self._rebuild_grid()
@@ -1902,7 +1949,7 @@ class ClipBrowser(QWidget):
                 self._rebuild_grid()
             else:
                 self._refresh_source_header_counts()
-        elif self._virtual_mode and clip_id in self._source_lookup:
+        elif self._virtual_mode and clip_id in self._virtual_id_set:
             self._update_filter_availability()
             if self._clip_updates_require_rebuild():
                 self._rebuild_grid()
@@ -1930,11 +1977,10 @@ class ClipBrowser(QWidget):
             preserve_layout: When True, refresh realized cards without rebuilding rows.
         """
         updated_by_id = {clip.id: clip for clip in clips}
+        # The shared model was refreshed by the project adapter before this
+        # slot ran; a private model learns about the new objects here.
+        self._model.refresh(clips)
         if self._virtual_mode and updated_by_id:
-            self._virtual_entries = [
-                (updated_by_id.get(existing_clip.id, existing_clip), source)
-                for existing_clip, source in self._virtual_entries
-            ]
             # Replace any stale Clip references in the cached display rows so
             # subsequent renders (when preserve_layout=True keeps the cache)
             # don't show pre-edit data.
@@ -2221,9 +2267,8 @@ class ClipBrowser(QWidget):
         # Sort groups alphabetically by filename
         sorted_source_ids = sorted(
             thumbs_by_source.keys(),
-            key=lambda sid: self._source_lookup.get(
-                next(iter(thumbs_by_source[sid])).clip.id, None
-            ).filename.lower() if thumbs_by_source[sid] else ""
+            key=lambda sid: next(iter(thumbs_by_source[sid])).source.filename.lower()
+            if thumbs_by_source[sid] else ""
         )
 
         # Build the grid row by row
@@ -2395,7 +2440,7 @@ class ClipBrowser(QWidget):
             return
 
         self._last_column_count = self._calculate_columns()
-        if not self._virtual_entries:
+        if not self._virtual_ids:
             self._clear_realized_virtual_widgets()
             self._show_empty_state()
             return
@@ -3339,7 +3384,7 @@ class ClipBrowser(QWidget):
             if selected and len(selected) == 1:
                 clip = selected[0]
                 # Look up the source for this clip
-                source = self._source_lookup.get(clip.id)
+                source = self._model.source_for(clip.id)
                 if source:
                     self.view_details_requested.emit(clip, source)
                     event.accept()

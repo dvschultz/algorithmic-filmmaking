@@ -18,7 +18,7 @@ Start with U11. Use the order below by default, delivering one algorithm or runt
 - [x] **U12:** Migrate every sequencer and expose variation commands. Evidence recorded below.
 - [ ] **U13:** Prove managed native-worker isolation with transcription on all supported packaged platforms. Source-mode proof and CI gates landed; packaged evidence pending the next release builds (see evidence below).
 - [ ] **U14:** Migrate the remaining native features and unify runtime install/repair.
-- [ ] **U15:** Shared clip/frame item models with measured large-library performance.
+- [x] **U15:** Shared clip/frame item models with measured large-library performance.
 - [ ] **U16:** Recipe inspection and A/B variation comparison in the existing workspace.
 - [ ] **U17:** Enforce quality gates, dependency contracts, and remove superseded paths.
 
@@ -186,6 +186,23 @@ This work does not add new creative algorithms, a new frontend, general composit
 4. Recorded 1,000- and 10,000-clip fixtures meet the responsiveness and memory budgets established before cutover.
 
 **Verification:** Existing selection/filter regressions pass, view behavior is manually checked, and measured large-library behavior meets the recorded budget.
+
+**Decisions (recorded 2026-09-09):**
+
+- Models are Qt `QAbstractListModel`s owned by `ProjectSignalAdapter` (`adapter.clip_model`, `adapter.frame_model`) and updated from project events before the adapter emits its signals; slots always observe a model that already reflects the change.
+- Workspaces keep membership (ordered ids), selection, and `FilterState`; they read `Clip`/`Source`/`Frame` objects only through the model. A browser with a shared model never removes rows from it (`clear()` and removals touch membership only). Standalone browsers (tests, dialogs) fall back to a private model so public browser methods keep their signatures.
+- Model mutators assert the owning thread and raise `RuntimeError` otherwise; thumbnail results are delivered to `ClipLibraryModel.thumbnail_ready`, which drops results for clips no longer in the library.
+- Renderer cutover is deferred: the `ClipBrowser` card widgets and virtualization stay; the recorded budgets in `docs/architecture/library-models.md` gate a later model-backed clip view. `FrameBrowser` already renders from the shared model through its `QListView`, so `FramesTab` no longer resets the model on every refresh.
+- Baseline workloads and budgets (10k clips, two workspaces): populate <= 250 ms, update-50 <= 100 ms, filter toggle <= 150 ms, remove-100 <= 250 ms, five scroll positions <= 600 ms, peak RSS <= 400 MB, model operations <= 25 ms.
+
+**Evidence (2026-09-09, macOS source mode):**
+
+- Files: `ui/models/{__init__,clip_model,frame_model}.py`, `ui/project_adapter.py` (models + `frames_added` signal), `ui/clip_browser.py` (`attach_model`, `library_model`, membership ids replace `_source_lookup`/`_virtual_entries` copies), `ui/frame_browser.py` (`set_model`, `FrameBrowserModel` alias), `ui/tabs/frames_tab.py` (`set_frame_model`), `ui/main_window.py` (attaches models, routes thumbnail results through the model), `scripts/library_model_benchmark.py`, `docs/architecture/library-models.md`.
+- Scenario 1: `tests/test_library_models.py::TestBrowsersShareTheModel::test_edit_refreshes_cards_in_both_workspaces_without_resetting_selection` (same card widgets before/after, both selections intact) and `TestFrameBrowserSharesTheModel` (frame metadata edit keeps view selection).
+- Scenario 2: `::test_filtered_out_and_offscreen_selection_survive_updates`; existing `tests/test_clip_browser_selection.py`, `tests/test_clip_browser_filters.py`, `tests/test_analyze_tab_clip_sync.py` pass unchanged (82 tests).
+- Scenario 3: `TestClipLibraryModel::test_thumbnail_for_removed_clip_is_ignored`, `::test_mutations_refused_off_owner_thread`, `TestFrameLibraryModel::test_mutations_refused_off_owner_thread`.
+- Scenario 4: `scripts/library_model_benchmark.py` recorded 1k/10k runs (table in `docs/architecture/library-models.md`); all measurements are within budget, and model-layer cost at 10k is under 5 ms per operation. `TestModelScale` bounds the model layer in CI.
+- Validation: the 26 UI suites that touch browsers, adapters, history and thumbnail delivery pass (346 tests) plus `tests/test_library_models.py` (16 tests); ruff clean for changed files.
 
 ## U16. Add sequence variation comparison to the existing workspace
 

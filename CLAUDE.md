@@ -23,7 +23,8 @@ Video scene detection, analysis, and algorithmic editing application with 23 seq
 ```
 main.py                          # GUI entry point
 pyproject.toml                   # Metadata, CLI + MCP entry points
-ui/                  (21 files)  # Main window, chat, player, browser, theme, algorithm_config
+ui/                  (23 files)  # Main window, chat, player, browser, theme, algorithm_config
+  models/            (3 files)   # Shared clip/frame item models owned by ProjectSignalAdapter (docs/architecture/library-models.md)
   tabs/              (6 wired)   # collect, cut, analyze, frames, sequence, render (generate_tab.py exists but is unmounted stub)
   dialogs/           (20 files)  # Algorithm-specific config dialogs
   workers/           (24 files)  # QThread workers (base.py = CancellableWorker + is_transient_provider_error)

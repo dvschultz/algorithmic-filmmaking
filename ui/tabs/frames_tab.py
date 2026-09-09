@@ -222,6 +222,10 @@ class FramesTab(BaseTab):
             self.source_combo.setCurrentIndex(idx)
         self.source_combo.blockSignals(False)
 
+    def set_frame_model(self, model) -> None:
+        """Render frames from the project adapter's shared model."""
+        self.frame_browser.set_model(model)
+
     def update_frame_browser(self):
         """Refresh the frame browser with frames from the project."""
         if not self._project:
@@ -229,10 +233,12 @@ class FramesTab(BaseTab):
 
         frames = self._project.frames
         if frames:
-            self.frame_browser.set_frames(frames)
+            if not self.frame_browser.uses_shared_model():
+                self.frame_browser.set_frames(frames)
             self.state_stack.setCurrentIndex(self.STATE_FRAMES)
         else:
-            self.frame_browser.clear()
+            if not self.frame_browser.uses_shared_model():
+                self.frame_browser.clear()
             self.state_stack.setCurrentIndex(self.STATE_EMPTY)
 
     def on_tab_activated(self):

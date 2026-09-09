@@ -485,6 +485,7 @@ class MainWindow(QMainWindow):
         self._project_adapter.source_added.connect(self._on_source_added)
         self._project_adapter.source_updated.connect(self._on_source_updated)
         self._project_adapter.sources_changed.connect(self._on_sources_changed)
+        self._project_adapter.frames_added.connect(self._on_frames_updated)
         self._project_adapter.frames_removed.connect(self._on_frames_removed)
         self._project_adapter.sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
         self._project_adapter.sequences_changed.connect(lambda _: self.sequence_tab._sync_sequence_dropdown())
@@ -892,6 +893,12 @@ class MainWindow(QMainWindow):
         self.frames_tab = FramesTab()
         self.sequence_tab = SequenceTab()
         self.render_tab = RenderTab()
+
+        # Workspaces read clip/source/frame data from the adapter's shared
+        # item models and keep only their own membership, selection, filters.
+        self.cut_tab.clip_browser.attach_model(self._project_adapter.clip_model)
+        self.analyze_tab.clip_browser.attach_model(self._project_adapter.clip_model)
+        self.frames_tab.set_frame_model(self._project_adapter.frame_model)
 
         # Add tabs
         self.tab_widget.addTab(self.collect_tab, "Collect")
@@ -4868,6 +4875,11 @@ class MainWindow(QMainWindow):
     def _on_thumbnail_ready(self, clip_id: str, thumb_path: str):
         """Handle individual thumbnail completion."""
         logger.info(f"_on_thumbnail_ready called: clip_id={clip_id}, thumb_path={thumb_path}")
+        # The shared model ignores results for clips that left the project
+        # while the worker was running (KTD13 scenario 3).
+        if not self._project_adapter.clip_model.thumbnail_ready(clip_id, thumb_path):
+            logger.info(f"Ignoring thumbnail for clip no longer in project: {clip_id}")
+            return
         clip = self.clips_by_id.get(clip_id)
         if clip:
             thumb_path_obj = Path(thumb_path)
