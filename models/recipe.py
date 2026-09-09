@@ -320,4 +320,5 @@ def load_recipe(value: Any) -> StoredRecipe | None:
     try:
         return SequenceRecipe.from_dict(value)
     except (ValueError, KeyError, TypeError, AttributeError):
-        return UnreadableRecipe(canonical_json(value))
+        # Anything json.load produced must survive, including NaN/Infinity.
+        return UnreadableRecipe(json.dumps(value, sort_keys=True, separators=(",", ":")))

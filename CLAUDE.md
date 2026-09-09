@@ -32,9 +32,9 @@ ui/                  (21 files)  # Main window, chat, player, browser, theme, al
   session_history.py            # Qt actions projecting shared project history
 core/                (54 files)  # Business logic, FFmpeg, settings, project, LLM
   analysis/          (18 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
-  remix/             (20 files)  # Sequencer algorithm implementations (23 algorithms registered in ui/algorithm_config.py)
+  remix/             (25 files)  # Sequencer algorithm implementations; engine.py/registry.py hold the Qt-free algorithm registry (23 algorithms labeled in ui/algorithm_config.py)
   spine/             (23 files)  # GUI-agnostic shared tool implementations (no PySide6/mpv/av imports)
-models/              (8 files)   # Source, Clip, Frame, SequenceClip, Sequence, AudioSource, CinematographyAnalysis, SequenceAnalysis, Plan
+models/              (11 files)  # Source, Clip, Frame, SequenceClip, Sequence, SequenceRecipe, AudioSource, CinematographyAnalysis, SequenceAnalysis, Plan
 cli/                 (15 files)  # Click CLI with detect, analyze, transcribe, youtube, export commands
 scene_ripper_mcp/                # MCP server for external agent access
   tools/                         #   Tool registrations (project / clips / sequence / analyze / export / youtube / jobs)
@@ -70,6 +70,8 @@ Frame[] (extracted images)                    add to sequence
 **Clip** (`models/clip.py`): `id`, `source_id`, `start_frame`, `end_frame`, `name`, `disabled`, `thumbnail_path`, `dominant_colors`, `shot_type`, `transcript`, `tags`, `notes`, `object_labels`, `detected_objects`, `face_embeddings`, `person_count`, `description`, `description_model`, `extracted_texts`, `cinematography`, `average_brightness`, `rms_volume`, `embedding`, `first_frame_embedding`, `last_frame_embedding`, `embedding_model`
 
 **Frame** (`models/frame.py`): `id`, `file_path`, `source_id`, `clip_id`, `frame_number`, `width`, `height`, analysis fields mirror Clip
+
+**SequenceRecipe** (`models/recipe.py`): `algorithm`, `algorithm_version`, `parameters`, `seed`, `inputs` (RecipeInput: clip/source ids, frame span, fps, analysis identities), `realized` (RealizedEntry: clip-relative range, transforms, rationale, provider output), `parent_id`, `provider_outputs`. Stored on `Sequence.recipe`; reconstruction replays `realized` without provider calls.
 
 **SequenceClip** (`models/sequence.py`): `id`, `source_clip_id`, `source_id`, `frame_id`, `track_index`, `start_frame`, `in_point`, `out_point`, `hold_frames`, `hflip`, `vflip`, `reverse`, `prerendered_path`
 

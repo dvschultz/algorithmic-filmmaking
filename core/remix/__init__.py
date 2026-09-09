@@ -6,7 +6,6 @@ from threading import Event
 import random
 from typing import List, Tuple, Any, Optional, Literal
 from core.remix.shuffle import constrained_shuffle
-from core.remix.chromatics import warmth_score as _get_warmth_score  # noqa: F401 - compatibility alias
 from core.analysis.shots import SHOT_TYPES
 from core.remix.audio_sync import (
     AlignmentSuggestion,
@@ -273,30 +272,31 @@ def run_registry_algorithm(
     seed: Optional[int] = None,
     no_color_handling: Optional[str] = None,
     transform_options: Optional[dict[str, bool]] = None,
+    parameters: Optional[dict[str, Any]] = None,
     cancel_event: Event | None = None,
 ):
     """Run a registry algorithm from legacy keyword arguments.
 
-    Translates the pre-registry conventions (``direction``/``no_color_handling``
-    for Chromatics, ``seed=0`` meaning random, ``transform_options`` for
-    shuffle) into normalized recipe parameters and an explicit seed. Returns a
+    Each definition translates the pre-registry conventions (``direction`` /
+    ``no_color_handling``, ``transform_options``) through its
+    ``legacy_parameters`` hook; explicit ``parameters`` override them. Legacy
+    ``seed=0``/``None`` means "draw a fresh seed", which the recipe records.
+    Repeated clips (a timeline that placed one clip twice) collapse to their
+    first occurrence because recipes describe unique inputs. Returns a
     :class:`core.remix.engine.GenerationRun` or ``None`` when cancelled.
     """
     from core.remix.registry import legacy_seed, registry, run_algorithm
 
     definition = registry.require(algorithm)
-    parameters: dict[str, Any] = {}
-    if algorithm == "color":
-        if direction is not None:
-            parameters["direction"] = direction
-        if no_color_handling is not None:
-            parameters["no_color_handling"] = no_color_handling
-    elif algorithm == "shuffle":
-        for name in ("hflip", "vflip", "reverse"):
-            if transform_options and transform_options.get(name):
-                parameters[name] = True
+    merged = definition.legacy_parameters(
+        direction=direction, no_color_handling=no_color_handling,
+        transform_options=transform_options,
+    )
+    merged.update(parameters or {})
+    seen: set[str] = set()
+    unique = [pair for pair in clips if not (pair[0].id in seen or seen.add(pair[0].id))]
     return run_algorithm(
-        definition, clips, parameters,
+        definition, unique, merged,
         seed=legacy_seed(seed) if definition.seeded else None,
         cancel_event=cancel_event,
     )

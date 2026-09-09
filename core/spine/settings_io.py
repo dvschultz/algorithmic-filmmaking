@@ -188,6 +188,7 @@ def list_sorting_algorithms(project) -> dict:
                 {"name": "random_hflip", "type": "boolean", "description": "Randomly flip ~50% of clips horizontally at export", "default": False},
                 {"name": "random_vflip", "type": "boolean", "description": "Randomly flip ~50% of clips vertically at export", "default": False},
                 {"name": "random_reverse", "type": "boolean", "description": "Randomly reverse ~50% of clips at export", "default": False},
+                {"name": "max_consecutive_same_source", "type": "integer", "description": "Maximum adjacent clips from one source", "default": 1},
             ],
         },
         {
@@ -346,6 +347,11 @@ def list_sorting_algorithms(project) -> dict:
         definition = registry.get(str(entry["key"]))
         if definition is not None:
             entry["engine"] = definition.describe()
+            entry["engine_note"] = (
+                "engine.parameters are the registry's normalized parameters; generate_remix "
+                "maps random_hflip/random_vflip/random_reverse to hflip/vflip/reverse and "
+                "stores a recipe with the seed it used."
+            )
 
     return {
         "algorithms": algorithms,

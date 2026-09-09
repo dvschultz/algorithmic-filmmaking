@@ -321,6 +321,7 @@ async def generate_sequence(
     parameters: Annotated[Optional[dict], "Algorithm parameters; unknown keys are rejected"] = None,
     seed: Annotated[Optional[int], "Explicit seed for seeded algorithms (0 is a valid seed)"] = None,
     name: Annotated[Optional[str], "Sequence name; defaults to the algorithm label"] = None,
+    show_chromatic_color_bar: Annotated[bool, "Chromatics only: render the color bar in exports"] = False,
     ctx: Context = None,
 ) -> str:
     """Generate a new sequence with a registry algorithm and store its recipe.
@@ -346,6 +347,7 @@ async def generate_sequence(
     def operation(project):
         return _generate(
             project, algorithm, clip_ids=clip_ids, parameters=parameters, seed=seed, name=name,
+            show_chromatic_color_bar=show_chromatic_color_bar,
         )
 
     return await _editorial_call(project_path, ctx, operation)
@@ -361,7 +363,8 @@ async def get_sequence_recipe(
 
     Returns:
         JSON with the recipe document, its generation fingerprint, whether it
-        can be reconstructed in the current project, and any input problems.
+        can be reconstructed in the current project, any input problems, and
+        whether the timeline still matches the realized entries.
     """
     valid, error, path = validate_project_path(project_path)
     if not valid:

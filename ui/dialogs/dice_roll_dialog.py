@@ -289,11 +289,13 @@ class DiceRollDialog(QDialog):
             reverse=reverse,
             parent=self,
         )
-        self._worker.progress_update.connect(self._on_progress_update)
-        self._worker.progress_message.connect(self._on_progress_message)
-        self._worker.finished_sequence.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-        self._worker.start()
+        self._generate_btn.setEnabled(False)
+        worker = self._worker
+        worker.progress_update.connect(self._on_progress_update)
+        worker.progress_message.connect(self._on_progress_message)
+        worker.finished_sequence.connect(lambda data, owner=worker: self._on_finished(data, owner))
+        worker.error.connect(self._on_error)
+        worker.start()
 
     @Slot(int, int)
     def _on_progress_update(self, current: int, total: int):
@@ -306,9 +308,12 @@ class DiceRollDialog(QDialog):
     def _on_progress_message(self, message: str):
         self._progress_label.setText(message)
 
-    @Slot(list)
-    def _on_finished(self, sequence_data: list):
-        self.recipe = self._worker.recipe if self._worker is not None else None
+    def _on_finished(self, sequence_data: list, owner=None):
+        """Publish the result with the recipe of the worker that produced it."""
+        if owner is not None and owner is not self._worker:
+            return  # A superseded worker finished late.
+        source = owner if owner is not None else self._worker
+        self.recipe = source.recipe if source is not None else None
         self.sequence_ready.emit(sequence_data)
         self.accept()
 
@@ -316,6 +321,7 @@ class DiceRollDialog(QDialog):
     def _on_error(self, error_msg: str):
         logger.error("Dice Roll error: %s", error_msg)
         self._stack.setCurrentIndex(0)
+        self._generate_btn.setEnabled(True)
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(self, "Hatchet Job Error", f"Pre-rendering failed:\n{error_msg}")
 

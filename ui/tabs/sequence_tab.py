@@ -2672,11 +2672,14 @@ class SequenceTab(BaseTab):
         seed: Optional[int] = None,
         no_color_handling: Optional[str] = None,
         transform_options: Optional[dict] = None,
+        parameters: Optional[dict] = None,
     ) -> tuple[list, object]:
         """Run synchronous generation, through the registry when the algorithm has a definition.
 
         Returns the ordered (Clip, Source) list and the recipe (``None`` for
         algorithms that have not been migrated to the registry yet).
+        ``parameters`` are explicit registry parameters layered over the legacy
+        keyword translation.
         """
         from core.remix import run_registry_algorithm
         from core.remix.registry import registry
@@ -2685,6 +2688,7 @@ class SequenceTab(BaseTab):
             run = run_registry_algorithm(
                 algorithm, clips, direction=direction, seed=seed,
                 no_color_handling=no_color_handling, transform_options=transform_options,
+                parameters=parameters,
             )
             return run.ordered_clips, run.recipe
         return generate_sequence(
@@ -2704,6 +2708,8 @@ class SequenceTab(BaseTab):
         seed: int = None,
         no_color_handling: str = None,
         transform_options: dict = None,
+        parameters: dict = None,
+        show_chromatic_color_bar: bool | None = None,
     ) -> dict:
         """Generate and apply a sequence (for agent tools).
 
@@ -2715,6 +2721,8 @@ class SequenceTab(BaseTab):
             no_color_handling: For color algorithm — "append_end", "exclude", or "sort_inline"
             transform_options: Dict of transform flags, e.g. {"hflip": True}.
                 When provided for shuffle, clips are pre-rendered with baked transforms.
+            parameters: Explicit registry parameters (e.g. max_consecutive_same_source)
+            show_chromatic_color_bar: For color — override the chromatic bar setting
 
         Returns:
             Dict with success status and applied clip info
@@ -2740,11 +2748,14 @@ class SequenceTab(BaseTab):
         metadata_before = {clip.id: deepcopy(clip.to_dict()) for clip, _ in clips}
         generated_sequence = None
         try:
+            if show_chromatic_color_bar is not None and algorithm.lower() == "color":
+                self.set_chromatic_color_bar_enabled(bool(show_chromatic_color_bar), emit_signal=False)
             proposal = self._prepare_sequence_draft(algorithm.lower()) if self._project else None
             # Generate sequence
             sorted_clips, recipe = self._run_generation(
                 algorithm.lower(), clips, direction=direction, seed=seed,
                 no_color_handling=no_color_handling, transform_options=transform_options,
+                parameters=parameters,
             )
 
             # Create new sequence and apply to timeline
@@ -2772,7 +2783,7 @@ class SequenceTab(BaseTab):
                 from core.remix.prerender import prerender_batch
                 sequence = self.timeline.get_sequence()
                 if sequence.tracks and sequence.tracks[0].clips:
-                    if recipe is not None:
+                    if recipe is not None and recipe.algorithm == "shuffle":
                         # The registry already drew transforms; apply the realized flags.
                         for seq_clip, entry in zip(sequence.tracks[0].clips, recipe.realized):
                             seq_clip.hflip, seq_clip.vflip, seq_clip.reverse = (

@@ -152,10 +152,18 @@ class ShuffleDefinition(AlgorithmDefinition):
         ParameterSpec("reverse", "boolean", False, "Randomly reverse about half of the clips"),
     )
 
+    def legacy_parameters(self, *, direction=None, no_color_handling=None, transform_options=None) -> dict[str, Any]:
+        return {
+            name: True
+            for name in ("hflip", "vflip", "reverse")
+            if transform_options and transform_options.get(name)
+        }
+
     def generate(
         self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None,
     ) -> SequenceProposal:
-        assert rng is not None
+        if rng is None:
+            raise ValueError("Shuffle requires a seeded random source")
         ordered = constrained_shuffle(
             list(inputs),
             get_category=lambda item: item[1].id,

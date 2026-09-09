@@ -3493,6 +3493,8 @@ def generate_remix(
     random_hflip: bool = False,
     random_vflip: bool = False,
     random_reverse: bool = False,
+    max_consecutive_same_source: Optional[int] = None,
+    show_chromatic_color_bar: Optional[bool] = None,
 ) -> dict:
     """Generate a sequence using the specified algorithm and apply to timeline.
 
@@ -3502,15 +3504,22 @@ def generate_remix(
         clip_count: Number of clips to include (1-100)
         direction: Algorithm-specific direction (e.g. "rainbow", "complementary",
                    "short_first", "light_to_dark", "quiet_to_loud", "wide_to_close")
-        seed: For shuffle: random seed for reproducibility (0 = random)
+        seed: For shuffle: random seed for reproducibility. This tool keeps the
+              legacy convention that 0 or omitted means "draw a random seed";
+              the drawn seed is returned as ``seed`` and stored in the recipe,
+              so pass that value back to repeat the result. (The MCP
+              generate_sequence tool treats 0 as an explicit seed instead.)
         no_color_handling: For color algorithm — how to handle clips without color data.
                    "append_end" (default), "exclude", or "sort_inline"
         random_hflip: For shuffle: randomly flip ~50% of clips horizontally at export
         random_vflip: For shuffle: randomly flip ~50% of clips vertically at export
         random_reverse: For shuffle: randomly reverse ~50% of clips at export
+        max_consecutive_same_source: For shuffle: maximum adjacent clips from one source (default 1)
+        show_chromatic_color_bar: For color: render the chromatic color bar in exports
 
     Returns:
-        Dict with success status, applied clips, and algorithm used
+        Dict with success status, applied clips, algorithm used, and for
+        registry algorithms (shuffle, color) the ``recipe_id`` and ``seed``
     """
     valid_algorithms = [
         "color", "duration", "brightness", "volume",
@@ -3563,6 +3572,12 @@ def generate_remix(
             "reverse": random_reverse,
         }
 
+    parameters = None
+    if max_consecutive_same_source is not None:
+        if algorithm != "shuffle":
+            return {"success": False, "error": "max_consecutive_same_source applies to shuffle only"}
+        parameters = {"max_consecutive_same_source": max_consecutive_same_source}
+
     # Use sequence tab's generate_and_apply method
     result = main_window.sequence_tab.generate_and_apply(
         algorithm=algorithm,
@@ -3571,9 +3586,45 @@ def generate_remix(
         seed=seed,
         no_color_handling=no_color_handling,
         transform_options=transform_options,
+        parameters=parameters,
+        show_chromatic_color_bar=show_chromatic_color_bar,
     )
     _add_sequence_summary_for_agent(project, result)
 
+    return result
+
+
+@tools.register(
+    description="Inspect the stored recipe of a generated sequence: algorithm, version, "
+                "normalized parameters, seed, ordered inputs, realized placements, whether it "
+                "can be reconstructed, and whether the timeline still matches it. "
+                "Defaults to the active sequence.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def get_sequence_recipe(project, sequence_id: Optional[str] = None) -> dict:
+    """Return the recipe stored on a sequence without modifying the project."""
+    from core.spine.sequences import get_sequence_recipe as _impl
+
+    return _impl(project, sequence_id)
+
+
+@tools.register(
+    description="Rebuild a generated sequence from its stored recipe as a new sequence, "
+                "replaying the realized clip order, trims and transforms without running "
+                "the algorithm or any provider. Fails with the changed clip IDs, without "
+                "editing, when the project no longer matches the recipe.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def reconstruct_sequence(project, sequence_id: Optional[str] = None, name: Optional[str] = None) -> dict:
+    """Publish a reconstruction as one undoable edit and activate it."""
+    from core.spine.sequences import reconstruct_sequence as _impl
+
+    result = _impl(project, sequence_id, name=name)
+    if result.get("success"):
+        _add_sequence_summary_for_agent(project, result)
     return result
 
 

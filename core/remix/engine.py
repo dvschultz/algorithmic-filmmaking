@@ -153,6 +153,21 @@ class AlgorithmDefinition:
     allow_duplicates: bool = False
     kind: ProposalKind = "ordering"
 
+    def legacy_parameters(
+        self,
+        *,
+        direction: str | None = None,
+        no_color_handling: str | None = None,
+        transform_options: Mapping[str, bool] | None = None,
+    ) -> dict[str, Any]:
+        """Translate pre-registry keyword arguments into this algorithm's parameters.
+
+        Compatibility hook for ``core.remix.run_registry_algorithm``; each
+        migrated definition owns its own translation so the adapter never
+        needs per-algorithm branches. The default ignores every legacy value.
+        """
+        return {}
+
     def select_inputs(self, candidates: Sequence[ClipInput], parameters: Mapping[str, Any]) -> list[ClipInput]:
         """Choose which candidates take part; default keeps every candidate in order."""
         return list(candidates)

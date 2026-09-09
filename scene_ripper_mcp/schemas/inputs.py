@@ -251,3 +251,4 @@ class GenerateSequenceInput(BaseModel):
     parameters: Optional[dict] = Field(default=None, description="Algorithm parameters; unknown keys are rejected")
     seed: Optional[int] = Field(default=None, ge=0, description="Explicit seed for seeded algorithms (0 is a valid seed)")
     name: Optional[str] = Field(default=None, description="Sequence name; defaults to the algorithm label")
+    show_chromatic_color_bar: bool = Field(default=False, description="Chromatics only: render the color bar in exports")

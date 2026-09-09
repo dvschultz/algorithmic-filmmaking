@@ -457,3 +457,165 @@ def test_dice_roll_worker_records_recipe_and_prerenders_realized_transforms(qapp
         (e.hflip, e.vflip, e.reverse) for e in worker.recipe.realized
     ]
     assert [t["hflip"] for _, _, t in rendered] == [e.hflip for e in worker.recipe.realized]
+
+
+# --- Review follow-ups (run 20260909-012153) ----------------------------------
+
+
+def test_reused_empty_sequence_does_not_inherit_a_previous_recipe():
+    from core.spine.sequences import SequenceDraft, generate_sequence as spine_generate, get_sequence_recipe
+
+    project = _project(4)
+    assert spine_generate(project, "shuffle", seed=1)["success"]
+    project.clear_sequence()
+    assert project.sequence.readable_recipe is not None  # clearing keeps provenance
+    draft = SequenceDraft.prepare(project, "storyteller", "Story")
+    assert draft.sequence.recipe is None
+    from models.sequence import SequenceClip
+
+    draft.sequence.tracks[0].clips.append(SequenceClip(source_id="s0", source_clip_id="c0", out_point=30))
+    draft.commit(project)
+    assert project.sequence.algorithm == "storyteller" and project.sequence.recipe is None
+    assert "no recipe" in get_sequence_recipe(project)["error"]
+
+
+def test_generation_and_reconstruction_keep_the_source_frame_rate():
+    from core.spine.sequences import generate_sequence as spine_generate, reconstruct_sequence
+
+    project = Project()
+    project.add_source(Source(id="s24", file_path=Path("/tmp/v24.mp4"), fps=24.0, duration_seconds=60))
+    project.add_clips([
+        Clip(id=f"k{i}", source_id="s24", start_frame=i * 25, end_frame=(i + 1) * 25, dominant_colors=[(i * 60, 10, 10)])
+        for i in range(4)
+    ])
+    project.add_to_sequence(["k0"])  # non-empty origin so generation creates a new sequence
+    result = spine_generate(project, "color")
+    assert result["success"]
+    generated = project.sequence
+    assert generated.fps == 24.0
+    starts = [(e.start_frame, e.in_point, e.out_point) for e in generated.get_all_clips()]
+    assert starts[1][0] == 25
+    rebuilt = reconstruct_sequence(project, generated.id)
+    assert rebuilt["success"]
+    assert project.sequence.fps == 24.0
+    assert [(e.start_frame, e.in_point, e.out_point) for e in project.sequence.get_all_clips()] == starts
+
+
+def test_repeated_timeline_clips_collapse_before_registry_generation():
+    project = _project(3)
+    pairs = _pairs(project)
+    run = run_registry_algorithm("color", pairs + pairs[:1], direction="rainbow")
+    assert [i.clip_id for i in run.recipe.inputs] == ["c0", "c1", "c2"]
+    assert len(generate_sequence("shuffle", pairs + pairs, len(pairs) * 2, seed=2)) == 3
+
+
+def test_empty_registry_output_is_reported_without_publishing():
+    from core.spine.sequences import generate_sequence as spine_generate
+
+    project = _project(3)
+    for clip in project.clips:
+        clip.dominant_colors = None
+    project.mark_clean()
+    result = spine_generate(project, "color", parameters={"no_color_handling": "exclude"})
+    assert not result["success"] and "empty" in result["error"] and result["notes"]
+    assert not project.is_dirty and len(project.sequences) == 1
+
+
+def test_legacy_hook_and_explicit_parameters_layer_per_definition():
+    project = _project(4)
+    pairs = _pairs(project)
+    run = run_registry_algorithm(
+        "shuffle", pairs, transform_options={"hflip": True}, seed=3,
+        parameters={"max_consecutive_same_source": 2, "hflip": False},
+    )
+    assert run.recipe.parameters == {"hflip": False, "max_consecutive_same_source": 2, "reverse": False, "vflip": False}
+    color = run_registry_algorithm("color", pairs, direction="complementary", transform_options={"hflip": True})
+    assert color.recipe.parameters["direction"] == "complementary"
+    assert not any(e.hflip for e in color.recipe.realized)  # transforms mean nothing to Chromatics
+    with pytest.raises(ValueError, match="seeded random source"):
+        registry.require("shuffle").generate(pairs, {"max_consecutive_same_source": 1, "hflip": False, "vflip": False, "reverse": False}, None)
+
+
+def test_recipe_reports_whether_the_timeline_still_matches():
+    from core.spine.sequences import generate_sequence as spine_generate, get_sequence_recipe
+
+    project = _project(4)
+    assert spine_generate(project, "shuffle", seed=8)["success"]
+    assert get_sequence_recipe(project)["matches_timeline"] is True
+    from core.spine.timeline import reorder_clips
+
+    entries = list(project.sequence.tracks[0].clips)
+    reorder_clips(project, project.sequence.id, [c.id for c in reversed(entries)])
+    assert [c.id for c in project.sequence.tracks[0].clips] == [c.id for c in reversed(entries)]
+    inspected = get_sequence_recipe(project)
+    assert inspected["matches_timeline"] is False and inspected["reconstructable"] is True
+
+
+def test_unreadable_recipe_with_nan_keeps_the_sequence_loadable():
+    from models.sequence import Sequence
+
+    document = {"schema_version": 1, "algorithm": "shuffle", "algorithm_version": 1, "parameters": {"x": float("nan")},
+                "inputs": [], "realized": [], "id": "r", "created_at": "t"}
+    sequence = Sequence.from_dict({"name": "nan", "recipe": document})
+    assert sequence.readable_recipe is None
+    assert sequence.to_dict()["recipe"]["algorithm"] == "shuffle"
+
+
+def test_chat_generate_remix_reaches_registry_parameters_and_recipe_tools(qapp, monkeypatch):
+    from core.chat_tools import generate_remix, get_sequence_recipe, reconstruct_sequence
+    from ui.tabs.sequence_tab import SequenceTab
+
+    project = _project(6)
+    tab = SequenceTab()
+    tab.set_project(project)
+    tab.set_available_clips(_pairs(project))
+    tab.set_gui_state(SimpleNamespace(analyze_selected_ids=[c.id for c in project.clips], cut_selected_ids=[]))
+    main_window = SimpleNamespace(sequence_tab=tab)
+    result = generate_remix(project, main_window, "shuffle", clip_count=6, seed=0, max_consecutive_same_source=3)
+    assert result["success"], result
+    assert result["seed"] is not None  # legacy 0 drew and recorded a seed
+    assert project.sequence.readable_recipe.parameters["max_consecutive_same_source"] == 3
+    assert not generate_remix(project, main_window, "color", clip_count=6, max_consecutive_same_source=2)["success"]
+    colored = generate_remix(project, main_window, "color", clip_count=6, show_chromatic_color_bar=True)
+    assert colored["success"] and project.sequence.show_chromatic_color_bar
+    inspected = get_sequence_recipe(project)
+    assert inspected["success"] and inspected["recipe"]["algorithm"] == "color"
+    rebuilt = reconstruct_sequence(project, name="Replay")
+    assert rebuilt["success"] and project.sequence.name == "Replay"
+    assert rebuilt["clip_ids"] == [c["id"] for c in colored["clips"]]
+    tab.close()
+
+
+def test_chat_color_with_random_transforms_still_draws_transforms(qapp, monkeypatch):
+    from ui.tabs.sequence_tab import SequenceTab
+
+    project = _project(8)
+    tab = SequenceTab()
+    tab.set_project(project)
+    tab.set_available_clips(_pairs(project))
+    tab.set_gui_state(SimpleNamespace(analyze_selected_ids=[c.id for c in project.clips], cut_selected_ids=[]))
+    monkeypatch.setattr("core.remix.prerender.prerender_batch", lambda clips_with_transforms, output_dir, **kw: [
+        (clip, source, None) for clip, source, _ in clips_with_transforms
+    ])
+    monkeypatch.setattr("core.remix.prerender.get_transform_cache_dir", lambda: Path("/tmp"))
+    monkeypatch.setattr("random.Random.random", lambda self: 0.1)
+    result = tab.generate_and_apply("color", transform_options={"hflip": True})
+    assert result["success"], result
+    assert all(e.hflip for e in project.sequence.get_all_clips())
+    tab.close()
+
+
+def test_dice_roll_dialog_binds_recipe_to_the_worker_that_finished(qapp):
+    from ui.dialogs.dice_roll_dialog import DiceRollDialog
+
+    project = _project(3)
+    dialog = DiceRollDialog(_pairs(project))
+    delivered = []
+    dialog.sequence_ready.connect(delivered.append)
+    current = SimpleNamespace(recipe="current")
+    stale = SimpleNamespace(recipe="stale")
+    dialog._worker = current
+    dialog._on_finished([("a", "b", {})], stale)
+    assert not delivered and dialog.recipe is None
+    dialog._on_finished([("a", "b", {})], current)
+    assert delivered and dialog.recipe == "current"

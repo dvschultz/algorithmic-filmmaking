@@ -121,6 +121,14 @@ class ChromaticsDefinition(AlgorithmDefinition):
         ),
     )
 
+    def legacy_parameters(self, *, direction=None, no_color_handling=None, transform_options=None) -> dict[str, Any]:
+        parameters: dict[str, Any] = {}
+        if direction is not None:
+            parameters["direction"] = direction
+        if no_color_handling is not None:
+            parameters["no_color_handling"] = no_color_handling
+        return parameters
+
     def generate(
         self, inputs: Sequence[ClipInput], parameters: Mapping[str, Any], rng: random.Random | None,
     ) -> SequenceProposal:

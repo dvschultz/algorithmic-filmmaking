@@ -17,6 +17,7 @@ from scene_ripper_mcp.schemas.inputs import (
     AnalyzeColorsInput,
     AnalyzeShotsInput,
     TranscribeInput,
+    GenerateSequenceInput,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "AnalyzeColorsInput",
     "AnalyzeShotsInput",
     "TranscribeInput",
+    "GenerateSequenceInput",
 ]

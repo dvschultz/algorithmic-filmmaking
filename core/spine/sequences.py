@@ -53,6 +53,7 @@ class SequenceDraft:
         sequence = deepcopy(origin) if reuse else Sequence()
         sequence.name = name
         sequence.algorithm = algorithm
+        sequence.recipe = None  # Provenance belongs to the new generation, never the reused shell.
         sequence.show_chromatic_color_bar = (
             show_chromatic_color_bar and algorithm == "color"
         )
@@ -200,11 +201,14 @@ def publish_recipe(
     name: str,
     replace_sequence_id: str | None = None,
     show_chromatic_color_bar: bool = False,
+    fps: float | None = None,
 ) -> Sequence:
     """Build a timeline from realized recipe entries and publish it as one edit.
 
     Performs no algorithm or provider work. Raises ``ValueError`` with every
-    input problem when the project no longer matches the recipe.
+    input problem when the project no longer matches the recipe. ``fps`` sets
+    the timeline rate; it defaults to the first realized source's rate, which
+    is what desktop generation uses.
     """
     from fractions import Fraction
     from core.sequence_time import video_entry
@@ -214,11 +218,16 @@ def publish_recipe(
     problems = recipe_input_problems(project, recipe)
     if problems:
         raise ValueError("Recipe inputs changed: " + "; ".join(problems))
+    if fps is None:
+        fps = project.sources_by_id[recipe.realized[0].source_id].fps
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not isfinite(fps) or fps <= 0:
+        raise ValueError("Sequence FPS must be positive and finite")
     draft = SequenceDraft.prepare(
         project, recipe.algorithm, unique_sequence_name(project, name),
         replace_sequence_id=replace_sequence_id,
         show_chromatic_color_bar=show_chromatic_color_bar,
     )
+    draft.sequence.fps = float(fps)
     position = Fraction(0)
     for realized in recipe.realized:
         clip = project.clips_by_id[realized.clip_id]
@@ -360,6 +369,23 @@ def _find_sequence(project: Project, sequence_id: str | None) -> Sequence | None
     return next((s for s in project.sequences if s.id == sequence_id), None)
 
 
+def recipe_matches_timeline(sequence: Sequence, recipe: SequenceRecipe) -> bool:
+    """Whether track 0 still holds exactly the realized entries, in order."""
+    placed = sequence.tracks[0].clips if sequence.tracks else []
+    if len(placed) != len(recipe.realized) or len(sequence.tracks) > 1 and any(
+        track.clips for track in sequence.tracks[1:]
+    ):
+        return False
+    for entry, realized in zip(placed, recipe.realized):
+        if entry.source_clip_id != realized.clip_id or entry.source_id != realized.source_id:
+            return False
+        if entry.hflip != realized.hflip or entry.vflip != realized.vflip or entry.reverse != realized.reverse:
+            return False
+        if entry.out_point - entry.in_point != realized.out_offset - realized.in_offset:
+            return False
+    return True
+
+
 def get_sequence_recipe(project: Project, sequence_id: str | None = None) -> dict:
     """Inspect the stored recipe without touching the project."""
     sequence = _find_sequence(project, sequence_id)
@@ -383,6 +409,7 @@ def get_sequence_recipe(project: Project, sequence_id: str | None = None) -> dic
         "uses_provider": recipe.uses_provider,
         "reconstructable": not problems,
         "problems": problems,
+        "matches_timeline": recipe_matches_timeline(sequence, recipe),
     }
 
 
@@ -401,6 +428,7 @@ def reconstruct_sequence(
         rebuilt = publish_recipe(
             project, recipe.derive(), name=label,
             show_chromatic_color_bar=sequence.show_chromatic_color_bar,
+            fps=sequence.fps,
         )
     except (ValueError, RuntimeError) as exc:
         return {"success": False, "error": str(exc)}
