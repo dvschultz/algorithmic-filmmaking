@@ -163,6 +163,27 @@ def recipe(ctx: click.Context, project_file: Path, sequence_id: Optional[str]) -
     output_result(result, as_json=_json(ctx))
 
 
+@sequence.command("compare")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("sequence_a")
+@click.argument("sequence_b")
+@click.pass_context
+def compare(ctx: click.Context, project_file: Path, sequence_a: str, sequence_b: str) -> None:
+    """Compare two sequences: counts, durations, seeds and changed recipe parameters."""
+    from core.spine.sequences import compare_sequences
+
+    try:
+        result = compare_sequences(_load(project_file), sequence_a, sequence_b)
+    except Exception as exc:  # noqa: BLE001
+        result = {"success": False, "error": str(exc)}
+    if not result.get("success"):
+        if _json(ctx):
+            output_result(result, as_json=True)
+            exit_with(ExitCode.VALIDATION_ERROR)
+        exit_with(ExitCode.VALIDATION_ERROR, str(result.get("error")))
+    output_result(result, as_json=_json(ctx))
+
+
 @sequence.command("reconstruct")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.option("--sequence-id", default=None, help="Sequence ID; default: active sequence")

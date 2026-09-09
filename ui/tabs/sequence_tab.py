@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QMenu,
     QInputDialog,
+    QDialog,
 )
 from PySide6.QtCore import Signal, Qt, Slot
 
@@ -27,9 +28,11 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
+from ui.widgets.sequence_comparison import SequenceComparisonPanel
 from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog, RoseHobartDialog, DiceRollDialog, FreeAssociationDialog, CassetteTapeDialog
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
+from ui.workers.variation_worker import VariationWorker
 from core.cost_estimates import estimate_sequence_cost
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.feature_registry import check_feature_ready
@@ -83,6 +86,8 @@ class SequenceTab(BaseTab):
     stop_requested = Signal()
     export_requested = Signal()
     render_preview_requested = Signal()
+    # A/B comparison asked for a preview of a specific (not necessarily active) sequence
+    sequence_preview_render_requested = Signal(str)  # sequence id
     edl_export_requested = Signal(int)  # sequence index
     all_edl_export_requested = Signal()
     clip_added = Signal(object, object)  # Clip, Source
@@ -115,6 +120,7 @@ class SequenceTab(BaseTab):
         # Guard flags
         self._apply_in_progress = False
         self._sequence_worker: Optional[SequenceWorker] = None
+        self._variation_worker: Optional[VariationWorker] = None
         self._algorithm_running = False  # Prevents dirty flag during algo runs
         self._sequence_dirty = False  # Set on manual user edits (drag, remove)
         self._replace_sequence_index = None  # Deferred removal for Replace flow
@@ -233,6 +239,16 @@ class SequenceTab(BaseTab):
         # New header row
         self.header_widget = self._create_header()
         layout.addWidget(self.header_widget)
+
+        # A/B comparison panel (hidden until toggled from the header)
+        self.comparison_panel = SequenceComparisonPanel()
+        self.comparison_panel.setVisible(False)
+        self.comparison_panel.switch_requested.connect(self.switch_to_sequence)
+        self.comparison_panel.inspect_requested.connect(self.inspect_recipe)
+        self.comparison_panel.duplicate_requested.connect(self.duplicate_sequence)
+        self.comparison_panel.regenerate_requested.connect(self.regenerate_sequence)
+        self.comparison_panel.render_preview_requested.connect(self.sequence_preview_render_requested.emit)
+        layout.addWidget(self.comparison_panel)
 
         # Main content splitter
         self.timeline_splitter = QSplitter(Qt.Vertical)
@@ -373,6 +389,14 @@ class SequenceTab(BaseTab):
 
         self.export_edl_btn = self._create_edl_export_button()
         layout.addWidget(self.export_edl_btn)
+
+        self.compare_btn = QPushButton("Compare A/B")
+        self.compare_btn.setToolTip("Compare two sequences side by side and switch between them (Ctrl+Shift+C)")
+        self.compare_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        self.compare_btn.setCheckable(True)
+        self.compare_btn.setShortcut("Ctrl+Shift+C")
+        self.compare_btn.toggled.connect(self._on_compare_toggled)
+        layout.addWidget(self.compare_btn)
 
         self.new_seq_btn = QPushButton("New Sequence")
         self.new_seq_btn.setToolTip("Create a new empty sequence")
@@ -2028,6 +2052,7 @@ class SequenceTab(BaseTab):
         self.timeline.scene.history_enabled = lambda: not self._algorithm_running
         self.timeline.scene.set_sequence(project.sequence)
         self._sequence_dirty = False
+        self.comparison_panel.set_project(project)
         self._sync_sequence_dropdown()
 
     def _generate_sequence_name(self, algorithm_key: str) -> str:
@@ -2130,6 +2155,196 @@ class SequenceTab(BaseTab):
                 dropdown.addItem(seq.name)
             dropdown.setCurrentIndex(self._project.active_sequence_index)
             dropdown.blockSignals(False)
+        # Deleted sequences clear their comparison slot; survivors keep theirs.
+        self.comparison_panel.refresh()
+
+    # --- A/B comparison (U16) ---
+
+    def _on_compare_toggled(self, checked: bool) -> None:
+        self.comparison_panel.setVisible(checked)
+        if checked:
+            self.comparison_panel.refresh()
+            a_id, b_id = self.comparison_panel.selected_ids()
+            if self._project is not None and self._project.sequence is not None and not a_id:
+                self.comparison_panel.select("a", self._project.sequence.id)
+            self.comparison_panel.setFocus()
+
+    def _sequence_index(self, sequence_id: str) -> int:
+        if not self._project:
+            return -1
+        return next((i for i, s in enumerate(self._project.sequences) if s.id == sequence_id), -1)
+
+    def switch_to_sequence(self, sequence_id: str) -> bool:
+        """Load a sequence into the timeline at the current elapsed time.
+
+        The playhead keeps its elapsed position, clamped to the arriving
+        sequence's end, so A/B switching compares the same moment.
+        """
+        index = self._sequence_index(sequence_id)
+        if index < 0 or self._algorithm_running:
+            return False
+        elapsed = self.timeline.get_playhead_time()
+        if index != self._project.active_sequence_index:
+            if self._sequence_dirty:
+                self._persist_current_sequence()
+                self._sequence_dirty = False
+            self._project.set_active_sequence(index)
+            self._sync_sequence_dropdown()
+            self._load_active_sequence()
+        arriving = self._project.sequences[index]
+        self.timeline.set_playhead_time(max(0.0, min(elapsed, arriving.duration_seconds)))
+        return True
+
+    def inspect_recipe(self, sequence_id: str) -> None:
+        from ui.dialogs.recipe_dialogs import RecipeInspectDialog
+
+        if self._project is None:
+            return
+        RecipeInspectDialog(self._project, sequence_id, parent=self).exec()
+
+    def duplicate_sequence(self, sequence_id: str) -> dict:
+        """Copy a sequence and its recipe through the shared spine function."""
+        from core.spine.sequences import duplicate_sequence
+
+        if self._project is None:
+            return {"success": False, "error": "No project"}
+        self._persist_current_sequence()
+        result = duplicate_sequence(self._project, sequence_id)
+        if not result.get("success"):
+            QMessageBox.warning(self, "Duplicate Sequence", result.get("error", "Could not duplicate"))
+            return result
+        self._sequence_dirty = False
+        self._sync_sequence_dropdown()
+        self._load_active_sequence()
+        a_id, b_id = self.comparison_panel.selected_ids()
+        if a_id and not b_id:
+            self.comparison_panel.select("b", result["sequence_id"])
+        return result
+
+    def regenerate_sequence(self, sequence_id: str) -> None:
+        """Ask for parameter changes, then run the recipe again as a new variation."""
+        from core.remix.registry import registry
+        from ui.dialogs.recipe_dialogs import RegenerateDialog
+
+        if self._project is None or self._variation_worker is not None:
+            return
+        sequence = next((s for s in self._project.sequences if s.id == sequence_id), None)
+        recipe = sequence.readable_recipe if sequence is not None else None
+        if sequence is None or recipe is None:
+            QMessageBox.information(self, "Regenerate", "This sequence has no readable recipe to regenerate.")
+            return
+        definition = registry.get(recipe.algorithm)
+        if definition is None:
+            QMessageBox.warning(self, "Regenerate", f"Algorithm {recipe.algorithm!r} is not available in this build.")
+            return
+        clips = [self._project.clips_by_id[i.clip_id] for i in recipe.inputs if i.clip_id in self._project.clips_by_id]
+        estimates = estimate_sequence_cost(definition.key, clips, sources_by_id=dict(self._project.sources_by_id))
+        dialog = RegenerateDialog(
+            definition, recipe, f"{sequence.name} variation", parent=self,
+            estimates=estimates, dependency_warning=self._get_missing_local_dependency_warning(estimates),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.start_variation(
+            sequence_id, parameters=dialog.parameters(), seed=dialog.seed(),
+            keep_seed=dialog.keeps_seed(), name=dialog.sequence_name(),
+        )
+
+    def start_variation(
+        self, sequence_id: str, *, parameters: dict | None = None, seed: int | None = None,
+        keep_seed: bool = False, name: str | None = None,
+    ) -> dict:
+        """Validate a variation on the GUI thread and compute it in a worker.
+
+        Publishing happens in ``_on_variation_ready`` on the GUI thread; a
+        cancelled or failed run never creates a sequence.
+        """
+        from core.spine.sequences import prepare_regeneration
+
+        if self._project is None:
+            return {"success": False, "error": "No project"}
+        if self._variation_worker is not None:
+            return {"success": False, "error": "A variation is already being generated"}
+        plan = prepare_regeneration(
+            self._project, sequence_id, parameters=parameters, seed=seed, keep_seed=keep_seed, name=name,
+        )
+        if isinstance(plan, dict):
+            QMessageBox.warning(self, "Regenerate", plan.get("error", "Cannot regenerate"))
+            return plan
+        candidates = [
+            (self._project.clips_by_id[c], self._project.sources_by_id[self._project.clips_by_id[c].source_id])
+            for c in plan.clip_ids
+        ]
+        worker = VariationWorker(plan, candidates, parent=self)
+        worker._owner_project = self._project
+        worker._owner_session = self._project.session.session_id
+        worker.progress_message.connect(
+            lambda message, owner=worker: self.comparison_panel.set_generation_state(
+                owner.plan.sequence_id, message, running=True,
+            )
+        )
+        worker.variation_ready.connect(
+            lambda recipe, settings, notes, owner=worker: self._on_variation_ready(owner, recipe, settings, notes)
+        )
+        worker.error.connect(lambda error, owner=worker: self._on_variation_error(owner, error))
+        worker.finished.connect(lambda owner=worker: self._on_variation_finished(owner))
+        self._variation_worker = worker
+        self.comparison_panel.set_generation_state(plan.sequence_id, "Generating variation...", running=True)
+        self.status_message.emit(f"Generating variation of {plan.name}...")
+        worker.start()
+        return {"success": True, "sequence_id": sequence_id, "started": True}
+
+    def cancel_variation(self) -> bool:
+        worker = self._variation_worker
+        if worker is None:
+            return False
+        worker.cancel()
+        return True
+
+    def _variation_owner_current(self, worker) -> bool:
+        return (
+            self._project is getattr(worker, "_owner_project", None)
+            and self._project is not None
+            and self._project.session.session_id == getattr(worker, "_owner_session", None)
+        )
+
+    def _on_variation_ready(self, worker, recipe, sequence_settings: dict, notes: list) -> None:
+        from core.spine.sequences import publish_recipe
+
+        if worker is not self._variation_worker or worker.is_cancelled() or not self._variation_owner_current(worker):
+            return
+        plan = worker.plan
+        try:
+            self._persist_current_sequence()
+            sequence = publish_recipe(
+                self._project, recipe, name=plan.name,
+                show_chromatic_color_bar=plan.show_chromatic_color_bar,
+                sequence_settings=sequence_settings,
+            )
+        except (ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Regenerate", f"Could not publish the variation: {exc}")
+            return
+        self._sequence_dirty = False
+        self._sync_sequence_dropdown()
+        self._load_active_sequence()
+        a_id, b_id = self.comparison_panel.selected_ids()
+        if a_id == plan.sequence_id or not a_id:
+            if not a_id:
+                self.comparison_panel.select("a", plan.sequence_id)
+            self.comparison_panel.select("b", sequence.id)
+        self.status_message.emit(f"Generated {sequence.name}" + (f" ({'; '.join(notes)})" if notes else ""))
+
+    def _on_variation_error(self, worker, error: str) -> None:
+        if worker is not self._variation_worker or not self._variation_owner_current(worker):
+            return
+        QMessageBox.warning(self, "Regenerate", f"Variation failed: {error}")
+
+    def _on_variation_finished(self, worker) -> None:
+        if self._variation_worker is worker:
+            self._variation_worker = None
+        self.comparison_panel.set_generation_state(worker.plan.sequence_id, "", running=False)
+        if worker.is_cancelled():
+            self.status_message.emit("Variation cancelled; nothing was added")
 
     def _on_sequence_switched(self, new_index: int):
         """Handle user selecting a different sequence in the dropdown."""
@@ -2187,8 +2402,16 @@ class SequenceTab(BaseTab):
         # the departing scene would mutate its model and invalidate its history.
         self.timeline.load_sequence(sequence, dict(sources), self._clips)
         if sequence.get_all_clips():
+            # The strip shows library clips (thumbnails), not timeline entries.
+            clips_by_id = {clip.id: clip for clip in self._clips}
+            if self._project is not None:
+                clips_by_id = {**self._project.clips_by_id, **clips_by_id}
             self.timeline_preview.set_clips(
-                [(c, sources.get(c.source_id)) for track in sequence.tracks for c in track.clips if sources.get(c.source_id)],
+                [
+                    (clips_by_id[entry.source_clip_id], sources[entry.source_id])
+                    for entry in sequence.get_all_clips()
+                    if entry.source_clip_id in clips_by_id and entry.source_id in sources
+                ],
                 sources,
             )
             self._set_state(self.STATE_TIMELINE)

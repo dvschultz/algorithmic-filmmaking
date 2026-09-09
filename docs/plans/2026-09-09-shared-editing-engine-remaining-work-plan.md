@@ -19,7 +19,7 @@ Start with U11. Use the order below by default, delivering one algorithm or runt
 - [ ] **U13:** Prove managed native-worker isolation with transcription on all supported packaged platforms. Source-mode proof and CI gates landed; packaged evidence pending the next release builds (see evidence below).
 - [ ] **U14:** Migrate the remaining native features and unify runtime install/repair.
 - [x] **U15:** Shared clip/frame item models with measured large-library performance.
-- [ ] **U16:** Recipe inspection and A/B variation comparison in the existing workspace.
+- [x] **U16:** Recipe inspection and A/B variation comparison in the existing workspace.
 - [ ] **U17:** Enforce quality gates, dependency contracts, and remove superseded paths.
 
 Check off a unit only after its acceptance evidence is recorded. For each completed family, record the commit, exact validation commands/results, applicable interface coverage, and remaining compatibility wrappers with removal conditions.
@@ -223,6 +223,25 @@ This work does not add new creative algorithms, a new frontend, general composit
 4. Keyboard controls, empty states, unavailable capabilities, and agent-created variations behave consistently.
 
 **Verification:** A complete import-to-variation-to-export walkthrough works through UI and automation; include screenshots or a short recording for review.
+
+**Decisions (recorded 2026-09-09):**
+
+- The comparison panel is a view over spine functions and mutates nothing itself; every button is a signal the tab routes through `duplicate_sequence`, `get_sequence_recipe`, `prepare_regeneration` + `publish_recipe`, or `switch_to_sequence`. `compare_sequences` is a new read-only spine function exposed as a chat tool, an MCP tool, and `scene_ripper sequence compare`, so agents see exactly what the panel shows.
+- Regeneration in the desktop splits `regenerate_sequence` into `prepare_regeneration` (GUI thread, validates inputs/version/parameters and snapshots candidates) and a `VariationWorker` that runs `run_algorithm` with a cancel event; publishing happens on the GUI thread only when the worker's project/session still match. A cancelled or failed run publishes nothing. Progress and per-sequence busy state flow into the panel; the regenerate dialog shows the same cost/missing-dependency summary as the confirm step.
+- Switching A/B keeps the elapsed playhead time and clamps to the arriving sequence's end (`comparable_seconds` in the comparison). The rendered-proxy probe lives in MainWindow; a missing preview offers rendering for that side without hiding the recipe differences.
+- Deleting a compared sequence clears only its selector (selection is kept by sequence id across refreshes). Agent- or MCP-created variations appear through the existing `sequences_changed` sync. Read-only projects keep Show/Recipe and disable Duplicate/Regenerate.
+- Keyboard: `A`/Left and `B`/Right switch while the panel has focus; `Ctrl+Shift+C` toggles it.
+
+**Evidence (2026-09-09, macOS source mode):**
+
+- Files: `ui/widgets/sequence_comparison.py`, `ui/dialogs/recipe_dialogs.py` (`RecipeInspectDialog`, `RegenerateDialog`), `ui/workers/variation_worker.py`, `ui/tabs/sequence_tab.py` (Compare A/B toggle, `switch_to_sequence`, `inspect_recipe`, `duplicate_sequence`, `regenerate_sequence`/`start_variation`/`cancel_variation`), `ui/main_window.py` (preview probe and per-sequence render), `core/spine/sequences.py` (`compare_sequences`, `prepare_regeneration`, `RegenerationPlan`), `core/chat_tools.py` + `scene_ripper_mcp/tools/sequence.py` + `cli/commands/sequence.py` (`compare`), docs (`sequencers.md`, `agent-tools.md`, `headless-mcp.md`, `surface-compatibility.md`), screenshot `docs/user-guide/images/compare-ab.png` from `scripts/capture_comparison_panel.py`.
+- Scenario 1: `tests/test_sequence_comparison.py::TestSequenceTabVariations::test_variation_runs_off_thread_publishes_b_and_leaves_a_untouched` and `::test_duplicate_through_tab_uses_spine_and_fills_slot_b` (A's dict unchanged, B has the changed parameter and parent recipe id, one undo entry).
+- Scenario 2: `TestComparisonPanel::test_missing_preview_offers_render_without_blocking_differences`.
+- Scenario 3: `::test_cancelled_variation_publishes_nothing` (worker cancelled mid-run, no sequence added, controls re-enabled); missing-dependency warnings surface in the regenerate dialog through the shared cost estimator.
+- Scenario 4: `::test_keyboard_switches_and_actions_emit_ids`, `::test_empty_state_until_two_sequences_exist`, `::test_read_only_projects_keep_inspection_but_not_mutation`, `::test_deleting_a_compared_sequence_clears_only_its_slot`, `::test_agent_created_variation_shows_up_in_panel`, `::test_switch_keeps_elapsed_time_and_clamps_to_shorter_sequence`.
+- Walkthrough (automation): `::test_import_to_variation_to_export_walkthrough_over_mcp_and_cli` generates A over MCP, regenerates B, compares over MCP and the CLI, and exports both EDLs. UI walkthrough: the panel screenshot above; the same flow was exercised through `SequenceTab` in the tab tests (offscreen).
+- Fixed on the way: `SequenceTab._load_active_sequence` fed `SequenceClip` entries to the preview strip (no `thumbnail_path`), which broke switching to any populated sequence.
+- Validation: `tests/test_sequence_comparison.py` (18), variation/history/chat/MCP sequence suites (285) pass; ruff clean for changed files.
 
 ## U17. Enforce quality gates and remove completed compatibility paths
 

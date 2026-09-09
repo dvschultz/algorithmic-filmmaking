@@ -3702,6 +3702,20 @@ def get_sequence_recipe(project, sequence_id: Optional[str] = None) -> dict:
 
 
 @tools.register(
+    description="Compare two sequences side by side (A/B): clip counts, durations, seeds, "
+                "every recipe parameter that differs, whether they share inputs or derive "
+                "from each other, and whether the timelines are identical. Read-only.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def compare_sequences(project, sequence_a: str, sequence_b: str) -> dict:
+    """Return recipe and timeline differences between two sequences."""
+    from core.spine.sequences import compare_sequences as _impl
+
+    return _impl(project, sequence_a, sequence_b)
+
+
+@tools.register(
     description="Rebuild a generated sequence from its stored recipe as a new sequence, "
                 "replaying the realized clip order, trims and transforms without running "
                 "the algorithm or any provider. Fails with the changed clip IDs, without "

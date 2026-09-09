@@ -164,6 +164,20 @@ profiles in `core/runtime_profiles.py`. mlx-whisper and the cloud backend still
 run in-process (U14). Packaged-platform proof is the `native-worker` runtime
 smoke target in the release workflows.
 
+## Sequence variation comparison (U16)
+
+The Sequence tab's **Compare A/B** panel (`ui/widgets/sequence_comparison.py`)
+is a view over spine functions: `compare_sequences` (new, read-only; also a
+chat tool and an MCP tool), `duplicate_sequence`, `get_sequence_recipe`, and
+`prepare_regeneration` + `publish_recipe`. `regenerate_sequence` is unchanged
+in behavior but now delegates to `prepare_regeneration` (a `RegenerationPlan`),
+which the desktop runs through `ui/workers/variation_worker.py` off the GUI
+thread and publishes on the GUI thread; a cancelled or failed run publishes
+nothing. Switching A/B keeps the elapsed playhead time clamped to the arriving
+sequence. `SequenceTab._load_active_sequence` now maps timeline entries to
+library clips before feeding the preview strip (it passed `SequenceClip`
+objects before, which have no thumbnail).
+
 ## Shared library item models (U15)
 
 `ui/models/clip_model.py` and `ui/models/frame_model.py` are the single

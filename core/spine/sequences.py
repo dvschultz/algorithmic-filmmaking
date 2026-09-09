@@ -566,7 +566,26 @@ def duplicate_sequence(project: Project, sequence_id: str | None = None, *, name
     return result
 
 
-def regenerate_sequence(
+@dataclass(frozen=True)
+class RegenerationPlan:
+    """Everything a variation run needs, validated against the current project.
+
+    ``prepare_regeneration`` builds it; ``regenerate_sequence`` runs it in
+    place, and the desktop tab runs the algorithm half off the GUI thread
+    before publishing with ``publish_recipe``.
+    """
+
+    sequence_id: str
+    algorithm: str
+    clip_ids: tuple[str, ...]
+    parameters: dict[str, Any]
+    seed: int | None
+    name: str
+    parent_recipe_id: str
+    show_chromatic_color_bar: bool
+
+
+def prepare_regeneration(
     project: Project,
     sequence_id: str | None = None,
     *,
@@ -574,16 +593,8 @@ def regenerate_sequence(
     seed: int | None = None,
     keep_seed: bool = False,
     name: str | None = None,
-    cancel_event: Event | None = None,
-) -> dict:
-    """Run a recipe's algorithm again as a new variation.
-
-    Uses the recipe's ordered inputs and parameters with any ``parameters``
-    overrides. Seeded algorithms draw a fresh seed unless ``seed`` is given or
-    ``keep_seed`` is true. The original sequence is never modified. Provider-
-    assisted algorithms make new provider calls; use ``reconstruct_sequence``
-    to replay without them.
-    """
+) -> RegenerationPlan | dict:
+    """Validate a variation request; returns a plan or a ``{"success": False}`` error."""
     from core.remix.registry import registry
 
     sequence = _find_sequence(project, sequence_id)
@@ -630,11 +641,112 @@ def regenerate_sequence(
     if not definition.seeded:
         seed = None
     label = name.strip() if isinstance(name, str) and name.strip() else f"{sequence.name} variation"
-    return generate_sequence(
-        project, recipe.algorithm,
-        clip_ids=[item.clip_id for item in recipe.inputs],
-        parameters=merged, seed=seed, name=label,
-        parent_recipe_id=recipe.id,
+    return RegenerationPlan(
+        sequence_id=sequence.id, algorithm=recipe.algorithm,
+        clip_ids=tuple(item.clip_id for item in recipe.inputs),
+        parameters=merged, seed=seed, name=label, parent_recipe_id=recipe.id,
         show_chromatic_color_bar=sequence.show_chromatic_color_bar,
+    )
+
+
+def regenerate_sequence(
+    project: Project,
+    sequence_id: str | None = None,
+    *,
+    parameters: dict[str, Any] | None = None,
+    seed: int | None = None,
+    keep_seed: bool = False,
+    name: str | None = None,
+    cancel_event: Event | None = None,
+) -> dict:
+    """Run a recipe's algorithm again as a new variation.
+
+    Uses the recipe's ordered inputs and parameters with any ``parameters``
+    overrides. Seeded algorithms draw a fresh seed unless ``seed`` is given or
+    ``keep_seed`` is true. The original sequence is never modified. Provider-
+    assisted algorithms make new provider calls; use ``reconstruct_sequence``
+    to replay without them.
+    """
+    plan = prepare_regeneration(
+        project, sequence_id, parameters=parameters, seed=seed, keep_seed=keep_seed, name=name,
+    )
+    if isinstance(plan, dict):
+        return plan
+    return generate_sequence(
+        project, plan.algorithm,
+        clip_ids=list(plan.clip_ids),
+        parameters=plan.parameters, seed=plan.seed, name=plan.name,
+        parent_recipe_id=plan.parent_recipe_id,
+        show_chromatic_color_bar=plan.show_chromatic_color_bar,
         cancel_event=cancel_event,
     )
+
+
+def _sequence_summary(sequence: Sequence) -> dict:
+    recipe = sequence.readable_recipe
+    return {
+        "sequence_id": sequence.id,
+        "name": sequence.name,
+        "algorithm": sequence.algorithm,
+        "clip_count": len(sequence.get_all_clips()),
+        "duration_seconds": round(sequence.duration_seconds, 3),
+        "has_recipe": recipe is not None,
+        "unreadable_recipe": sequence.recipe is not None and recipe is None,
+        "recipe_id": recipe.id if recipe else None,
+        "parent_recipe_id": recipe.parent_id if recipe else None,
+        "seed": recipe.seed if recipe else None,
+        "algorithm_version": recipe.algorithm_version if recipe else None,
+        "uses_provider": recipe.uses_provider if recipe else False,
+    }
+
+
+def compare_sequences(project: Project, sequence_a: str, sequence_b: str) -> dict:
+    """Side-by-side summary of two sequences and their recipe differences.
+
+    ``parameter_differences`` lists every recipe parameter whose value
+    differs (``{"key", "a", "b"}``, a missing key reported as ``None``).
+    ``inputs_equal`` says whether both recipes drew from the same ordered
+    clip inputs; ``related`` whether one recipe derives from the other.
+    """
+    first = _find_sequence(project, sequence_a)
+    second = _find_sequence(project, sequence_b)
+    if first is None or second is None:
+        return {"success": False, "error": "Sequence not found"}
+    if first is second:
+        return {"success": False, "error": "Choose two different sequences to compare"}
+    summary_a, summary_b = _sequence_summary(first), _sequence_summary(second)
+    recipe_a, recipe_b = first.readable_recipe, second.readable_recipe
+    differences: list[dict] = []
+    same_algorithm = (recipe_a.algorithm == recipe_b.algorithm) if recipe_a and recipe_b else (
+        (first.algorithm or "") == (second.algorithm or "")
+    )
+    if recipe_a is not None and recipe_b is not None:
+        for key in sorted(set(recipe_a.parameters) | set(recipe_b.parameters)):
+            left, right = recipe_a.parameters.get(key), recipe_b.parameters.get(key)
+            if left != right:
+                differences.append({"key": key, "a": deepcopy(left), "b": deepcopy(right)})
+    inputs_equal = (
+        recipe_a is not None and recipe_b is not None
+        and [i.clip_id for i in recipe_a.inputs] == [i.clip_id for i in recipe_b.inputs]
+    )
+    related = bool(
+        recipe_a is not None and recipe_b is not None
+        and (recipe_a.parent_id == recipe_b.id or recipe_b.parent_id == recipe_a.id
+             or (recipe_a.parent_id is not None and recipe_a.parent_id == recipe_b.parent_id))
+    )
+    entries_a = [(e.source_clip_id, e.in_point, e.out_point) for e in first.get_all_clips()]
+    entries_b = [(e.source_clip_id, e.in_point, e.out_point) for e in second.get_all_clips()]
+    return {
+        "success": True,
+        "a": summary_a,
+        "b": summary_b,
+        "same_algorithm": same_algorithm,
+        "seed_changed": (recipe_a.seed != recipe_b.seed) if recipe_a and recipe_b else None,
+        "parameter_differences": differences,
+        "inputs_equal": inputs_equal,
+        "related": related,
+        "timelines_identical": entries_a == entries_b,
+        "duration_delta_seconds": round(summary_b["duration_seconds"] - summary_a["duration_seconds"], 3),
+        "clip_count_delta": summary_b["clip_count"] - summary_a["clip_count"],
+        "comparable_seconds": round(min(summary_a["duration_seconds"], summary_b["duration_seconds"]), 3),
+    }

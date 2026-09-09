@@ -142,6 +142,7 @@ def test_desktop_new_sequence_and_agent_rename_share_menu_history(qapp):
         _sources={},
         _clips=[],
         timeline_preview=Mock(),
+        comparison_panel=Mock(),
         _set_state=Mock(),
         sync_sequence_metadata=Mock(),
         STATE_CARDS=0,

@@ -26,9 +26,9 @@ pyproject.toml                   # Metadata, CLI + MCP entry points
 ui/                  (23 files)  # Main window, chat, player, browser, theme, algorithm_config
   models/            (3 files)   # Shared clip/frame item models owned by ProjectSignalAdapter (docs/architecture/library-models.md)
   tabs/              (6 wired)   # collect, cut, analyze, frames, sequence, render (generate_tab.py exists but is unmounted stub)
-  dialogs/           (20 files)  # Algorithm-specific config dialogs
-  workers/           (24 files)  # QThread workers (base.py = CancellableWorker + is_transient_provider_error)
-  widgets/           (24 files)  # Cards, grids, timeline preview, empty states
+  dialogs/           (21 files)  # Algorithm-specific config dialogs, recipe inspect/regenerate
+  workers/           (73 files)  # QThread workers (base.py = CancellableWorker + is_transient_provider_error)
+  widgets/           (24 files)  # Cards, grids, timeline preview, A/B sequence comparison, empty states
   timeline/          (8 files)   # Timeline widget, tracks, clips, playhead
   session_history.py            # Qt actions projecting shared project history
 core/                (70 files)  # Business logic, FFmpeg, settings, project, LLM, runtime_supervisor (managed workers)

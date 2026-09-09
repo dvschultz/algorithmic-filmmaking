@@ -1475,6 +1475,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.stop_requested.connect(self._on_stop_requested)
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
         self.sequence_tab.render_preview_requested.connect(self._on_render_sequence_preview_requested)
+        self.sequence_tab.sequence_preview_render_requested.connect(self._on_sequence_preview_render_for)
+        self.sequence_tab.comparison_panel.set_preview_probe(self._sequence_preview_ready_for)
         self.sequence_tab.edl_export_requested.connect(self._on_sequence_edl_export_requested)
         self.sequence_tab.all_edl_export_requested.connect(self._on_all_sequence_edl_export_requested)
         # Intention-first workflow trigger
@@ -5301,6 +5303,33 @@ class MainWindow(QMainWindow):
         """Render the active sequence preview explicitly from the header button."""
         self._start_sequence_preview_render(play_after_frame=None)
 
+    def _on_sequence_preview_render_for(self, sequence_id: str) -> None:
+        """Render a preview for a compared sequence (loads it first)."""
+        if self.sequence_tab.switch_to_sequence(sequence_id):
+            self._start_sequence_preview_render(play_after_frame=None)
+
+    def _sequence_preview_ready_for(self, sequence) -> bool:
+        """Whether a cached proxy exists for any project sequence (A/B panel probe)."""
+        if not sequence.get_all_clips() or self.project is None:
+            return False
+        from core.render_plan import compile_render_plan
+
+        sources = dict(self.project.sources_by_id)
+        clips = {
+            clip.id: (clip, sources[clip.source_id])
+            for clip in self.project.clips if clip.source_id in sources
+        }
+        frames = self.project.frames_by_id
+        try:
+            compile_render_plan(sequence, sources, clips, frames=frames, check_media=False)
+            signature = compute_sequence_preview_signature(
+                sequence=sequence, sources=sources, clips=clips, frames=frames,
+                settings=SequencePreviewSettings(),
+            )
+        except Exception:
+            return False
+        return get_sequence_preview_path(sequence, signature).exists()
+
     def _start_sequence_preview_render(self, play_after_frame: Optional[int]):
         """Start preview rendering, optionally continuing playback afterwards."""
         if self.sequence_preview_worker and self.sequence_preview_worker.isRunning():
@@ -5398,6 +5427,7 @@ class MainWindow(QMainWindow):
             self._rendered_sequence_preview_lease = None
             self._rendered_sequence_preview_stamp = None
         self._rendered_sequence_preview_path = Path(path)
+        self.sequence_tab.comparison_panel.refresh()
         self._rendered_sequence_preview_signature = signature
         self._rendered_sequence_preview_profile = profile_label
         self.progress_bar.setVisible(False)

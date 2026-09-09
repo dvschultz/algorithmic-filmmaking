@@ -468,6 +468,35 @@ async def activate_sequence(
 
 
 @mcp.tool()
+async def compare_sequences(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_a: Annotated[str, "First sequence ID (A)"],
+    sequence_b: Annotated[str, "Second sequence ID (B)"],
+    ctx: Context = None,
+) -> str:
+    """Compare two sequences: clip counts, durations, seeds, changed recipe parameters, lineage.
+
+    Returns:
+        JSON with ``a`` and ``b`` summaries, ``parameter_differences``
+        (``key``/``a``/``b``), ``seed_changed``, ``inputs_equal``, ``related``,
+        ``timelines_identical`` and the deltas. Read-only.
+    """
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        from core.spine.project_io import load_with_mtime
+        from core.spine.sequences import compare_sequences as _impl
+
+        project, _mtime = load_with_mtime(path)
+        return json.dumps(_impl(project, sequence_a, sequence_b))
+    except Exception as exc:
+        from core.spine.project_io import project_error
+
+        return json.dumps({"success": False, "error": project_error(exc)})
+
+
+@mcp.tool()
 async def duplicate_sequence(
     project_path: Annotated[str, "Path to project file"],
     sequence_id: Annotated[Optional[str], "Sequence ID; omit for the active sequence"] = None,

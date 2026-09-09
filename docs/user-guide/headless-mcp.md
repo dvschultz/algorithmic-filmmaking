@@ -595,6 +595,10 @@ before the edit, so malformed transcript input cannot partially change a clip.
   missing, or its version differs from the recipe's.
 - `duplicate_sequence(project_path, sequence_id?, name?)` copies a sequence's
   timeline and recipe as a new active sequence without recomputation.
+- `compare_sequences(project_path, sequence_a, sequence_b)` is read-only: it
+  returns both summaries (clip count, duration, seed, recipe lineage),
+  `parameter_differences` (`key`/`a`/`b`), `seed_changed`, `inputs_equal`,
+  `related`, `timelines_identical` and the duration/clip deltas.
 - `list_sequences(project_path)` and `activate_sequence(project_path, sequence_id)`
   list sequences with algorithm and recipe ids, and switch the active sequence.
 
