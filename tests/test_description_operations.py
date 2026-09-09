@@ -11,7 +11,6 @@ from core.operations.description import (
 )
 from core.spine.analyze import describe
 from tests.project_fixtures import project_with_thumbnails  # noqa: F401  (re-exported for older imports)
-from tests.test_spine_analyze import _build_project
 from ui.workers.description_worker import DescriptionWorker
 
 
