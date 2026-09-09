@@ -610,8 +610,11 @@ before the edit, so malformed transcript input cannot partially change a clip.
   An install stages the packages, health-checks them in a fresh worker and
   only then promotes them; cancelling the job or a failed health check keeps
   the previous runtime, and rollback removes the newest promoted overlay.
-  Analysis never installs silently: a missing runtime is reported with the
-  same `missing` list the desktop install prompt shows.
+  Analysis never installs silently: the synchronous `transcribe` tool reports a
+  missing runtime as `runtime_missing` with the profile and `missing` list the
+  desktop prompt shows; the `start_*` analysis jobs surface a missing worker
+  runtime as their normal failure code with an "is not installed in the worker"
+  message, so check `list_runtime_profiles` first.
 - `compare_sequences(project_path, sequence_a, sequence_b)` is read-only: it
   returns both summaries (clip count, duration, seed, recipe lineage),
   `parameter_differences` (`key`/`a`/`b`), `seed_changed` (a boolean when

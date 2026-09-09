@@ -4410,6 +4410,28 @@ def install_runtime_profile(profile: str) -> dict:
 
 
 @tools.register(
+    description="Switch one native runtime family (transcription, vision, ocr, vlm, audio, alignment) "
+                "into or out of its isolated worker without touching the other families. Persists in "
+                "settings; the same operation as `scene_ripper runtime isolate`.",
+    requires_project=False,
+    modifies_gui_state=False,
+)
+def isolate_runtime_family(family: str, enabled: bool = True) -> dict:
+    from core.runtime_families import FAMILIES
+    from core.settings import load_settings
+    from core.spine.settings_io import update_settings as _update
+
+    if family not in FAMILIES:
+        return {"success": False, "error": f"Unknown runtime family {family!r}; known: {', '.join(sorted(FAMILIES))}"}
+    current = set(load_settings(read_keyring=False).native_worker_families)
+    wanted = (current | {family}) if enabled else (current - {family})
+    result = _update("native_worker_families", sorted(wanted))
+    result["family"] = family
+    result["isolated"] = enabled
+    return result
+
+
+@tools.register(
     description="Roll a runtime profile back to the runtime that was active before its last "
                 "install by removing the newest promoted overlay, then re-check it.",
     requires_project=False,
@@ -4422,28 +4444,14 @@ def rollback_runtime_profile(profile: str) -> dict:
     return _impl(profile)
 
 
-# Safe settings that can be modified by agent (no API keys, no paths)
-SAFE_SETTINGS = {
-    "default_sensitivity": (float, 1.0, 10.0),
-    "min_scene_length_seconds": (float, 0.1, 10.0),
-    "export_quality": (str, ["low", "medium", "high"]),
-    "export_resolution": (str, ["original", "1080p", "720p", "480p"]),
-    "export_fps": (str, ["original", "24", "30", "60"]),
-    "transcription_model": (str, ["tiny.en", "small.en", "medium.en", "large-v3"]),
-    "transcription_language": (str, None),  # Any string allowed
-    "theme_preference": (str, ["system", "light", "dark"]),
-    "youtube_results_count": (int, 10, 50),
-    "youtube_parallel_downloads": (int, 1, 3),
-    "llm_provider": (str, ["local", "openai", "anthropic", "gemini", "openrouter"]),
-    "llm_model": (str, None),  # Any string allowed
-    "llm_temperature": (float, 0.0, 2.0),
-}
+# The safe-settings table lives in core.spine.settings_io.SAFE_SETTINGS (shared with MCP/CLI).
 
 
 @tools.register(
     description="Update application settings (safe settings only, no API keys or paths). "
-                "Use get_settings first to see current values. native_worker_families takes "
-                "comma-separated family ids (transcription, vision, ocr, vlm, audio, alignment). "
+                "Use get_settings first to see current values. native_worker_families REPLACES the whole "
+                "list of isolated runtime families (comma-separated ids: transcription, vision, ocr, vlm, "
+                "audio, alignment); to add or remove one family use isolate_runtime_family instead. "
                 "Settings: default_sensitivity (1.0-10.0), export_quality ('low'/'medium'/'high'), "
                 "export_resolution ('original'/'1080p'/'720p'/'480p'), theme_preference ('system'/'light'/'dark'), "
                 "llm_provider ('local'/'openai'/'anthropic'/'gemini'/'openrouter'), llm_model, llm_temperature (0.0-2.0).",
@@ -4454,7 +4462,7 @@ def update_settings(setting_name: str, value) -> dict:
     """Update an application setting.
 
     Args:
-        setting_name: Name of the setting to update (must be in SAFE_SETTINGS)
+        setting_name: Name of the setting to update (must be in core.spine.settings_io.SAFE_SETTINGS)
         value: New value for the setting
 
     Returns:

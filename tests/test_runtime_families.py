@@ -307,3 +307,14 @@ def test_runtime_isolate_cli_round_trips(monkeypatch, tmp_path):
     bad = run("isolate", "bogus")
     assert bad.returncode == 7  # validation error, like an unknown profile
     assert run("isolate").returncode == 7
+
+
+def test_chat_isolate_runtime_family_adds_and_removes_one_family(monkeypatch, tmp_path):
+    from core.chat_tools import tools
+    from core.settings import load_settings
+
+    monkeypatch.setenv("SCENE_RIPPER_CONFIG", str(tmp_path / "config.json"))
+    tool = tools.get("isolate_runtime_family").func
+    assert tool("audio")["success"] and load_settings().native_worker_families == ["audio", "transcription"]
+    assert tool("audio", enabled=False)["success"] and load_settings().native_worker_families == ["transcription"]
+    assert tool("shell")["success"] is False

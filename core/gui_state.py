@@ -266,10 +266,22 @@ class GUIState:
                 lines.append(
                     "RUNTIME PROFILES MISSING: "
                     + "; ".join(f"{pid} (missing: {', '.join(missing)})" for pid, missing in missing_profiles)
-                    + " -- use install_runtime_profile before transcription-type analysis"
+                    + " -- install_runtime_profile(<profile>) before running that family's analysis"
                 )
+            isolated = self._isolated_families()
+            if isolated:
+                lines.append("ISOLATED RUNTIME FAMILIES: " + ", ".join(isolated))
 
             return "\n".join(lines) if lines else ""
+
+    @staticmethod
+    def _isolated_families() -> list[str]:
+        try:
+            from core.runtime_families import enabled_families
+
+            return sorted(enabled_families())
+        except Exception:  # noqa: BLE001
+            return []
 
     @staticmethod
     def _missing_runtime_profiles() -> list[tuple[str, list[str]]]:
