@@ -597,6 +597,15 @@ before the edit, so malformed transcript input cannot partially change a clip.
   missing, or its version differs from the recipe's.
 - `duplicate_sequence(project_path, sequence_id?, name?)` copies a sequence's
   timeline and recipe as a new active sequence without recomputation.
+- Runtime profiles (isolated native workers): `list_runtime_profiles()`,
+  `get_runtime_profile_status(profile, probe?)`, the durable job
+  `start_install_runtime_profile(profile)` and `rollback_runtime_profile(profile)`.
+  Profiles are allowlisted ids (`transcription-whisper`), never package names.
+  An install stages the packages, health-checks them in a fresh worker and
+  only then promotes them; cancelling the job or a failed health check keeps
+  the previous runtime, and rollback removes the newest promoted overlay.
+  Analysis never installs silently: a missing runtime is reported with the
+  same `missing` list the desktop install prompt shows.
 - `compare_sequences(project_path, sequence_a, sequence_b)` is read-only: it
   returns both summaries (clip count, duration, seed, recipe lineage),
   `parameter_differences` (`key`/`a`/`b`), `seed_changed` (a boolean when

@@ -24,6 +24,7 @@ import shutil
 import ssl
 import stat
 import subprocess
+import threading
 import sys
 import tempfile
 import time
@@ -1089,6 +1090,8 @@ def install_packages(
     progress_callback: ProgressCallback = None,
     *,
     no_deps: bool = False,
+    target_dir: Path | None = None,
+    cancel_event: "threading.Event | None" = None,
 ) -> bool:
     """Install Python packages into the managed packages directory.
 
@@ -1100,6 +1103,10 @@ def install_packages(
     Args:
         specifiers: pip install specifiers (e.g., ["torch>=2.4,<2.6"]).
         progress_callback: Optional progress callback.
+        target_dir: Staged install: pip installs only into this directory and
+            nothing in the live process or the active package roots changes
+            (the caller promotes the directory after a health check).
+        cancel_event: Kills the pip process when set; the install then fails.
 
     Returns:
         True if installation succeeded.
@@ -1111,7 +1118,8 @@ def install_packages(
     if not normalized_specifiers:
         return True
 
-    _ensure_managed_packages_importable()
+    if target_dir is None:
+        _ensure_managed_packages_importable()
 
     # Ensure standalone Python is available
     python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
@@ -1155,6 +1163,11 @@ def install_packages(
         try:
             assert process.stdout is not None
             for raw_line in process.stdout:
+                if cancel_event is not None and cancel_event.is_set():
+                    process.kill()
+                    process.wait(timeout=30)
+                    logger.info("pip install cancelled for %s", install_label)
+                    return False, "pip install cancelled"
                 line = raw_line.rstrip()
                 output_lines.append(line)
                 parsed = _pip_progress_from_output_line(line, install_label)
@@ -1177,6 +1190,16 @@ def install_packages(
             return False, output
 
         return True, output
+
+    if target_dir is not None:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        success, output = _run_pip_install(target_dir)
+        if not success:
+            _emit_progress(progress_callback, 0.0, f"Failed to install {install_label}")
+            return False
+        _emit_progress(progress_callback, 1.0, f"Staged {install_label}")
+        logger.info("Package staged: %s -> %s", install_label, target_dir)
+        return True
 
     success, output = _run_pip_install(base_packages_dir)
     if not success and _should_retry_install_in_overlay(output):

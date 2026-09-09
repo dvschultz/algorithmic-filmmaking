@@ -298,6 +298,25 @@ def _is_compiler_available() -> bool:
     return True
 
 
+def _install_feature(feature_name: str, progress_callback, install_for_feature) -> bool:
+    """Install a feature the same way chat/MCP/CLI do.
+
+    Features that belong to an isolated runtime profile go through the staged
+    profile install (health-checked in a worker, previous runtime kept on
+    failure) when native worker isolation is on; everything else still uses
+    the in-place installer.
+    """
+    from core.runtime_profiles import PROFILES
+    from core.transcription import native_worker_enabled
+
+    profile = next((p for p in PROFILES.values() if feature_name in p.features), None)
+    if profile is not None and native_worker_enabled():
+        from core.spine.runtime import install_runtime_profile
+
+        return bool(install_runtime_profile(profile.id, progress_callback=progress_callback).get("success"))
+    return install_for_feature(feature_name, progress_callback)
+
+
 def prompt_feature_download(
     feature_name: str,
     parent_widget=None,
@@ -363,7 +382,7 @@ def prompt_feature_download(
     dialog = DependencyDownloadDialog(
         title="Installing dependencies",
         message=f"Downloading {missing_str} (~{size_mb} MB)...",
-        install_func=lambda cb: install_for_feature(feature_name, cb),
+        install_func=lambda cb: _install_feature(feature_name, cb, install_for_feature),
         parent=parent_widget,
     )
 

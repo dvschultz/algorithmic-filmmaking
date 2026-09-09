@@ -4369,6 +4369,59 @@ def get_settings() -> dict:
     return _impl()
 
 
+@tools.register(
+    description="List native runtime profiles (isolated worker families such as "
+                "transcription-whisper) with their install status, missing packages and promoted "
+                "overlays. Read-only; the same status the UI's install prompts use.",
+    requires_project=False,
+    modifies_gui_state=False
+)
+def list_runtime_profiles() -> dict:
+    from core.spine.runtime import list_runtime_profiles as _impl
+
+    return _impl()
+
+
+@tools.register(
+    description="Status of one runtime profile; probe=true also imports the runtime inside a fresh "
+                "worker as a health check (never in this process).",
+    requires_project=False,
+    modifies_gui_state=False
+)
+def get_runtime_profile_status(profile: str, probe: bool = False) -> dict:
+    from core.spine.runtime import get_runtime_profile_status as _impl
+
+    return _impl(profile, probe=probe)
+
+
+@tools.register(
+    description="Install or repair a native runtime profile by id (allowlisted ids only, never "
+                "package names). Packages are staged, health-checked in a worker and only then "
+                "promoted; a failed or cancelled install leaves the previous runtime usable. "
+                "Blocks until done; prefer this over letting an analysis install silently.",
+    requires_project=False,
+    modifies_gui_state=False,
+    conflicts_with_workers=True,
+)
+def install_runtime_profile(profile: str) -> dict:
+    from core.spine.runtime import install_runtime_profile as _impl
+
+    return _impl(profile)
+
+
+@tools.register(
+    description="Roll a runtime profile back to the runtime that was active before its last "
+                "install by removing the newest promoted overlay, then re-check it.",
+    requires_project=False,
+    modifies_gui_state=False,
+    conflicts_with_workers=True,
+)
+def rollback_runtime_profile(profile: str) -> dict:
+    from core.spine.runtime import rollback_runtime_profile as _impl
+
+    return _impl(profile)
+
+
 # Safe settings that can be modified by agent (no API keys, no paths)
 SAFE_SETTINGS = {
     "default_sensitivity": (float, 1.0, 10.0),

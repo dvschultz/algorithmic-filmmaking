@@ -143,6 +143,11 @@ SPINE_MODULES: tuple[str, ...] = (
     "scene_ripper_mcp.tools.sequence",
     "scene_ripper_mcp.tools.jobs",
     "scene_ripper_mcp.tools.export",
+    "scene_ripper_mcp.tools.runtime",
+    "core.spine.runtime",
+    "core.jobs.runtime_install",
+    "core.runtime_profiles",
+    "cli.commands.runtime",
 )
 
 

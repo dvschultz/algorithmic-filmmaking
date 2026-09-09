@@ -8,6 +8,7 @@ to download exactly what's needed.
 import logging
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary
@@ -387,6 +388,46 @@ def get_all_feature_status() -> dict[str, tuple[bool, list[str]]]:
         Dict of feature_name -> (available, missing_deps).
     """
     return {name: check_feature(name) for name in FEATURE_DEPS}
+
+
+def stage_feature_packages(
+    name: str,
+    target_dir: Path,
+    progress_callback: Optional[Callable] = None,
+    cancel_event=None,
+) -> bool:
+    """Install a feature's full manifest package set into ``target_dir`` only.
+
+    Nothing in the live process or the active package roots changes: the
+    caller (``core.runtime_profiles.install_profile``) health-checks the
+    staged directory in a worker and promotes or discards it. Binaries the
+    feature needs (ffmpeg, yt-dlp, ...) are ensured as usual.
+    """
+    from core.dependency_manager import (
+        ensure_deno, ensure_ffmpeg, ensure_ffprobe, ensure_yt_dlp, get_pip_specifier, install_packages,
+    )
+
+    deps = FEATURE_DEPS.get(name)
+    if deps is None:
+        raise ValueError(f"Unknown feature: {name}")
+    binary_installers = {
+        "ffmpeg": ensure_ffmpeg, "ffprobe": ensure_ffprobe, "deno": ensure_deno, "yt-dlp": ensure_yt_dlp,
+    }
+    steps = [(binary, binary_installers[binary]) for binary in deps.binaries if binary in binary_installers]
+    total = len(steps) + 1
+    for index, (binary, installer) in enumerate(steps):
+        try:
+            installer(_scaled_progress_callback(progress_callback, index / total, (index + 1) / total))
+        except RuntimeError as exc:
+            logger.error("Failed to install %s: %s", binary, exc)
+            return False
+    specifiers = [get_pip_specifier(package) for package in deps.packages]
+    if not specifiers:
+        return True
+    return install_packages(
+        specifiers, _scaled_progress_callback(progress_callback, len(steps) / total, 1.0),
+        no_deps=deps.no_deps, target_dir=target_dir, cancel_event=cancel_event,
+    )
 
 
 def install_for_feature(

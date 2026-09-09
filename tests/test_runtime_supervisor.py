@@ -182,9 +182,118 @@ def test_install_requests_cannot_name_packages_or_executables(monkeypatch):
     for bad in ("torch", "/usr/bin/python", "http://evil/pkg.whl", "transcribe; rm -rf /", None, 3):
         with pytest.raises(ValueError, match="Unknown runtime profile"):
             runtime_profiles.install_profile(bad)
-    status = runtime_profiles.install_profile("transcription-whisper")
+    status = runtime_profiles.install_profile("transcription-whisper", staged=False)
     assert status["success"] and calls == ["transcribe"]
     assert runtime_profiles.profile_status("transcription-whisper")["task_kinds"] == ["transcribe"]
+
+
+# U14: staged installs promote only after a worker health check; failures keep the old runtime.
+
+@pytest.fixture
+def app_support(monkeypatch, tmp_path):
+    root = tmp_path / "support"
+    monkeypatch.setenv("SCENE_RIPPER_APP_SUPPORT_DIR", str(root))  # belt: real installs can never touch ~/Library
+    monkeypatch.setattr("core.paths.get_app_support_dir", lambda: root)
+    monkeypatch.setattr("core.feature_registry.check_feature", lambda name: (True, []))
+    return root
+
+
+def _fake_stage(marker: str, *, succeed: bool = True):
+    def stage(name, target_dir, progress_callback=None, cancel_event=None):
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / marker).write_text(name)
+        if progress_callback:
+            progress_callback(1.0, "staged")
+        return succeed
+    return stage
+
+
+def test_staged_install_promotes_after_health_check_and_never_imports_in_host(monkeypatch, app_support):
+    from core import runtime_profiles
+
+    probes = []
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("new.txt"))
+    monkeypatch.setattr(
+        runtime_profiles, "probe_profile_runtime",
+        lambda profile, staged_paths=(): probes.append(tuple(staged_paths)) or {"ok": True, "python": "managed"},
+    )
+    path_before, modules_before = list(sys.path), set(sys.modules)
+    result = runtime_profiles.install_profile("transcription-whisper")
+    assert result["success"] and result["health"]["ok"]
+    promoted = Path(result["promoted_dir"])
+    assert promoted.parent == app_support / "packages-overlays" and promoted.name.endswith("-transcription-whisper")
+    assert (promoted / "new.txt").read_text() == "transcribe"
+    assert probes and probes[0][0].parent == app_support / "packages-staging"  # probed before promotion
+    assert not (app_support / "packages-staging" / promoted.name).exists()
+    assert sys.path == path_before and "faster_whisper" not in (set(sys.modules) - modules_before)
+    assert runtime_profiles.profile_overlays("transcription-whisper") == [promoted]
+
+
+def test_failed_health_check_or_cancel_keeps_previous_runtime(monkeypatch, app_support):
+    from threading import Event
+
+    from core import runtime_profiles
+
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v1.txt"))
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, staged_paths=(): {"ok": True})
+    first = runtime_profiles.install_profile("transcription-whisper")
+    previous = Path(first["promoted_dir"])
+
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v2.txt"))
+    monkeypatch.setattr(
+        runtime_profiles, "probe_profile_runtime",
+        lambda profile, staged_paths=(): (_ for _ in ()).throw(RuntimeError("ctranslate2 has no StorageView")),
+    )
+    broken = runtime_profiles.install_profile("transcription-whisper")
+    assert not broken["success"] and "previous runtime kept" in broken["error"]
+    assert runtime_profiles.profile_overlays("transcription-whisper") == [previous] and previous.is_dir()
+    assert not any((app_support / "packages-staging").iterdir())
+
+    cancel = Event()
+    cancel.set()
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v3.txt", succeed=False))
+    cancelled = runtime_profiles.install_profile("transcription-whisper", cancel_event=cancel)
+    assert cancelled["cancelled"] and not cancelled["success"]
+    assert runtime_profiles.profile_overlays("transcription-whisper") == [previous]
+
+    monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage("v4.txt", succeed=False))
+    failed = runtime_profiles.install_profile("transcription-whisper")
+    assert failed["failed_features"] == ["transcribe"] and not failed["success"]
+    assert runtime_profiles.profile_overlays("transcription-whisper") == [previous]
+
+
+def test_rollback_removes_only_the_newest_overlay(monkeypatch, app_support):
+    from core import runtime_profiles
+
+    monkeypatch.setattr(runtime_profiles, "probe_profile_runtime", lambda profile, staged_paths=(): {"ok": True})
+    overlays = []
+    for marker in ("v1.txt", "v2.txt"):
+        monkeypatch.setattr("core.feature_registry.stage_feature_packages", _fake_stage(marker))
+        monkeypatch.setattr(runtime_profiles.time, "time", lambda m=marker: 1_700_000_000 + int(m[1]))
+        overlays.append(Path(runtime_profiles.install_profile("transcription-whisper")["promoted_dir"]))
+    assert runtime_profiles.profile_overlays("transcription-whisper") == overlays[::-1]
+    rolled = runtime_profiles.rollback_profile("transcription-whisper")
+    assert rolled["success"] and rolled["removed"] == str(overlays[1]) and rolled["health"]["ok"]
+    assert runtime_profiles.profile_overlays("transcription-whisper") == [overlays[0]]
+    runtime_profiles.rollback_profile("transcription-whisper")
+    assert runtime_profiles.rollback_profile("transcription-whisper")["success"] is False
+
+
+def test_staged_probe_launches_a_worker_that_sees_the_staged_directory_first(monkeypatch, tmp_path):
+    from core import runtime_supervisor
+
+    managed = tmp_path / "managed-python"
+    managed.write_text("")
+    monkeypatch.setattr(runtime_supervisor, "managed_interpreter_path", lambda: managed)
+    monkeypatch.setattr(runtime_supervisor, "resolve_worker_interpreter", lambda ensure=False: Path(sys.executable))
+    monkeypatch.setattr("core.paths.get_managed_package_search_paths", lambda: [tmp_path / "packages"])
+    (tmp_path / "packages").mkdir()
+    staged = tmp_path / "staging" / "overlay-1-transcription-whisper"
+    staged.mkdir(parents=True)
+    monkeypatch.delenv("SCENE_RIPPER_WORKER_PYTHON", raising=False)
+    launch = runtime_supervisor.default_launch("transcription", staged_paths=(staged,))
+    assert launch.interpreter == managed  # managed pip built the staged wheels
+    assert launch.package_paths == (staged, tmp_path / "packages")
 
 
 # Launch resolution: explicit interpreters only, credentials never inherited.

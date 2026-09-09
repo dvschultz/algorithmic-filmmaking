@@ -165,6 +165,27 @@ profiles in `core/runtime_profiles.py`. mlx-whisper and the cloud backend still
 run in-process (U14). Packaged-platform proof is the `native-worker` runtime
 smoke target in the release workflows.
 
+## Runtime profiles and staged installs (U14, transcription family)
+
+`core/spine/runtime.py` exposes `list_runtime_profiles`,
+`get_runtime_profile_status(probe=)`, `install_runtime_profile` and
+`rollback_runtime_profile`; chat tools, MCP tools (`scene_ripper_mcp/tools/runtime.py`,
+with `start_install_runtime_profile` as a durable job), the CLI
+(`scene_ripper runtime {list,status,install,rollback}`) and the desktop install
+prompt (`ui/widgets/dependency_widgets.py`) all delegate to them. Installs are
+staged under `packages-staging/`, health-checked by an allowlisted `probe`
+task in a fresh worker that sees the staged directory first, then promoted to
+`packages-overlays/overlay-<stamp>-<profile>` with an atomic rename; failure,
+cancellation (pip is killed) or a failed health check discards the stage and
+keeps the previous runtime; rollback removes the newest overlay. The host never
+imports a native runtime when `native_worker_isolation` is on:
+`_validate_feature_runtime("transcribe")` probes the worker instead. Legacy
+in-place installs (`install_for_feature`) remain for features without a
+profile (OCR, embeddings, faces/objects/gaze, alignment, audio); those families,
+and the Torch/MLX GUI startup workarounds, migrate as their packaged worker
+smoke evidence lands. `SCENE_RIPPER_APP_SUPPORT_DIR` relocates the managed
+runtime root for tests and smoke runs.
+
 ## Sequence variation comparison (U16)
 
 The Sequence tab's **Compare A/B** panel (`ui/widgets/sequence_comparison.py`)

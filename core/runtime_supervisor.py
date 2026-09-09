@@ -163,31 +163,36 @@ def managed_interpreter_path() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def default_launch(family: str = "default", *, ensure_interpreter: bool = False) -> WorkerLaunch:
+def default_launch(
+    family: str = "default", *, ensure_interpreter: bool = False, staged_paths: tuple[Path, ...] = (),
+) -> WorkerLaunch:
     """Pair an interpreter with the package directories built for it.
 
     Managed package directories are compiled against the managed Python; they
     are placed on the worker path only when that interpreter runs the worker.
     A source-mode worker under the developer's interpreter uses that
     environment's packages instead of shadowing them with incompatible builds.
+    ``staged_paths`` are not-yet-promoted install directories (built by the
+    managed pip) that a health-check worker must see ahead of the live ones.
     """
     from core.paths import get_managed_package_search_paths
 
     interpreter = resolve_worker_interpreter(ensure=ensure_interpreter)
     managed = managed_interpreter_path()
     managed_paths = tuple(path for path in get_managed_package_search_paths() if path.is_dir())
+    staged = tuple(path for path in staged_paths if path.is_dir())
     if (
         managed is not None
         and not os.environ.get("SCENE_RIPPER_WORKER_PYTHON")
         and interpreter.resolve() != managed.resolve()
-        and _runtime_lives_in_managed_packages(family, managed_paths)
+        and (staged or _runtime_lives_in_managed_packages(family, managed_paths))
     ):
         # Source runs (and the AppImage) install on-demand runtimes with the managed
         # pip; those wheels belong to the managed interpreter, so it hosts the worker.
         interpreter = managed
     packages: tuple[Path, ...] = ()
     if managed is not None and interpreter.resolve() == managed.resolve():
-        packages = managed_paths
+        packages = staged + managed_paths
     return WorkerLaunch(
         interpreter=interpreter,
         worker_root=worker_package_root(),

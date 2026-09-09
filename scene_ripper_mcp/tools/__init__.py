@@ -10,6 +10,7 @@ from scene_ripper_mcp.tools import analyze
 from scene_ripper_mcp.tools import clips
 from scene_ripper_mcp.tools import sequence
 from scene_ripper_mcp.tools import export
+from scene_ripper_mcp.tools import runtime
 
 __all__ = [
     "project",
@@ -18,4 +19,5 @@ __all__ = [
     "clips",
     "sequence",
     "export",
+    "runtime",
 ]

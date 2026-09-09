@@ -33,7 +33,13 @@ def get_app_support_dir() -> Path:
     On macOS: ~/Library/Application Support/Scene Ripper/
     On Windows: %LOCALAPPDATA%/Scene Ripper/
     On Linux: ~/.local/share/scene-ripper/
+
+    ``SCENE_RIPPER_APP_SUPPORT_DIR`` overrides the location (tests, CI smoke
+    runs) so managed interpreters, packages and overlays stay isolated.
     """
+    override = os.environ.get("SCENE_RIPPER_APP_SUPPORT_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Scene Ripper"
     if sys.platform == "win32":
