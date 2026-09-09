@@ -397,6 +397,18 @@ replace the final full-suite and code-review gates.
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
+**2026-09-08 artifact-loading review fix:** GUI project loading now hydrates
+detached analysis and prerender data in a worker before constructing the new
+project owner. Its progress dialog services UI events; cancellation, shutdown,
+edits to the previous project, and replacement load requests prevent installation.
+Missing caches remain recoverable project data; storage failures abort the load.
+Artifact hashing and restoration copies check cancellation between chunks.
+Native GUI and project/artifact/bundle/multi-sequence regression coverage passed
+219 tests, with 30 cancellation/cleanup tests passing after the final changes.
+Four core/worker modules pass scoped typing and changed-file Ruff. The loading
+dialog was visually checked. All five review findings now have fixes, but full
+suite verification and the final requirement audit remain open.
+
 **2026-09-08 review fixes:** The final review found five defects. Four are now
 fixed: brightness rejects failed frame seeks and uses a new runtime identity;
 legacy face CLI tests isolate their actual CLI cache; automatic export dimensions

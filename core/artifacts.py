@@ -274,13 +274,18 @@ class ArtifactUnavailable(ValueError):
     """A derived file is missing, corrupt, or no longer managed by this store."""
 
 
+class ArtifactCancelled(RuntimeError):
+    """Stop artifact I/O without treating cancellation as missing content."""
+
+
 def _stamp(path: Path) -> tuple[int, ...]:
     value = path.lstat()
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
 class ArtifactStore:
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, *, cancel_check: Callable[[], bool] | None = None) -> None:
+        self.cancel_check = cancel_check
         if root is None:
             from core.paths import get_artifact_store_dir
 
@@ -311,6 +316,10 @@ class ArtifactStore:
                     project_path TEXT NOT NULL
                 );
             """)
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_check is not None and self.cancel_check():
+            raise ArtifactCancelled("Artifact operation cancelled")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -484,6 +493,7 @@ class ArtifactStore:
         self, source: BinaryIO, *, pin: str, media_type: str,
         verify_source: Callable[[], None] | None = None,
     ) -> ArtifactRef:
+        self._check_cancelled()
         with self._transaction() as db:
             self._require_pin(db, pin)
         # Slow copying stays outside the writer lock. The pin is checked again
@@ -495,6 +505,7 @@ class ArtifactStore:
         try:
             with os.fdopen(fd, "wb") as output:
                 while block := source.read(1024 * 1024):
+                    self._check_cancelled()
                     output.write(block)
                     digest.update(block)
                     size += len(block)
@@ -503,6 +514,7 @@ class ArtifactStore:
             if verify_source is not None:
                 verify_source()
             ref = ArtifactRef(digest.hexdigest(), size, media_type)
+            self._check_cancelled()
             with self._transaction() as db:
                 self._require_pin(db, pin)
                 existing = db.execute("SELECT size, stamp, filename FROM objects WHERE digest=?", (ref.digest,)).fetchone()
@@ -534,6 +546,7 @@ class ArtifactStore:
             temporary.unlink(missing_ok=True)
 
     def _verify(self, db: sqlite3.Connection, ref: ArtifactRef) -> Path:
+        self._check_cancelled()
         row = db.execute("SELECT size, filename FROM objects WHERE digest=?", (ref.digest,)).fetchone()
         if row is None:
             raise ArtifactUnavailable("Artifact is unregistered")
@@ -545,6 +558,7 @@ class ArtifactStore:
             digest, size = sha256(), 0
             with path.open("rb") as stream:
                 while block := stream.read(1024 * 1024):
+                    self._check_cancelled()
                     digest.update(block)
                     size += len(block)
             if size != ref.size or digest.hexdigest() != ref.digest or _stamp(path) != before:

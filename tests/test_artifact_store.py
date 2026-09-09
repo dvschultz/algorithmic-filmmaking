@@ -17,6 +17,33 @@ def test_staged_artifact_is_pinned_before_manifest_publication(tmp_path):
     assert store.collect() == []
 
 
+def test_cancelled_artifact_reads_preserve_content_and_release_transactions(tmp_path):
+    from threading import Event
+    from core.artifacts import ArtifactCancelled
+
+    cancel = Event()
+    store = ArtifactStore(tmp_path / "artifacts", cancel_check=cancel.is_set)
+    with store.pin() as pin:
+        ref = store.put_bytes(b"saved payload", pin=pin)
+        cancel.set()
+        with pytest.raises(ArtifactCancelled):
+            store.available(ref)
+        assert store.available_fast(ref)
+        cancel.clear()
+        assert store.read_bytes(ref) == b"saved payload"
+    assert store.collect() == [ref.digest]
+
+
+def test_cancelled_artifact_copy_leaves_no_published_or_staged_file(tmp_path):
+    from core.artifacts import ArtifactCancelled
+
+    store = ArtifactStore(tmp_path / "artifacts", cancel_check=lambda: True)
+    with store.pin() as pin:
+        with pytest.raises(ArtifactCancelled):
+            store.put_bytes(b"interrupted", pin=pin)
+    assert list(store.objects.iterdir()) == []
+
+
 @pytest.mark.parametrize("damaged", ["embeddings", "boundary_embeddings"])
 def test_boundary_arrays_are_managed_and_damage_is_isolated(tmp_path, monkeypatch, damaged):
     import json

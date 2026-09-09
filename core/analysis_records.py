@@ -14,13 +14,13 @@ if TYPE_CHECKING:
     from core.artifacts import ArtifactStore
 
 
-def restore_project_artifacts(path: Path, document: dict, targets: list[Any]) -> None:
+def restore_project_artifacts(path: Path, document: dict, targets: list[Any], *, store: "ArtifactStore | None" = None) -> None:
     from core.artifacts import ArtifactStore, ArtifactUnavailable, document_references
 
     refs = document_references(document)
     if not refs:
         return
-    store = ArtifactStore()
+    store = store or ArtifactStore()
     store.retain_loaded_manifest(path, refs)
     with store.pin(refs) as pin:
         for ref in refs:

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 import uuid
 import weakref
 
@@ -29,6 +29,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+ArtifactLoader = Callable[[Path, dict, list[Clip | Frame | AudioSource], list[Sequence]], None]
+
+
+def hydrate_project_artifacts(
+    path: Path, document: dict, targets: list[Clip | Frame | AudioSource], sequences: list[Sequence],
+    *, cancel_check: Callable[[], bool] | None = None,
+) -> None:
+    """Verify derived payloads on detached load data before creating its owner."""
+    from core.analysis_records import restore_project_artifacts
+    from core.artifacts import ArtifactStore, restore_prerender_projections
+
+    store = ArtifactStore(cancel_check=cancel_check) if cancel_check is not None else None
+    restore_project_artifacts(path, document, targets, store=store)
+    restore_prerender_projections(sequences, store)
+
 
 class ProjectError(Exception):
     """Base exception for project errors."""
@@ -43,6 +58,10 @@ class ProjectLoadError(ProjectError):
 class ProjectSaveError(ProjectError):
     """Raised when project saving fails."""
     pass
+
+
+class ProjectLoadCancelled(ProjectLoadError):
+    """The caller cancelled loading before publishing the new project."""
 
 
 class MissingSourceError(ProjectError):
@@ -541,6 +560,8 @@ def load_project(
     filepath: Path,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     missing_source_callback: Optional[Callable[[Path, str], Optional[Path]]] = None,
+    *,
+    hydrate_artifacts: bool = True,
 ) -> tuple[list[Source], list[Clip], Optional[Sequence], ProjectMetadata, dict, list[Frame], list[AudioSource]]:
     """Load project from JSON file, resolving paths and validating sources.
 
@@ -694,12 +715,8 @@ def load_project(
     if progress_callback:
         progress_callback(1.0, f"Loaded {len(clips)} clips, {len(frames)} frames")
 
-    from core.analysis_records import restore_project_artifacts
-
-    restore_project_artifacts(filepath, data, [*clips, *frames, *audio_sources])
-    from core.artifacts import restore_prerender_projections
-
-    restore_prerender_projections([sequence])
+    if hydrate_artifacts:
+        hydrate_project_artifacts(filepath, data, [*clips, *frames, *audio_sources], [sequence] if sequence else [])
     logger.info(
         f"Project loaded from {filepath}: "
         f"{len(sources)} sources, {len(clips)} clips, "
@@ -1518,7 +1535,7 @@ class Project:
         usual notification in the same external-change guard.
         """
         self._assert_writable()
-        targets = {"clip": self.clips_by_id, "frame": self.frames_by_id, "audio": self.audio_sources_by_id}
+        targets: dict[str, Mapping[str, Clip | Frame | AudioSource]] = {"clip": self.clips_by_id, "frame": self.frames_by_id, "audio": self.audio_sources_by_id}
         target = targets.get(kind, {}).get(target_id)
         if target is None:
             raise ValueError("Analysis target is missing")
@@ -1676,6 +1693,7 @@ class Project:
         progress_callback: Optional[Callable[[float, str], None]] = None,
         *,
         retain_writer: bool = False,
+        artifact_loader: ArtifactLoader | None = None,
     ) -> "Project":
         """Load project from file.
 
@@ -1684,6 +1702,9 @@ class Project:
             missing_source_callback: Callback when source video is missing
             progress_callback: Optional progress callback
             retain_writer: Acquire before loading and retain ownership for editing
+            artifact_loader: Blocking hydration hook for detached load data. GUI
+                callers can run the hook on a worker while pumping UI events.
+                It must finish all access to the data before returning or raising.
 
         Returns:
             Loaded Project instance
@@ -1696,7 +1717,7 @@ class Project:
 
             writer = ProjectWriter(path).acquire()
             try:
-                project = cls.load(writer.path, missing_source_callback, progress_callback)
+                project = cls.load(writer.path, missing_source_callback, progress_callback, artifact_loader=artifact_loader)
                 project._retain_writer = True
                 project._writer = writer
                 return project
@@ -1737,6 +1758,7 @@ class Project:
             filepath=path,
             missing_source_callback=missing_source_callback,
             progress_callback=progress_callback,
+            hydrate_artifacts=False,
         )
 
         # Validate non-active sequences: remove clips referencing missing sources/clips
@@ -1759,6 +1781,10 @@ class Project:
                         )
                         track.clips.remove(sc)
 
+        (artifact_loader or hydrate_project_artifacts)(
+            path, raw_data, [*clips, *frames, *audio_sources],
+            sequences_list if sequences_list else [sequence] if sequence else [],
+        )
         if sequences_list:
             project = cls(
                 path=path,
@@ -1782,9 +1808,6 @@ class Project:
                 frames=frames,
                 audio_sources=audio_sources,
             )
-        from core.artifacts import restore_prerender_projections
-
-        restore_prerender_projections(project.sequences)
         project._dirty = False
         return project
 

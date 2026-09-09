@@ -78,6 +78,7 @@ from core.project import (
     Project,
     ProjectMetadata,
     ProjectLoadError,
+    ProjectLoadCancelled,
     save_project,
 )
 from ui.project_adapter import ProjectSignalAdapter
@@ -815,6 +816,8 @@ class MainWindow(QMainWindow):
         self._cancel_download_workers()
         self._active_detection_reply = None
         self._pending_thumbnail_clips = []
+        for worker in tuple(getattr(self, "_active_project_loads", ())):
+            worker.cancel()
 
         for controller in tuple(getattr(self, "_active_intention_detections", ())):
             controller.cancel()
@@ -8335,6 +8338,10 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Project is already open")
             return
         self.status_bar.showMessage("Loading project...")
+        previous_project = self.project
+        previous_generation = previous_project.mutation_generation
+        request = object()
+        self._project_open_request = request
 
         def handle_missing_source(missing_path: Path, source_id: str) -> Optional[Path]:
             """Callback to handle missing source files."""
@@ -8361,14 +8368,28 @@ class MainWindow(QMainWindow):
                 raise ProjectLoadError("Load cancelled by user")
 
         try:
+            from ui.workers.project_artifact_loader import hydrate_with_progress
+
             loaded_project = Project.load(
                 filepath,
                 missing_source_callback=handle_missing_source,
                 retain_writer=True,
+                artifact_loader=lambda *inputs: hydrate_with_progress(self, *inputs),
             )
+        except ProjectLoadCancelled:
+            self.status_bar.showMessage("Project load cancelled")
+            return
         except (ProjectLoadError, OSError) as e:
             QMessageBox.warning(self, "Load Project", f"Failed to load project:\n{e}")
             self.status_bar.showMessage("Load failed")
+            return
+
+        if (self.project is not previous_project
+                or previous_project.mutation_generation != previous_generation
+                or self._project_open_request is not request):
+            loaded_project.close_writer()
+            loaded_project.session.close()
+            self.status_bar.showMessage("Project changed during loading. Open the file again when ready.")
             return
 
         if not loaded_project.sources:
@@ -8827,7 +8848,7 @@ class MainWindow(QMainWindow):
         analysis_workers += tuple(worker for controller in clip_analyses for worker in controller.workers.values())
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_legacy_reuses", ())) + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_project_loads", ())) + tuple(getattr(self, "_active_legacy_reuses", ())) + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):
