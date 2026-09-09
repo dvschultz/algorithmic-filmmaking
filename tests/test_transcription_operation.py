@@ -210,4 +210,7 @@ def test_cli_and_mcp_preserve_dependency_failure_envelopes(tmp_path):
         assert result.exit_code == 4, result.output
         result = json.loads(_transcribe_sync(path, "small.en", "en"))
         assert result["success"] is False
-        assert "faster-whisper" in result["error"]
+        # Structured envelope (U14): the same profile/missing list every surface reports.
+        assert result["error"]["code"] == "runtime_missing"
+        assert "faster-whisper" in result["error"]["message"]
+        assert result["error"]["profile"] == "transcription-whisper"

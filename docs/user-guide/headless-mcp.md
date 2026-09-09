@@ -445,6 +445,7 @@ abort (e.g. clips with `dominant_colors` set in memory) are returned in
 | `source_files_missing` | `Project.load()` could not resolve every source file. |
 | `project_modified_externally` | mtime guard tripped — the project file changed between submit and save. |
 | `feature_unavailable` | An optional ML dependency is not installed and the op cannot run. Install via the GUI / CLI; MCP does not auto-install. |
+| `runtime_missing` | Synchronous `transcribe` when the isolated transcription runtime is absent; carries `profile` and `missing` so a caller can run `start_install_runtime_profile`. MCP does not auto-install. |
 | `cancelled` | `asyncio.CancelledError` was caught and translated (FastMCP SDK defence). |
 | `invalid_url` | URL failed scheme/host validation before reaching yt-dlp. |
 | `source_file_missing` | A source's video file is no longer on disk. |
