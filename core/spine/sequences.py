@@ -125,48 +125,6 @@ def unique_sequence_name(project: Project, name: str) -> str:
     return label
 
 
-def apply_generated_order(
-    project: Project,
-    entries: list[tuple[Clip, Source]],
-    algorithm: str,
-    name: str,
-    *,
-    relative_ranges: list[tuple[int, int]] | None = None,
-    recipe: SequenceRecipe | None = None,
-) -> Sequence:
-    """Publish resolved algorithm output in one edit, with no provider calls."""
-    from fractions import Fraction
-    from core.sequence_time import video_entry
-
-    if not entries:
-        raise ValueError("Generated sequence has no clips")
-    if relative_ranges is not None and len(relative_ranges) != len(entries):
-        raise ValueError("Provide one range for each generated clip")
-    draft = SequenceDraft.prepare(project, algorithm, unique_sequence_name(project, name))
-    position = Fraction(0)
-    for index, (clip, source) in enumerate(entries):
-        if (
-            project.clips_by_id.get(clip.id) is not clip
-            or project.sources_by_id.get(source.id) is not source
-        ):
-            raise ValueError("Generated clip inputs no longer belong to this project")
-        start, end = (
-            relative_ranges[index]
-            if relative_ranges is not None
-            else (0, clip.duration_frames)
-        )
-        if start < 0 or end <= start or end > clip.duration_frames:
-            raise ValueError("Generated range falls outside its source clip")
-        entry = video_entry(
-            clip, source, timeline_fps=draft.sequence.fps,
-            start=position, relative_range=(start, end),
-        )
-        draft.sequence.tracks[0].add_clip(entry)
-        position = entry.timeline_range.end
-    draft.sequence.recipe = recipe
-    return draft.commit(project)
-
-
 # --- Registry-backed generation -------------------------------------------
 
 SEQUENCE_SETTING_FIELDS = frozenset({"music_path", "reference_source_id", "dimension_weights", "allow_repeats"})
@@ -338,6 +296,21 @@ def generate_sequence(
         return {"success": False, "error": "Parameters must be an object"}
     if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
         return {"success": False, "error": "Seed must be a non-negative integer"}
+    parameters = dict(parameters or {})
+    for name in definition.asset_parameters:
+        value = parameters.get(name)
+        if value is None or value == "" or value == []:
+            continue
+        values = value if isinstance(value, list) else [value]
+        resolved = []
+        for item in values:
+            if not isinstance(item, str):
+                return {"success": False, "error": f"Parameter {name!r} must hold file paths"}
+            ok, error, path = validate_path(item, must_exist=True)
+            if not ok:
+                return {"success": False, "error": f"Parameter {name!r}: {error}"}
+            resolved.append(str(path))
+        parameters[name] = resolved if isinstance(value, list) else resolved[0]
     for name in definition.source_parameters:
         source_id = (parameters or {}).get(name)
         if not isinstance(source_id, str) or source_id not in project.sources_by_id:

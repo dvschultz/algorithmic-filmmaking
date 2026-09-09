@@ -71,18 +71,18 @@ def test_invalid_generated_media_leaves_project_and_history_unchanged():
     assert not project.is_dirty and not project.session.can_undo
 
 
-def test_generated_order_preserves_relative_subclip_ranges():
-    from core.spine.sequences import apply_generated_order
+def test_published_recipe_preserves_relative_subclip_ranges():
+    from core.spine.sequences import publish_recipe
+    from models.recipe import RealizedEntry, RecipeInput, SequenceRecipe
 
     project = _make_project_with_clips()
     clip = project.clips[1]  # source frames 100..200
-    sequence = apply_generated_order(
-        project,
-        [(clip, project.sources[0])],
-        "signature_style",
-        "Signature Style",
-        relative_ranges=[(10, 30)],
+    recipe = SequenceRecipe(
+        algorithm="signature_style", algorithm_version=1, parameters={},
+        inputs=(RecipeInput(clip.id, "s1", clip.start_frame, clip.end_frame, 30.0),),
+        realized=(RealizedEntry(clip.id, "s1", 10, 30),),
     )
+    sequence = publish_recipe(project, recipe, name="Signature Style")
     entry = sequence.get_all_clips()[0]
     assert (entry.start_frame, entry.in_point, entry.out_point) == (0, 110, 130)
     project.session.undo()
@@ -200,7 +200,6 @@ def test_agent_generation_without_analysis_returns_to_saved_state_on_undo(
     tab._gui_state = SimpleNamespace(analyze_selected_ids=["c0"], cut_selected_ids=[])
     pairs = [(project.clips[0], project.sources[0])]
     monkeypatch.setattr(tab, "_resolve_selected_clips", lambda _: pairs)
-    monkeypatch.setattr("ui.tabs.sequence_tab.generate_sequence", lambda **_: pairs)
     tab.clips_data_changed.connect(project.update_clips)
     tab.timeline.sequence_changed.connect(project.mark_dirty)
     assert tab.generate_and_apply("shuffle")["success"]

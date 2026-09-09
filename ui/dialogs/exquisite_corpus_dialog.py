@@ -78,6 +78,8 @@ class ExquisiteCorpusDialog(QDialog):
         self._completed_worker = None
         self.extraction_results = {}
         self.poem_lines = []
+        self.recipe = None  # SequenceRecipe of the emitted sequence
+        self._last_mood, self._last_length, self._last_form = "", "medium", "free_verse"
         self.worker = None
         self._initial_poem_length = initial_poem_length
         self._initial_form = initial_form
@@ -591,6 +593,7 @@ class ExquisiteCorpusDialog(QDialog):
 
         try:
             self.poem_lines = generate_poem(clips_with_text, mood, length=length, form=form)
+            self._last_mood, self._last_length, self._last_form = mood, length, form
             self._display_poem()
             self.stack.setCurrentIndex(self.PAGE_PREVIEW)
             self._update_nav_buttons()
@@ -627,7 +630,7 @@ class ExquisiteCorpusDialog(QDialog):
 
     def _finish(self):
         """Finish the workflow and create the sequence."""
-        from core.remix.exquisite_corpus import PoemLine, sequence_by_poem
+        from core.remix.exquisite_corpus import PoemLine
 
         if not self._inputs_current():
             return
@@ -644,18 +647,38 @@ class ExquisiteCorpusDialog(QDialog):
                 line_number=i + 1,
             ))
 
-        # Create sequence
-        clips_by_id = {c.id: c for c in self.clips}
-        sequence = sequence_by_poem(
-            reordered_lines,
-            clips_by_id,
-            self.sources_by_id,
+        # Publish through the registry without repeating the provider call.
+        from core.remix import run_registry_algorithm
+
+        pairs = [
+            (clip, self.sources_by_id[clip.source_id])
+            for clip in self.clips if clip.source_id in self.sources_by_id
+        ]
+        composed = [
+            {"text": line.text, "clip_id": line.clip_id, "line_number": line.line_number}
+            for line in self.poem_lines
+        ]
+        run = run_registry_algorithm(
+            "exquisite_corpus", pairs,
+            parameters={
+                "mood": self._last_mood, "length": self._last_length, "form": self._last_form,
+                "order_override": [line.clip_id for line in reordered_lines],
+            },
+            resources={"poem_lines": composed, "clip_texts": self._clip_texts()},
         )
+        self.recipe = run.recipe
+        sequence = run.ordered_clips
 
         logger.info(f"Created sequence with {len(sequence)} clips")
 
         self.sequence_ready.emit(sequence)
         self.accept()
+
+    def _clip_texts(self) -> dict[str, str]:
+        return {
+            clip_id: " | ".join(t.text for t in texts)
+            for clip_id, texts in self.extraction_results.items() if texts
+        }
 
     def _inputs_current(self) -> bool:
         if self._closed:

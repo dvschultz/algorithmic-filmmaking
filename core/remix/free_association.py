@@ -452,3 +452,107 @@ def _describe_motion(cinematography: Any) -> str:
         if value:
             return str(value)
     return ""
+
+
+def build_association_chain(
+    inputs: list[tuple[Any, Any]],
+    *,
+    start_clip_id: str | None = None,
+    max_clips: int = 0,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    cancel_event=None,
+    progress=None,
+) -> list[dict]:
+    """Run the proposal loop without a human, accepting every proposal.
+
+    Returns ordered ``{"clip_id", "rationale"}`` steps; the first step has a
+    ``None`` rationale. Stops when ``max_clips`` (0 = no limit) is reached,
+    the pool is empty, or the model returns an unusable proposal.
+    """
+    if not inputs:
+        return []
+    by_id = {clip.id: (clip, source) for clip, source in inputs}
+    first = by_id.get(start_clip_id) if start_clip_id else inputs[0]
+    if first is None:
+        raise ValueError(f"start_clip_id {start_clip_id!r} is not among the inputs")
+    steps = [{"clip_id": first[0].id, "rationale": None}]
+    pool = [pair for pair in inputs if pair[0].id != first[0].id]
+    while pool and (max_clips <= 0 or len(steps) < max_clips):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        current_clip, _ = by_id[steps[-1]["clip_id"]]
+        candidates = shortlist_candidates(current_clip, pool, k=DEFAULT_SHORTLIST_SIZE)
+        if not candidates:
+            break
+        short_to_full, full_to_short = build_id_mapping(candidates)
+        digests = [(full_to_short[clip.id], format_clip_digest(clip)) for clip, _ in candidates]
+        recent = [s["rationale"] for s in steps[-DEFAULT_RECENT_RATIONALES:] if s["rationale"]]
+        if progress:
+            progress(f"Proposing clip {len(steps) + 1}...")
+        short_id, rationale = propose_next_clip(
+            format_clip_full_metadata(current_clip), digests, recent, [],
+            model=model, temperature=temperature,
+        )
+        chosen = short_to_full.get(short_id)
+        if chosen is None:
+            break
+        steps.append({"clip_id": chosen, "rationale": rationale})
+        pool = [pair for pair in pool if pair[0].id != chosen]
+    return steps
+
+
+def _definition():
+    from core.remix.engine import (
+        AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
+    )
+
+    class FreeAssociationDefinition(AlgorithmDefinition):
+        """Build a sequence one clip at a time with an LLM collaborator.
+
+        The dialog supplies its accepted steps through ``resources["steps"]``;
+        headless callers run the autonomous loop. Steps and rationales are
+        provider output, so reconstruction replays them without model calls.
+        """
+
+        key = "free_association"
+        version = 1
+        kind = "provider"
+        provider = True
+        prerequisites = ("describe", "embeddings")
+        parameters = (
+            ParameterSpec("start_clip_id", "string", "", "Clip to open with; empty uses the first input"),
+            ParameterSpec("max_clips", "integer", 0, "Stop after this many clips; 0 places clips until the pool is empty", minimum=0, maximum=500),
+            ParameterSpec("model", "string", "", "LLM model override; empty uses settings"),
+        )
+
+        def prepare(self, inputs, parameters, *, cancel_event=None, progress=None, resources=None):
+            resources = resources or {}
+            steps = resources.get("steps")
+            if steps is None:
+                steps = build_association_chain(
+                    list(inputs), start_clip_id=parameters["start_clip_id"] or None,
+                    max_clips=parameters["max_clips"], model=parameters["model"] or None,
+                    cancel_event=cancel_event, progress=progress,
+                )
+            return Prepared(list(inputs), {"steps": [dict(s) for s in steps]})
+
+        def generate(self, inputs, parameters, rng, context=None):
+            steps = list((context or {}).get("steps") or [])
+            by_id = {clip.id: (clip, source) for clip, source in inputs}
+            entries = []
+            for step in steps:
+                pair = by_id.get(step["clip_id"])
+                if pair is None:
+                    raise ValueError(f"Step references unknown clip {step['clip_id']!r}")
+                clip, source = pair
+                entries.append(ProposedEntry(clip.id, source.id, rationale=step.get("rationale")))
+            return SequenceProposal(
+                "provider", tuple(entries), notes=(f"{len(entries)} accepted proposals",),
+                provider_outputs={"steps": steps},
+            )
+
+    return FreeAssociationDefinition
+
+
+FreeAssociationDefinition = _definition()

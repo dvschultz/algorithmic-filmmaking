@@ -216,7 +216,7 @@ def _equal_slices(width: int, count: int) -> list[tuple[int, int]]:
 
 
 def _image_to_base64(image: "QImage") -> str:
-    """Convert a QImage to a base64-encoded PNG string.
+    """Convert a QImage (or Qt-free DrawingImage) to a base64-encoded PNG string.
 
     Args:
         image: QImage to encode.
@@ -224,6 +224,8 @@ def _image_to_base64(image: "QImage") -> str:
     Returns:
         Base64 string of the PNG data.
     """
+    if hasattr(image, "to_png_base64"):
+        return image.to_png_base64()
     buf = QBuffer()
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     image.save(buf, "PNG")

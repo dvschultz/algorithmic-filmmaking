@@ -1968,6 +1968,7 @@ class TestStorytellerTool:
             target_duration_minutes,
             narrative_structure,
             theme,
+            model=None,
         ):
             clips_by_id = {clip.id: clip for clip, _desc in clips_with_descriptions}
             assert clips_by_id["clip-1"]._duration_seconds == pytest.approx(2.0)

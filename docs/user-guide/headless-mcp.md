@@ -562,8 +562,12 @@ before the edit, so malformed transcript input cannot partially change a clip.
 
 ### Registry generation and recipes
 
-- `list_sequence_algorithms()` lists the algorithms available headlessly with
-  their versions and parameter schemas (currently `shuffle` and `color`).
+- `list_sequence_algorithms()` lists all 23 algorithms with their versions,
+  kinds, `provider` flags, prerequisites, and parameter schemas. Provider-assisted
+  algorithms (Storyteller, Exquisite Corpus, Free Association, LLM Word Composer,
+  Rose Hobart, Signature Style in VLM mode) call their model during generation
+  and regeneration only; asset parameters (`music_path`, `drawing_path`,
+  `reference_image_paths`) must be existing files under the allowed roots.
 - `generate_sequence(project_path, algorithm, clip_ids?, parameters?, seed?, name?)`
   runs one algorithm on the given clips (default: all enabled clips, library
   order) and publishes a new sequence as one undoable edit. Unknown parameters,
@@ -577,6 +581,15 @@ before the edit, so malformed transcript input cannot partially change a clip.
   from its realized entries as a new sequence. It never runs the algorithm or a
   provider. If clips were removed or re-cut, it fails with the changed clip IDs
   and leaves the project untouched.
+- `regenerate_sequence(project_path, sequence_id?, parameters?, seed?, keep_seed?, name?)`
+  runs the recipe's algorithm again as a new variation with any parameter
+  overrides. Seeded algorithms draw a fresh seed unless `keep_seed` or `seed`
+  is given. It fails without editing when inputs changed, the algorithm is
+  missing, or its version differs from the recipe's.
+- `duplicate_sequence(project_path, sequence_id?, name?)` copies a sequence's
+  timeline and recipe as a new active sequence without recomputation.
+- `list_sequences(project_path)` and `activate_sequence(project_path, sequence_id)`
+  list sequences with algorithm and recipe ids, and switch the active sequence.
 
 
 ## Shared job lifecycle

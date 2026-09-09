@@ -51,13 +51,16 @@ def _register_builtin() -> None:
     from core.remix.arrange import ARRANGE_DEFINITIONS
     from core.remix.cassette_tape import CassetteTapeDefinition
     from core.remix.chromatics import ChromaticsDefinition
+    from core.remix.free_association import FreeAssociationDefinition
     from core.remix.gaze import EyesWithoutAFaceDefinition
     from core.remix.match_cut import MatchCutDefinition
     from core.remix.reference_match import ReferenceGuidedDefinition
     from core.remix.rose_hobart import RoseHobartDefinition
     from core.remix.staccato import StaccatoDefinition
+    from core.remix.text_definitions import ExquisiteCorpusDefinition, StorytellerDefinition
     from core.remix.word_definitions import WordLLMComposerDefinition, WordSequencerDefinition
     from core.remix.shuffle import ShuffleDefinition
+    from core.remix.signature_style import SignatureStyleDefinition
     from core.remix.similarity_chain import SimilarityChainDefinition
 
     registry.register(ShuffleDefinition())
@@ -73,6 +76,10 @@ def _register_builtin() -> None:
     registry.register(CassetteTapeDefinition())
     registry.register(WordSequencerDefinition())
     registry.register(WordLLMComposerDefinition())
+    registry.register(ExquisiteCorpusDefinition())
+    registry.register(StorytellerDefinition())
+    registry.register(FreeAssociationDefinition())
+    registry.register(SignatureStyleDefinition())
 
 
 _register_builtin()

@@ -43,12 +43,15 @@ Dialog UIs: `ui/dialogs/` (one file per dialog algorithm).
 `core/remix/engine.py` holds the Qt-free `AlgorithmDefinition` base, `ParameterSpec`,
 `SequenceProposal`, `run_algorithm`, and the seed contract (explicit non-negative
 seed, `0` valid, `None` = draw and record). `core/remix/registry.py` registers
-definitions; `models/recipe.py` is the persisted `SequenceRecipe`. Migrated
-algorithms (`shuffle`, `color`) run through the registry on every surface and
-store a recipe on the sequence. `core.remix.generate_sequence` is a compatibility
-wrapper for those keys. New or migrated algorithms: add a definition, register it,
-keep labels/icons/dialog hints in `ui/algorithm_config.py`, and update
-`docs/architecture/surface-compatibility.md`.
+definitions; `models/recipe.py` is the persisted `SequenceRecipe`. All 23
+algorithms run through the registry on every surface and store a recipe on the
+sequence; dialogs collect parameters and hand already-computed provider results
+back through `resources` so committing never repeats a model call.
+`core.remix.generate_sequence` is a thin compatibility dispatcher. New
+algorithms: add a definition (`prepare` for prerequisites/provider work,
+`generate` pure), register it, keep labels/icons/dialog hints in
+`ui/algorithm_config.py`, add it to `tests/test_recipe_reconstruction.py`, and
+update `docs/architecture/surface-compatibility.md`.
 
 ## Dialog Pattern
 

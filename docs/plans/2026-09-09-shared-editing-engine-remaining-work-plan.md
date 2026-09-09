@@ -15,7 +15,7 @@ Implement U11–U17 of the [original architecture plan](2026-09-06-1218-refactor
 Start with U11. Use the order below by default, delivering one algorithm or runtime family at a time. U13 and U15 have no remaining prerequisite units and may move earlier if sequencing work encounters an external dependency. U14 must wait for U13's installed-platform proof; U16 requires both U12 and U15; final U17 sign-off requires U12, U14, and U16.
 
 - [x] **U11:** Algorithm registry and recipe model; prove shuffle and color first. Evidence recorded below.
-- [ ] **U12:** Migrate every sequencer and expose variation commands.
+- [x] **U12:** Migrate every sequencer and expose variation commands. Evidence recorded below.
 - [ ] **U13:** Prove managed native-worker isolation with transcription on all supported packaged platforms.
 - [ ] **U14:** Migrate the remaining native features and unify runtime install/repair.
 - [ ] **U15:** Shared clip/frame item models with measured large-library performance.
@@ -90,6 +90,19 @@ This work does not add new creative algorithms, a new frontend, general composit
 4. Missing recipe inputs or unavailable algorithm versions produce an actionable result without overwriting existing edits.
 
 **Verification:** All current sequencers use the registry, and cross-surface tests cover each family plus algorithm-specific existing regressions.
+
+**Evidence (2026-09-09):**
+
+- Commits: `cc4af8b` (arrange family, variation commands, CLI group), `9a0b1c4`/`7a143bf` (gaze, reference, Rose Hobart; audio and word families), and the text/drawing family commit that closes this unit. All 23 `ui/algorithm_config.py` keys are registered (`tests/test_recipe_reconstruction.py::test_every_matrix_algorithm_is_registered`).
+- Engine additions: object/array parameters, `Prepared` context, `sequence_settings`, `source_parameters`/`asset_parameters`, `provider` flag, `progress`/`resources` hooks, `resolve_prerequisites` for GUI-owned prerequisite jobs, definition-owned `legacy_parameters`.
+- Scenario 1 (discoverable/executable without dialogs): parametrized over every key with provider fakes in `tests/test_recipe_reconstruction.py`.
+- Scenario 2 (reconstruct without provider; regenerate records a new run): same file, provider call counters for Storyteller, Exquisite Corpus, Free Association, LLM Word Composer.
+- Scenario 3 (variation does not modify the previous sequence; undo removes it as one edit): `tests/test_sequence_variations.py`, plus MCP and CLI round trips.
+- Scenario 4 (missing inputs / unavailable versions are actionable and non-destructive): `tests/test_sequence_variations.py::test_missing_inputs_and_version_drift_are_actionable_without_overwriting`.
+- Surfaces: chat tools `generate_remix`, `generate_eyes_without_a_face`, `generate_reference_guided`, `generate_rose_hobart` (dialog-driven), `generate_staccato`, `generate_cassette_tape`, `generate_exquisite_corpus`, `generate_storyteller`, `generate_signature_style` plus `get_sequence_recipe`, `reconstruct_sequence`, `regenerate_sequence`, `duplicate_sequence`, `list_sequences`, `activate_sequence`; MCP tools of the same names plus `generate_sequence`/`list_sequence_algorithms`; CLI `scene_ripper sequence …`. Word Sequencer, LLM Word Composer and Free Association gain headless parity through the generic tools (previously GUI-only).
+- Removed: per-algorithm branches in `core.remix.generate_sequence`, `_is_dialog_only_algorithm`, `core.spine.sequences.apply_generated_order`, direct `generate_poem`/`generate_narrative`/`reference_guided_match`/`match_phrases` sequencing in dialogs and chat tools. Rose Hobart matching moved to `core/remix/rose_hobart.py`; Signature Style gained a Qt-free `DrawingImage` and saves the canvas as a PNG asset.
+- Behavior changes: an unknown `gaze_sort` direction now fails parameter validation (message changed); Free Association has a headless autonomous mode; `generate_signature_style` accepts `total_duration_seconds` (the previous tool passed a PIL image to a QImage sampler and always failed).
+- Static checks: scoped mypy is clean for the new modules; four pre-existing diagnostics in unchanged lines of `reference_match.py`, `free_association.py`, and `staccato.py` remain for U17.
 
 ## U13. Prove native worker isolation with transcription
 

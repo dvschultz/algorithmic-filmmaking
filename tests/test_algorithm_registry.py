@@ -181,7 +181,7 @@ def test_chat_algorithm_listing_carries_engine_schema_for_registry_algorithms():
     assert listing["color"]["engine"]["version"] == 1
     assert listing["shuffle"]["engine"]["seeded"] is True
     assert listing["sequential"]["engine"]["parameters"] == []
-    assert "engine" not in listing["storyteller"]
+    assert listing["storyteller"]["engine"]["provider"] is True
 
 
 # --- Parameter normalization -------------------------------------------------
@@ -317,7 +317,7 @@ def test_spine_generation_respects_clip_ids_disabled_clips_and_seed_zero():
     assert not spine_generate(project, "shuffle", clip_ids=["c1", "nope"])["success"]
     assert not spine_generate(project, "shuffle", clip_ids=["c1", "c1"])["success"]
     assert not spine_generate(project, "shuffle", seed=-1)["success"]
-    assert "not available through the registry" in spine_generate(project, "storyteller")["error"]
+    assert "not available through the registry" in spine_generate(project, "no_such_algorithm")["error"]
     bad = spine_generate(project, "color", parameters={"direction": "nope"})
     assert not bad["success"] and "must be one of" in bad["error"]
 

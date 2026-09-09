@@ -11,6 +11,8 @@ clip matching algorithm.
 """
 
 import logging
+import uuid
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -70,102 +72,55 @@ class SignatureStyleWorker(QThread):
         self._sample_count = sample_count
         self._llm_client = llm_client
         self._cancelled = False
+        self.recipe = None  # SequenceRecipe once generation has run
+        self.drawing_path = None
 
     def run(self):
-        """Run sequence generation."""
+        """Run sequence generation through the shared definition."""
         try:
-            if self._mode == "parametric":
-                self._run_parametric()
-            else:
-                self._run_vlm()
+            from core.remix import run_registry_algorithm
+            from core.remix.drawing_image import save_qimage_png
+            from core.settings import load_settings
+
+            drawings = Path(load_settings().cache_dir) / "drawings"
+            drawing_path = save_qimage_png(self._image, drawings / f"signature-{uuid.uuid4().hex}.png")
+            self.drawing_path = drawing_path
+            run = run_registry_algorithm(
+                "signature_style", self._clips,
+                parameters={
+                    "drawing_path": str(drawing_path),
+                    "mode": self._mode,
+                    "total_duration_seconds": float(self._total_duration),
+                    "sample_count": int(self._sample_count),
+                    "fps": float(self._fps),
+                },
+                progress=self.progress.emit,
+                resources={"image": self._image, "llm_client": self._llm_client},
+            )
+            if self._cancelled or run is None:
+                return
+            if not run.recipe.realized:
+                if not run.context.get("segments"):
+                    self.error.emit(
+                        "No drawing content found. Draw something on the canvas first."
+                        if self._mode == "parametric" else
+                        "VLM could not interpret the drawing. "
+                        "Try a different drawing or switch to Parametric mode."
+                    )
+                else:
+                    self.error.emit("Could not match any clips to drawing segments.")
+                return
+            self.recipe = run.recipe
+            by_id = {clip.id: (clip, source) for clip, source in run.inputs}
+            sequence = [
+                (*by_id[entry.clip_id], entry.in_offset, entry.out_offset)
+                for entry in run.recipe.realized
+            ]
+            self.finished_sequence.emit(sequence)
         except Exception as e:
             if not self._cancelled:
                 logger.error(f"Signature Style generation error: {e}")
                 self.error.emit(str(e))
-
-    def _run_parametric(self):
-        """Run parametric mode."""
-        from core.remix.signature_style import (
-            build_sequence_from_matches,
-            match_clips_to_segments,
-            sample_drawing_parametric,
-        )
-
-        self.progress.emit("Sampling drawing...")
-        segments = sample_drawing_parametric(
-            self._image,
-            self._total_duration,
-            self._sample_count,
-        )
-
-        if not segments:
-            self.error.emit("No drawing content found. Draw something on the canvas first.")
-            return
-
-        if self._cancelled:
-            return
-
-        self.progress.emit(f"Matching {len(segments)} segments to clips...")
-        matches = match_clips_to_segments(segments, self._clips, allow_reuse=True)
-
-        if not matches:
-            self.error.emit("Could not match any clips to drawing segments.")
-            return
-
-        if self._cancelled:
-            return
-
-        self.progress.emit("Building sequence...")
-        sequence = build_sequence_from_matches(matches, self._fps)
-
-        if not self._cancelled:
-            self.finished_sequence.emit(sequence)
-
-    def _run_vlm(self):
-        """Run VLM mode."""
-        from core.remix.drawing_vlm import interpret_drawing_vlm
-        from core.remix.signature_style import (
-            build_sequence_from_matches,
-            match_clips_to_segments,
-        )
-
-        def on_progress(current, total):
-            if not self._cancelled:
-                self.progress.emit(f"Interpreting slice {current} of {total}...")
-
-        self.progress.emit("Analyzing drawing with VLM...")
-        segments = interpret_drawing_vlm(
-            self._image,
-            self._total_duration,
-            self._llm_client,
-            progress_callback=on_progress,
-        )
-
-        if not segments:
-            self.error.emit(
-                "VLM could not interpret the drawing. "
-                "Try a different drawing or switch to Parametric mode."
-            )
-            return
-
-        if self._cancelled:
-            return
-
-        self.progress.emit(f"Matching {len(segments)} segments to clips...")
-        matches = match_clips_to_segments(segments, self._clips, allow_reuse=True)
-
-        if not matches:
-            self.error.emit("Could not match any clips to drawing segments.")
-            return
-
-        if self._cancelled:
-            return
-
-        self.progress.emit("Building sequence...")
-        sequence = build_sequence_from_matches(matches, self._fps)
-
-        if not self._cancelled:
-            self.finished_sequence.emit(sequence)
 
     def cancel(self):
         """Cancel the worker."""
@@ -603,6 +558,11 @@ class SignatureStyleDialog(QDialog):
         self.progress_label.setText(message)
 
     @Slot(list)
+    @property
+    def recipe(self):
+        """Recipe of the emitted sequence, or None."""
+        return getattr(self.worker, "recipe", None)
+
     def _on_finished(self, sequence: list):
         """Handle generation completion."""
         self.sequence_ready.emit(sequence)

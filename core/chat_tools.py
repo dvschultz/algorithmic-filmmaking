@@ -3839,34 +3839,26 @@ def generate_exquisite_corpus(
     if not clips_with_text:
         return {"success": False, "error": "No selected clips have extracted text. Run text extraction first."}
 
-    from core.remix.exquisite_corpus import generate_poem
-    try:
-        poem_lines = generate_poem(clips_with_text, mood, length=length, form=form)
-        if not poem_lines:
+    from core.spine.sequences import generate_sequence as _generate
+
+    result = _generate(
+        project, "exquisite_corpus",
+        clip_ids=[clip.id for clip, _ in clips_with_text],
+        parameters={"mood": mood, "length": length, "form": form},
+        name="Exquisite Corpus",
+    )
+    if not result.get("success"):
+        if "empty" in str(result.get("error", "")):
             return {"success": False, "error": "LLM could not generate a poem from the available text."}
-
-        # Apply poem order to timeline
-        applied = 0
-        applied_entries = []
-        for line in poem_lines:
-            clip = line.clip
-            source = project.sources_by_id.get(clip.source_id)
-            if source:
-                applied += 1
-                applied_entries.append((clip, source))
-        from core.spine.sequences import apply_generated_order
-        apply_generated_order(project, applied_entries, "exquisite_corpus", "Exquisite Corpus")
-
-        return _add_sequence_summary_for_agent(project, {
-            "success": True,
-            "algorithm": "exquisite_corpus",
-            "clip_count": applied,
-            "poem_lines": len(poem_lines),
-            "mood": mood,
-            "form": form,
-        }, applied_entries)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return result
+    sequence = next((s for s in project.sequences if s.id == result["sequence_id"]), None)
+    poem = sequence.readable_recipe.provider_outputs.get("poem", []) if sequence and sequence.readable_recipe else []
+    result.update({"algorithm": "exquisite_corpus", "poem_lines": len(poem), "mood": mood, "form": form})
+    entries = [
+        (project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id])
+        for c in result["clip_ids"]
+    ]
+    return _add_sequence_summary_for_agent(project, result, entries)
 
 
 @tools.register(
@@ -3914,39 +3906,27 @@ def generate_storyteller(
     if not clips_with_desc:
         return {"success": False, "error": "No selected clips have descriptions. Run Describe analysis first."}
 
-    from core.remix.storyteller import generate_narrative, sequence_by_narrative
-    try:
-        narrative_lines = generate_narrative(
-            clips_with_desc,
-            target_duration_minutes=target_duration_minutes,
-            narrative_structure=structure,
-            theme=theme,
-        )
-        if not narrative_lines:
+    from core.spine.sequences import generate_sequence as _generate
+
+    result = _generate(
+        project, "storyteller",
+        clip_ids=[clip.id for clip, _ in clips_with_desc],
+        parameters={
+            "theme": theme or "", "structure": structure,
+            "target_duration_minutes": int(target_duration_minutes or 0),
+        },
+        name="Storyteller",
+    )
+    if not result.get("success"):
+        if "empty" in str(result.get("error", "")):
             return {"success": False, "error": "LLM could not generate a narrative from the available clips."}
-
-        sequence = sequence_by_narrative(
-            narrative_lines,
-            project.clips_by_id,
-            project.sources_by_id,
-        )
-        if not sequence:
-            return {"success": False, "error": "Could not resolve generated narrative to project clips."}
-
-        # Apply narrative order to timeline
-        from core.spine.sequences import apply_generated_order
-        apply_generated_order(project, sequence, "storyteller", "Storyteller")
-        applied = len(sequence)
-
-        return _add_sequence_summary_for_agent(project, {
-            "success": True,
-            "algorithm": "storyteller",
-            "clip_count": applied,
-            "structure": structure,
-            "theme": theme,
-        }, sequence)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return result
+    result.update({"algorithm": "storyteller", "structure": structure, "theme": theme})
+    entries = [
+        (project.clips_by_id[c], project.sources_by_id[project.clips_by_id[c].source_id])
+        for c in result["clip_ids"]
+    ]
+    return _add_sequence_summary_for_agent(project, result, entries)
 
 
 @tools.register(
@@ -4057,6 +4037,7 @@ def generate_signature_style(
     reference_image_path: str,
     mode: str = "parametric",
     sample_count: int = 64,
+    total_duration_seconds: float = 60.0,
 ) -> dict:
     """Generate a Signature Style sequence from a reference image.
 
@@ -4064,6 +4045,7 @@ def generate_signature_style(
         reference_image_path: Path to the reference image (can be an extracted frame)
         mode: 'parametric' (sample colors directly) or 'vlm' (use vision model)
         sample_count: Number of samples along the image width (8-128, default 64)
+        total_duration_seconds: Target sequence duration the drawing spans (default 60)
 
     Returns:
         Dict with success status and sequence details
@@ -4097,36 +4079,35 @@ def generate_signature_style(
     if not clip_pairs:
         return {"success": False, "error": "No valid clips found for sequencing."}
 
-    try:
-        from PIL import Image
-        image = Image.open(image_path).convert("RGB")
+    valid, error, validated = validate_path(str(image_path), must_exist=True)
+    if not valid:
+        return {"success": False, "error": error}
+    from core.spine.sequences import generate_sequence as _generate
 
-        from core.remix.signature_style import (
-            sample_drawing_parametric, match_clips_to_segments,
-            build_sequence_from_matches,
-        )
-
-        segments = sample_drawing_parametric(image, sample_count=sample_count)
-        matches = match_clips_to_segments(segments, clip_pairs)
-        sequence = build_sequence_from_matches(matches)
-
-        # Apply to timeline
-        from core.spine.sequences import apply_generated_order
-        apply_generated_order(
-            project, [(clip, source) for clip, source, _, _ in sequence],
-            "signature_style", "Signature Style",
-            relative_ranges=[(start, end) for _, _, start, end in sequence],
-        )
-
-        return _add_sequence_summary_for_agent(project, {
-            "success": True,
-            "algorithm": f"signature_style ({mode})",
-            "clip_count": len(sequence),
-            "sample_count": sample_count,
-            "reference_image": str(image_path),
-        }, [(clip, source, (out_pt - in_pt) / source.fps) for clip, source, in_pt, out_pt in sequence])
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    result = _generate(
+        project, "signature_style",
+        clip_ids=[clip.id for clip, _ in clip_pairs],
+        parameters={
+            "drawing_path": str(validated), "mode": mode, "sample_count": sample_count,
+            "total_duration_seconds": float(total_duration_seconds),
+        },
+        name="Signature Style",
+    )
+    if not result.get("success"):
+        return result
+    result.update({
+        "algorithm": f"signature_style ({mode})",
+        "sample_count": sample_count,
+        "reference_image": str(validated),
+    })
+    sequence = next((s for s in project.sequences if s.id == result["sequence_id"]), None)
+    entries = []
+    for entry in (sequence.get_all_clips() if sequence else []):
+        clip = project.clips_by_id.get(entry.source_clip_id)
+        source = project.sources_by_id.get(entry.source_id)
+        if clip and source:
+            entries.append((clip, source, (entry.out_point - entry.in_point) / source.fps))
+    return _add_sequence_summary_for_agent(project, result, entries)
 
 
 @tools.register(

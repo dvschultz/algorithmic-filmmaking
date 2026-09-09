@@ -30,7 +30,6 @@ from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
 from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog, RoseHobartDialog, DiceRollDialog, FreeAssociationDialog, CassetteTapeDialog
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
-from core.remix import generate_sequence
 from core.cost_estimates import estimate_sequence_cost
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.feature_registry import check_feature_ready
@@ -1066,7 +1065,7 @@ class SequenceTab(BaseTab):
             nonlocal consumed
             if not consumed and self._project is owner_project and owner_project.session.session_id == owner_session:
                 consumed = True
-                self._apply_exquisite_corpus_sequence(sequence)
+                self._apply_exquisite_corpus_sequence(sequence, recipe=dialog.recipe)
         dialog.sequence_ready.connect(accept_proposal)
 
         dialog.exec()
@@ -1153,9 +1152,11 @@ class SequenceTab(BaseTab):
             self._algorithm_running = False
 
     @Slot(list)
-    def _apply_exquisite_corpus_sequence(self, sequence_clips: list):
+    def _apply_exquisite_corpus_sequence(self, sequence_clips: list, recipe=None):
         """Apply the sequence from Exquisite Corpus dialog."""
-        self._apply_dialog_sequence(sequence_clips, "exquisite_corpus", "Exquisite Corpus")
+        self._apply_dialog_sequence(
+            sequence_clips, "exquisite_corpus", "Exquisite Corpus", sequence_metadata={"recipe": recipe},
+        )
 
     def _show_storyteller_dialog(self, clips: list):
         """Show the Storyteller dialog for narrative sequence generation.
@@ -1227,7 +1228,9 @@ class SequenceTab(BaseTab):
         )
 
         # Connect to sequence_ready signal
-        dialog.sequence_ready.connect(self._apply_storyteller_sequence)
+        dialog.sequence_ready.connect(
+            lambda sequence, owner=dialog: self._apply_storyteller_sequence(sequence, recipe=owner.recipe)
+        )
 
         dialog.exec()
 
@@ -1244,9 +1247,11 @@ class SequenceTab(BaseTab):
         self.description_analysis_requested.emit(clip_ids)
 
     @Slot(list)
-    def _apply_storyteller_sequence(self, sequence_clips: list):
+    def _apply_storyteller_sequence(self, sequence_clips: list, recipe=None):
         """Apply the sequence from Storyteller dialog."""
-        self._apply_dialog_sequence(sequence_clips, "storyteller", "Storyteller")
+        self._apply_dialog_sequence(
+            sequence_clips, "storyteller", "Storyteller", sequence_metadata={"recipe": recipe},
+        )
 
     def _show_free_association_dialog(self, clips: list):
         """Show the Free Association dialog for step-by-step LLM sequencing.
@@ -1274,15 +1279,18 @@ class SequenceTab(BaseTab):
             project=None,
             parent=self,
         )
-        dialog.sequence_ready.connect(self._apply_free_association_sequence)
+        dialog.sequence_ready.connect(
+            lambda payload, owner=dialog: self._apply_free_association_sequence(payload, recipe=owner.recipe)
+        )
         dialog.exec()
 
     @Slot(list)
-    def _apply_free_association_sequence(self, payload: list):
+    def _apply_free_association_sequence(self, payload: list, recipe=None):
         """Commit Free Association clips and transition rationales together."""
         return self._apply_dialog_sequence(
             [(clip, source) for clip, source, _ in payload],
             "free_association", "Free Association",
+            sequence_metadata={"recipe": recipe},
             transition_rationales=[rationale for _, _, rationale in payload],
         )
 
@@ -1326,17 +1334,20 @@ class SequenceTab(BaseTab):
             parent=self,
         )
 
-        dialog.sequence_ready.connect(self._apply_signature_style_sequence)
+        dialog.sequence_ready.connect(
+            lambda data, owner=dialog: self._apply_signature_style_sequence(data, recipe=owner.recipe)
+        )
         dialog.exec()
 
     @Slot(list)
-    def _apply_signature_style_sequence(self, sequence_data: list):
+    def _apply_signature_style_sequence(self, sequence_data: list, recipe=None):
         """Apply the sequence from Signature Style dialog."""
         self._apply_dialog_sequence_trimmed(
             sequence_data,
             algorithm_key="signature_style",
             display_label="Signature Style",
             allow_repeats=True,
+            recipe=recipe,
         )
 
     def _apply_dialog_sequence_trimmed(
@@ -2685,31 +2696,22 @@ class SequenceTab(BaseTab):
         transform_options: Optional[dict] = None,
         parameters: Optional[dict] = None,
     ) -> tuple[list, object]:
-        """Run synchronous generation, through the registry when the algorithm has a definition.
+        """Run synchronous generation through the registry.
 
-        Returns the ordered (Clip, Source) list and the recipe (``None`` for
-        algorithms that have not been migrated to the registry yet).
-        ``parameters`` are explicit registry parameters layered over the legacy
-        keyword translation.
+        Legacy keyword translation lives in ``run_registry_algorithm``;
+        explicit ``parameters`` override it. Returns the ordered
+        (Clip, Source) list and the recipe.
         """
         from core.remix import run_registry_algorithm
-        from core.remix.registry import registry
 
-        if algorithm in registry:
-            run = run_registry_algorithm(
-                algorithm, clips, direction=direction, seed=seed,
-                no_color_handling=no_color_handling, transform_options=transform_options,
-                parameters=parameters,
-            )
-            return run.ordered_clips, run.recipe
-        return generate_sequence(
-            algorithm=algorithm,
-            clips=clips,
-            clip_count=len(clips),
-            direction=direction,
-            seed=seed,
-            no_color_handling=no_color_handling,
-        ), None
+        run = run_registry_algorithm(
+            algorithm, clips, direction=direction, seed=seed,
+            no_color_handling=no_color_handling, transform_options=transform_options,
+            parameters=parameters,
+        )
+        if run is None:
+            raise ValueError("Generation was cancelled")
+        return run.ordered_clips, run.recipe
 
     def generate_and_apply(
         self,

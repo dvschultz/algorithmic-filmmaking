@@ -84,6 +84,8 @@ class FreeAssociationDialog(QDialog):
         self.sequence_built: list[tuple] = []  # [(Clip, Source), ...]
         self.rationales: list[Optional[str]] = []
         self.available_pool: list[tuple] = self._initial_pool()
+        self._all_pairs: list[tuple] = list(self.available_pool)  # recipe inputs
+        self.recipe = None  # SequenceRecipe of the emitted sequence
         # IDs rejected for the current position, cleared on accept
         self.rejected_for_position: set[str] = set()
 
@@ -771,6 +773,19 @@ class FreeAssociationDialog(QDialog):
             (clip, source, self.rationales[idx])
             for idx, (clip, source) in enumerate(self.sequence_built)
         ]
+        try:
+            from core.remix import run_registry_algorithm
+
+            steps = [{"clip_id": clip.id, "rationale": rationale} for clip, _, rationale in payload]
+            run = run_registry_algorithm(
+                "free_association", list(self._all_pairs),
+                parameters={"start_clip_id": steps[0]["clip_id"] if steps else "", "max_clips": len(steps)},
+                resources={"steps": steps},
+            )
+            self.recipe = run.recipe if run is not None else None
+        except Exception:  # noqa: BLE001 - the timeline still gets the clips
+            logger.exception("Free Association recipe could not be recorded")
+            self.recipe = None
         self.sequence_ready.emit(payload)
         self.accept()
 

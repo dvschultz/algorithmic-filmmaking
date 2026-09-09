@@ -93,35 +93,62 @@ currently Qt-owned. Recipe realization must move below these controls without
 requiring headless clients to instantiate dialogs. Paid model responses must
 be persisted as realized results for later replay.
 
-### Algorithm registry and recipes (U11 pilot)
+### Algorithm registry and recipes (U11–U12)
 
 `core/remix/engine.py` defines Qt-free algorithm definitions, typed sequence
-proposals, parameter normalization, the explicit-seed contract, and
-`run_algorithm`, which returns a proposal plus a `models.recipe.SequenceRecipe`.
-`core/remix/registry.py` holds the registered definitions. `Sequence.recipe`
-persists the recipe (`"recipe"` key, recipe schema 1, project schema unchanged);
-unreadable or future recipe documents are preserved verbatim on save.
+proposals (`ordering`, `timed`, `provider`), parameter normalization
+(string/integer/number/boolean/object/array specs), the explicit-seed contract,
+prepared context, sequence-level settings, declared source/asset parameters,
+and `run_algorithm`, which returns a proposal plus a
+`models.recipe.SequenceRecipe`. `core/remix/registry.py` registers all 23
+definitions. `Sequence.recipe` persists the recipe (`"recipe"` key, recipe
+schema 1, project schema unchanged); unreadable or future recipe documents are
+preserved verbatim on save.
 
-| Algorithm key | Registry | GUI | Chat | MCP | CLI |
-| --- | --- | --- | --- | --- | --- |
-| shuffle | `ShuffleDefinition` v1 (seeded; `max_consecutive_same_source`, `hflip`, `vflip`, `reverse`) | Hatchet Job dialog and worker run the registry; prerender consumes realized transforms | `generate_remix` via `SequenceTab.generate_and_apply` | `generate_sequence` | not yet (U12) |
-| color | `ChromaticsDefinition` v1 (unseeded; `direction`, `no_color_handling`) | `SequenceWorker` runs the registry; chromatic bar stays a UI adapter setting | `generate_remix` | `generate_sequence` | not yet (U12) |
+| Algorithm key | Definition (module) | Kind | Provider | GUI | Chat | MCP / CLI |
+| --- | --- | --- | --- | --- | --- | --- |
+| shuffle | `shuffle.py` v1 (seeded) | ordering | no | worker + Hatchet Job dialog | `generate_remix` | yes |
+| color | `chromatics.py` v1 | ordering | no | worker | `generate_remix` | yes |
+| sequential, duration, shot_type, proximity, gaze_sort, gaze_consistency | `arrange.py` v1 | ordering | no | worker | `generate_remix` | yes |
+| brightness, volume | `arrange.py` v1 (scalar prerequisite in `prepare`) | ordering | no | worker + scalar job | `generate_remix` | yes |
+| similarity_chain, match_cut | `similarity_chain.py`, `match_cut.py` v1 (embedding prerequisites) | ordering | no | worker + embedding job | `generate_remix` | yes |
+| eyes_without_a_face | `gaze.py` v1 | ordering | no | dialog | `generate_eyes_without_a_face` | yes |
+| reference_guided | `reference_match.py` v1 (`reference_source_id` source parameter; settings applied on publish) | ordering | no | dialog worker | `generate_reference_guided` | yes |
+| rose_hobart | `rose_hobart.py` v1 (face matching moved out of the dialog; `reference_image_paths` asset parameter) | provider | local model | dialog worker (GUI face cache via `resources`) | `generate_rose_hobart` (dialog-driven) | yes |
+| staccato | `staccato.py` v1 (`music_path` asset parameter and sequence setting; resolved slots recorded) | timed | no | dialog worker | `generate_staccato` | yes |
+| cassette_tape | `cassette_tape.py` v1 (phrases + `excluded_matches`) | timed | no | dialog | `generate_cassette_tape` | yes |
+| word_sequencer | `word_definitions.py` v1 | timed | no | dialog | — | yes |
+| word_llm_composer | `word_definitions.py` v1 (Ollama call in `prepare`; words recorded) | provider | yes | dialog worker | — | yes |
+| exquisite_corpus | `text_definitions.py` v1 (`order_override` captures dialog reordering) | provider | yes | dialog | `generate_exquisite_corpus` | yes |
+| storyteller | `text_definitions.py` v1 (`order_override`) | provider | yes | dialog | `generate_storyteller` | yes |
+| free_association | `free_association.py` v1 (dialog steps via `resources`; headless autonomous loop) | provider | yes | dialog | — | yes |
+| signature_style | `signature_style.py` v1 (`drawing_path` PNG asset; canvas saved before generation; `DrawingImage` Qt-free raster) | provider | VLM mode | dialog worker | `generate_signature_style` | yes |
 
-Every surface above stores the recipe on the published sequence. Reconstruction
-(`core.spine.sequences.reconstruct_sequence`, MCP `reconstruct_sequence`) replays
-realized entries only; changed or missing inputs produce an itemized error and no
-edit. `get_sequence_recipe` reports reconstructability. `list_sequence_algorithms`
-and the chat `list_sorting_algorithms` `engine` field expose the same schemas.
+"yes" under MCP / CLI means `generate_sequence` (MCP) and `scene_ripper sequence
+generate` (CLI) accept the key with the definition's parameters; asset
+parameters are validated with the shared path validator, and source parameters
+pull the named source's clips into the candidates. Every surface stores the
+recipe on the published sequence.
 
-Compatibility wrappers: `core.remix.generate_sequence` routes `shuffle`/`color`
-through `run_registry_algorithm`, translating the legacy `seed=0`/`None`
-"random" convention to a drawn, recorded seed (removal condition: U12 migrates
-all callers to registry parameters). `SequenceTab._run_generation` is the GUI
-adapter for the same translation. MCP `shuffle_sequence` remains a timeline
-reorder of an existing sequence, not a recipe-producing generation. Unknown
-Chromatics directions now fail validation instead of silently sorting by hue.
-Remaining algorithms still dispatch through `generate_sequence` or dialogs
-until U12.
+Variation commands (`core/spine/sequences.py`): `list_sequences` (with
+algorithm and recipe ids), `activate_sequence`, `duplicate_sequence` (timeline +
+derived recipe, no recomputation), `regenerate_sequence` (same inputs and
+parameters plus overrides, fresh seed by default, version and input checks),
+`reconstruct_sequence` (realized entries only, never a provider call),
+`get_sequence_recipe` (with `reconstructable`, `problems`, `matches_timeline`).
+They are exposed as chat tools, MCP tools of the same names, and the
+`scene_ripper sequence` CLI group (`algorithms`, `list`, `generate`, `recipe`,
+`reconstruct`, `regenerate`, `duplicate`, `activate`).
+
+Compatibility wrappers: `core.remix.generate_sequence` is a thin dispatcher for
+the pre-registry keyword contract (removal condition: remaining callers in
+`tests/test_sequencer_algorithms.py` migrate to registry parameters). It
+refuses provider-assisted algorithms. `SequenceTab._run_generation` forwards
+legacy keywords to `run_registry_algorithm`. The superseded per-algorithm
+branches, `_is_dialog_only_algorithm`, and `apply_generated_order` were
+removed. MCP `shuffle_sequence` remains a timeline reorder, not a generation.
+Dialog workers now project registry runs back onto their existing emitted
+shapes; the dialogs themselves remain the desktop parameter collectors.
 
 ## Persistence and media-time defects
 

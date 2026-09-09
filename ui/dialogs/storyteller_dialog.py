@@ -125,6 +125,8 @@ class StorytellerDialog(QDialog):
         self.sources_by_id = sources_by_id
         self._project = project
         self.narrative_lines = []
+        self.recipe = None  # SequenceRecipe of the emitted sequence
+        self._last_theme, self._last_structure, self._last_duration = None, "auto", None
         self.worker = None
         self._generation_failed = False
         self._initial_duration = initial_duration
@@ -548,6 +550,7 @@ class StorytellerDialog(QDialog):
             f"structure={structure}, duration={duration}, theme={theme_text}"
         )
 
+        self._last_theme, self._last_structure, self._last_duration = theme_text, structure, duration
         self.worker = StorytellerWorker(
             clips_with_descriptions=clips_data,
             target_duration_minutes=duration,
@@ -639,7 +642,7 @@ class StorytellerDialog(QDialog):
 
     def _finish(self):
         """Finish the workflow and create the sequence."""
-        from core.remix.storyteller import NarrativeLine, sequence_by_narrative
+        from core.remix.storyteller import NarrativeLine
 
         # Get reordered narrative from list widget
         reordered_lines = []
@@ -655,13 +658,29 @@ class StorytellerDialog(QDialog):
                 line_number=i + 1,
             ))
 
-        # Create sequence
-        clips_by_id = {c.id: c for c in self.clips}
-        sequence = sequence_by_narrative(
-            reordered_lines,
-            clips_by_id,
-            self.sources_by_id,
+        # Publish through the registry without repeating the provider call.
+        from core.remix import run_registry_algorithm
+
+        pairs = [
+            (clip, self.sources_by_id[clip.source_id])
+            for clip in self.clips if clip.source_id in self.sources_by_id
+        ]
+        composed = [
+            {"clip_id": line.clip_id, "description": line.description,
+             "narrative_role": line.narrative_role, "line_number": line.line_number}
+            for line in self.narrative_lines
+        ]
+        run = run_registry_algorithm(
+            "storyteller", pairs,
+            parameters={
+                "theme": self._last_theme or "", "structure": self._last_structure,
+                "target_duration_minutes": self._last_duration or 0,
+                "order_override": [line.clip_id for line in reordered_lines],
+            },
+            resources={"narrative_lines": composed},
         )
+        self.recipe = run.recipe
+        sequence = run.ordered_clips
 
         logger.info(f"Created sequence with {len(sequence)} clips")
 

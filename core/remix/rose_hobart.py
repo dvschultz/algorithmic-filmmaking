@@ -48,10 +48,11 @@ class PersonMatches:
 def references_unchanged(paths: Sequence[str], stamps: Mapping[str, Any]) -> bool:
     from core.jobs.media import media_stamp
 
-    return all(
-        stamps.get(path) is not None and list(media_stamp(Path(path))) == list(stamps[path])
-        for path in paths
-    )
+    for path in paths:
+        current = media_stamp(Path(path))
+        if stamps.get(path) is None or current is None or list(current) != list(stamps[path]):
+            return False
+    return True
 
 
 def match_person(
