@@ -242,6 +242,7 @@ This work does not add new creative algorithms, a new frontend, general composit
 - Walkthrough (automation): `::test_import_to_variation_to_export_walkthrough_over_mcp_and_cli` generates A over MCP, regenerates B, compares over MCP and the CLI, and exports both EDLs. UI walkthrough: the panel screenshot above; the same flow was exercised through `SequenceTab` in the tab tests (offscreen).
 - Fixed on the way: `SequenceTab._load_active_sequence` fed `SequenceClip` entries to the preview strip (no `thumbnail_path`), which broke switching to any populated sequence.
 - Validation: `tests/test_sequence_comparison.py` (18), variation/history/chat/MCP sequence suites (285) pass; ruff clean for changed files.
+- Review closure: the CE review of `fff5938..a585f45` (run `20260909-051058-76402b0f`, 9 reviewers) found the Ctrl+Shift+C collision with the chat toggle, missing close/clear handling for the variation worker, a silent sequence switch when a preview render was busy, transform-blind `timelines_identical`, no cancel affordance, A/B keys swallowed by a focused selector, publish racing a pending generation draft, and agent-context gaps; `5c02227` applies 19 fixes with regression tests (`tests/test_sequence_comparison.py` now 26 tests). Deferred: extracting the variation block from `SequenceTab` (U17 cleanup); a per-sequence preview-render agent tool stays a documented gap.
 
 ## U17. Enforce quality gates and remove completed compatibility paths
 
