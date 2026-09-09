@@ -91,19 +91,23 @@ def test_generated_order_preserves_relative_subclip_ranges():
 
 
 def test_agent_reports_failed_generation_commit(monkeypatch):
+    """A failed publication reports failure and leaves the project untouched."""
     from core.chat_tools import generate_cassette_tape
+    from core.transcription_models import TranscriptSegment
 
     project = _make_project_with_clips()
-    clip, source = project.clips[0], project.sources[0]
-    clip.transcript = [SimpleNamespace(text="hello")]
-    monkeypatch.setattr("core.remix.cassette_tape.match_phrases", lambda *args: {"hello": [object()]})
-    monkeypatch.setattr("core.remix.cassette_tape.flatten_matches_in_phrase_order", lambda *args: [object()])
-    monkeypatch.setattr("core.remix.cassette_tape.build_sequence_data", lambda *args: [(clip, source, 0, 10)])
-    tab = Mock()
-    tab._apply_cassette_tape_sequence.return_value = False
-    window = SimpleNamespace(_gui_state=None, sequence_tab=tab)
+    clip = project.clips[0]
+    clip.transcript = [TranscriptSegment(start_time=0.0, end_time=1.0, text="hello there")]
+    before = project.sequence.to_dict()
+
+    def fail(*args, **kwargs):
+        raise ValueError("commit refused")
+
+    monkeypatch.setattr("core.spine.sequences.publish_recipe", fail)
+    window = SimpleNamespace(_gui_state=None, sequence_tab=Mock())
     result = generate_cassette_tape(project, window, [{"phrase": "hello"}])
-    assert result["success"] is False
+    assert result["success"] is False and "commit refused" in result["error"]
+    assert project.sequence.to_dict() == before
     assert not project.sequence.get_all_clips()
 
 
