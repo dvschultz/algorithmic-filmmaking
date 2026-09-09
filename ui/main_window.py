@@ -1928,13 +1928,17 @@ class MainWindow(QMainWindow):
     def _on_frames_removed(self, frames: list):
         """Handle frames removed signal from project."""
         logger.info(f"Project frames_removed event: {len(frames)} frames")
-        if hasattr(self, 'frames_tab'):
-            self.frames_tab.update_frame_browser()
+        self._sync_frames_context()
 
     @Slot(list)
     def _on_frames_updated(self, frames: list) -> None:
+        self._sync_frames_context()
+
+    def _sync_frames_context(self) -> None:
+        """Refresh the Frames workspace state and the agent's view of it."""
         if hasattr(self, "frames_tab"):
             self.frames_tab.update_frame_browser()
+        self._gui_state.frames_tab_frame_ids = self._project_adapter.frame_model.ids()
 
     @Slot(object)
     def _on_source_updated(self, source):
@@ -8778,6 +8782,9 @@ class MainWindow(QMainWindow):
     def _on_project_thumbnail_ready(self, clip_id: str, thumb_path: str):
         """Handle individual thumbnail during project load (update, don't add)."""
         logger.debug(f"_on_project_thumbnail_ready: clip_id={clip_id}, thumb_path={thumb_path}")
+        if not self._project_adapter.clip_model.thumbnail_ready(clip_id, thumb_path):
+            logger.info(f"Ignoring project-load thumbnail for clip no longer in project: {clip_id}")
+            return
         clip = self.clips_by_id.get(clip_id)
         if clip:
             thumb_path_obj = Path(thumb_path)

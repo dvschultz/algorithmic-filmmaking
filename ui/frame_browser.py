@@ -275,11 +275,12 @@ class FrameBrowser(QWidget):
     def set_frames(self, frames: list[Frame]):
         """Replace the displayed frames.
 
-        With a shared model attached the project already drives the rows, so
-        this only resets when the contents actually differ (a reset drops the
-        view's selection).
+        With a shared model attached the project adapter owns the rows, so
+        this is a no-op there (a reset would drop every view's selection);
+        the rows already reflect the project.
         """
-        if self._shared_model and self._model.ids() == [frame.id for frame in frames]:
+        if self._shared_model:
+            logger.debug("FrameBrowser.set_frames ignored: rows come from the shared model")
             return
         self._model.set_frames(frames)
 
@@ -309,7 +310,10 @@ class FrameBrowser(QWidget):
         return ids
 
     def clear(self):
-        """Clear all frames from the browser."""
+        """Clear all frames from the browser (selection only on a shared model)."""
+        if self._shared_model:
+            self._view.clearSelection()
+            return
         self._model.set_frames([])
 
     def _on_selection_changed(self, selected, deselected):

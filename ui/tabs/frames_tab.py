@@ -231,14 +231,14 @@ class FramesTab(BaseTab):
         if not self._project:
             return
 
+        # With the adapter's shared model attached, set_frames/clear are
+        # no-ops (the project drives the rows); only the state stack changes.
         frames = self._project.frames
         if frames:
-            if not self.frame_browser.uses_shared_model():
-                self.frame_browser.set_frames(frames)
+            self.frame_browser.set_frames(frames)
             self.state_stack.setCurrentIndex(self.STATE_FRAMES)
         else:
-            if not self.frame_browser.uses_shared_model():
-                self.frame_browser.clear()
+            self.frame_browser.clear()
             self.state_stack.setCurrentIndex(self.STATE_EMPTY)
 
     def on_tab_activated(self):

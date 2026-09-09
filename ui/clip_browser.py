@@ -1212,7 +1212,13 @@ class ClipBrowser(QWidget):
         return True
 
     def _virtual_source_ids(self) -> set[str]:
-        return {source.id for _clip, source in self._virtual_entries}
+        """Source ids represented in virtual membership (no pair materialization)."""
+        ids: set[str] = set()
+        for clip_id in self._virtual_ids:
+            clip = self._model.clip(clip_id)
+            if clip is not None:
+                ids.add(clip.source_id)
+        return ids
 
     def is_virtualized(self) -> bool:
         """Whether the browser is storing clips as data and rendering a visible window."""
@@ -1487,11 +1493,13 @@ class ClipBrowser(QWidget):
         selection_before = set(self.selected_clips)
 
         if self._virtual_mode:
-            removed_ids = {
-                clip.id
-                for clip, source in self._virtual_entries
-                if source.id == source_id
-            }
+            # Ids whose rows already left the shared model (re-detection
+            # replaced them) are dropped too, so membership cannot go stale.
+            removed_ids: set[str] = set()
+            for clip_id in self._virtual_ids:
+                clip = self._model.clip(clip_id)
+                if clip is None or clip.source_id == source_id:
+                    removed_ids.add(clip_id)
             if self._similarity_anchor_id in removed_ids:
                 self._clear_similarity()
             self._drop_virtual_ids(removed_ids)
@@ -1978,8 +1986,9 @@ class ClipBrowser(QWidget):
         """
         updated_by_id = {clip.id: clip for clip in clips}
         # The shared model was refreshed by the project adapter before this
-        # slot ran; a private model learns about the new objects here.
-        self._model.refresh(clips)
+        # slot ran; only a private model learns about the new objects here.
+        if not self._shared_model:
+            self._model.refresh(clips)
         if self._virtual_mode and updated_by_id:
             # Replace any stale Clip references in the cached display rows so
             # subsequent renders (when preserve_layout=True keeps the cache)
@@ -1989,7 +1998,10 @@ class ClipBrowser(QWidget):
                     if row_type != "clips":
                         continue
                     refreshed = [
-                        (updated_by_id.get(clip.id, clip), source)
+                        (
+                            updated_by_id.get(clip.id, clip),
+                            self._model.source_for(clip.id) or source,
+                        )
                         for clip, source in payload
                     ]
                     self._virtual_display_rows[row_index] = (row_type, refreshed)

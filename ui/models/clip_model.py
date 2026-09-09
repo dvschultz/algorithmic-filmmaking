@@ -19,7 +19,7 @@ from PySide6.QtCore import (
     QAbstractListModel, QByteArray, QModelIndex, QObject, QPersistentModelIndex, Qt, QThread, Signal,
 )
 
-from ui.models.frame_model import _runs
+from ui.models._utils import runs
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -110,7 +110,10 @@ class ClipLibraryModel(QAbstractListModel):
         """Reconcile with a project incrementally (no model reset).
 
         Returns ``(added_ids, removed_ids)``. Views keep selection for rows
-        that survive; use ``set_project`` when a wholesale reset is intended.
+        that survive. Restored clips are appended, so row order can differ
+        from ``project.clips`` after an undo; browsers order their own
+        membership, and ``set_project`` is the wholesale reset when project
+        order matters more than selection.
         """
         self._assert_owner_thread()
         if project is None:
@@ -139,7 +142,7 @@ class ClipLibraryModel(QAbstractListModel):
         Returns ``(added_ids, updated_ids)``.
         """
         self._assert_owner_thread()
-        added: list[tuple[Clip, Source]] = []
+        added: dict[str, Clip] = {}
         updated: list[str] = []
         for clip, source in pairs:
             self._sources.setdefault(source.id, source)
@@ -147,17 +150,17 @@ class ClipLibraryModel(QAbstractListModel):
                 self._clips[clip.id] = clip
                 updated.append(clip.id)
             else:
-                added.append((clip, source))
+                added[clip.id] = clip  # a repeated id in one batch keeps the last object
         if added:
             first = len(self._ids)
             self.beginInsertRows(QModelIndex(), first, first + len(added) - 1)
-            for clip, _ in added:
-                self._ids.append(clip.id)
-                self._clips[clip.id] = clip
-                self._row_of[clip.id] = len(self._ids) - 1
+            for clip_id, clip in added.items():
+                self._ids.append(clip_id)
+                self._clips[clip_id] = clip
+                self._row_of[clip_id] = len(self._ids) - 1
             self.endInsertRows()
         self._emit_changed(updated)
-        return [clip.id for clip, _ in added], updated
+        return list(added), updated
 
     def refresh(self, clips: Iterable[Clip]) -> list[str]:
         """Replace clip objects that already exist and announce the change."""
@@ -177,15 +180,16 @@ class ClipLibraryModel(QAbstractListModel):
         if not doomed:
             return []
         rows = sorted(self._row_of[clip_id] for clip_id in doomed)
+        removed = [self._ids[row] for row in rows]  # project order
         # Walk runs from the end so earlier row numbers stay valid.
-        for first, last in reversed(_runs(rows)):
+        for first, last in reversed(runs(rows)):
             self.beginRemoveRows(QModelIndex(), first, last)
             for clip_id in self._ids[first:last + 1]:
                 self._clips.pop(clip_id, None)
             del self._ids[first:last + 1]
             self.endRemoveRows()
         self._reindex()
-        return [clip_id for clip_id in doomed]
+        return removed
 
     def remove_source(self, source_id: str) -> list[str]:
         removed = self.remove([cid for cid in self._ids if self._clips[cid].source_id == source_id])
@@ -255,5 +259,5 @@ class ClipLibraryModel(QAbstractListModel):
         if not clip_ids:
             return
         rows = sorted(self._row_of[c] for c in clip_ids if c in self._row_of)
-        for first, last in _runs(rows):
+        for first, last in runs(rows):
             self.dataChanged.emit(self.index(first), self.index(last), [self.ClipRole])

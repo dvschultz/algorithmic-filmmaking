@@ -13,6 +13,8 @@ from PySide6.QtCore import (
     QAbstractListModel, QByteArray, QModelIndex, QObject, QPersistentModelIndex, Qt, QThread,
 )
 
+from ui.models._utils import runs
+
 if TYPE_CHECKING:
     from core.project import Project
     from models.frame import Frame
@@ -30,6 +32,7 @@ class FrameLibraryModel(QAbstractListModel):
         super().__init__(parent)
         self._ids: list[str] = []
         self._frames: dict[str, Frame] = {}
+        self._row_of: dict[str, int] = {}
 
     # -- Qt model ------------------------------------------------------------
 
@@ -75,7 +78,25 @@ class FrameLibraryModel(QAbstractListModel):
     # -- population ----------------------------------------------------------
 
     def set_project(self, project: Project | None) -> None:
+        self._assert_owner_thread()
         self.set_frames(list(project.frames) if project is not None else [])
+
+    def sync_project(self, project: Project | None) -> tuple[list[str], list[str]]:
+        """Reconcile with a project incrementally (no model reset).
+
+        Rows that survive keep their identity, so attached views keep their
+        selection. Returns ``(added_ids, removed_ids)``. Restored frames are
+        appended, so row order can differ from ``project.frames`` after an
+        undo; use ``set_project`` when order matters more than selection.
+        """
+        self._assert_owner_thread()
+        if project is None:
+            self.set_frames([])
+            return [], []
+        wanted = {frame.id for frame in project.frames}
+        removed = self.remove([frame_id for frame_id in self._ids if frame_id not in wanted])
+        added = self.append(project.frames)
+        return added, removed
 
     def set_frames(self, frames: Iterable[Frame]) -> None:
         """Replace the whole library (model reset; views drop selection)."""
@@ -88,27 +109,29 @@ class FrameLibraryModel(QAbstractListModel):
                 continue
             self._ids.append(frame.id)
             self._frames[frame.id] = frame
+        self._reindex()
         self.endResetModel()
 
     def append(self, frames: Iterable[Frame]) -> list[str]:
         """Insert unknown frames at the end; known ids are refreshed in place."""
         self._assert_owner_thread()
-        fresh = []
+        fresh: dict[str, Frame] = {}
         refreshed = []
         for frame in frames:
             if frame.id in self._frames:
                 refreshed.append(frame)
             else:
-                fresh.append(frame)
+                fresh[frame.id] = frame  # a repeated id in one batch keeps the last object
         if fresh:
             first = len(self._ids)
             self.beginInsertRows(QModelIndex(), first, first + len(fresh) - 1)
-            for frame in fresh:
-                self._ids.append(frame.id)
-                self._frames[frame.id] = frame
+            for frame_id, frame in fresh.items():
+                self._ids.append(frame_id)
+                self._frames[frame_id] = frame
+                self._row_of[frame_id] = len(self._ids) - 1
             self.endInsertRows()
         self.refresh(refreshed)
-        return [frame.id for frame in fresh]
+        return list(fresh)
 
     def refresh(self, frames: Iterable[Frame]) -> list[str]:
         """Replace frame objects that already exist and announce the rows."""
@@ -118,9 +141,9 @@ class FrameLibraryModel(QAbstractListModel):
             if frame.id in self._frames:
                 self._frames[frame.id] = frame
                 changed.append(frame.id)
-        for frame_id in changed:
-            row = self._ids.index(frame_id)
-            self.dataChanged.emit(self.index(row), self.index(row))
+        rows = sorted(self._row_of[frame_id] for frame_id in changed)
+        for first, last in runs(rows):
+            self.dataChanged.emit(self.index(first), self.index(last))
         return changed
 
     def remove(self, frame_ids: Iterable[str]) -> list[str]:
@@ -128,19 +151,25 @@ class FrameLibraryModel(QAbstractListModel):
         doomed = {frame_id for frame_id in frame_ids if frame_id in self._frames}
         if not doomed:
             return []
-        rows = sorted(row for row, frame_id in enumerate(self._ids) if frame_id in doomed)
-        for first, last in reversed(_runs(rows)):
+        rows = sorted(self._row_of[frame_id] for frame_id in doomed)
+        removed = [self._ids[row] for row in rows]  # project order
+        for first, last in reversed(runs(rows)):
             self.beginRemoveRows(QModelIndex(), first, last)
             for frame_id in self._ids[first:last + 1]:
                 self._frames.pop(frame_id, None)
             del self._ids[first:last + 1]
             self.endRemoveRows()
-        return [frame_id for frame_id in doomed]
+        self._reindex()
+        return removed
 
     # -- queries -------------------------------------------------------------
 
     def frame(self, frame_id: str) -> Frame | None:
         return self._frames.get(frame_id)
+
+    def get_frame(self, index: QModelIndex | QPersistentModelIndex) -> Frame | None:
+        """Compatibility shim for the former ``FrameBrowserModel``; prefer ``frame_at``."""
+        return self.frame_at(index)
 
     def frame_at(self, index: QModelIndex | QPersistentModelIndex) -> Frame | None:
         if not index.isValid() or not 0 <= index.row() < len(self._ids):
@@ -159,18 +188,6 @@ class FrameLibraryModel(QAbstractListModel):
     def __contains__(self, frame_id: object) -> bool:
         return isinstance(frame_id, str) and frame_id in self._frames
 
+    def _reindex(self) -> None:
+        self._row_of = {frame_id: row for row, frame_id in enumerate(self._ids)}
 
-def _runs(rows: list[int]) -> list[tuple[int, int]]:
-    """Collapse sorted row numbers into inclusive contiguous (first, last) runs."""
-    runs: list[tuple[int, int]] = []
-    if not rows:
-        return runs
-    start = prev = rows[0]
-    for row in rows[1:]:
-        if row == prev + 1:
-            prev = row
-            continue
-        runs.append((start, prev))
-        start = prev = row
-    runs.append((start, prev))
-    return runs

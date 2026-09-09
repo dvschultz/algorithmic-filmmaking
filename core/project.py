@@ -1240,10 +1240,13 @@ class Project:
             new_clips: New clips for this source
         """
         self._assert_writable()
+        removed = [c for c in self._clips if c.source_id == source_id]
         self._clips = [c for c in self._clips if c.source_id != source_id]
         self._clips.extend(new_clips)
         self._invalidate_caches()
         self.mark_dirty()
+        if removed:
+            self._notify_observers("clips_removed", removed)
         self._notify_observers("clips_added", new_clips)
 
     # --- Frame state operations ---

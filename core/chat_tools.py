@@ -1487,7 +1487,7 @@ def apply_filters(
             "message": "All filters cleared",
             "active_filters": clip_browser.get_active_filters(),
             "visible_clips": clip_browser.get_visible_clip_count(),
-            "total_clips": len(clip_browser.thumbnails),
+            "total_clips": clip_browser.get_total_clip_count(),
         }
 
     # Build filters dict for public API
@@ -1519,7 +1519,7 @@ def apply_filters(
         "message": "Filters applied",
         "active_filters": clip_browser.get_active_filters(),
         "visible_clips": clip_browser.get_visible_clip_count(),
-        "total_clips": len(clip_browser.thumbnails),
+        "total_clips": clip_browser.get_total_clip_count(),
         "active_tab": active_tab,
     }
 
@@ -1710,7 +1710,7 @@ def clear_filters(main_window, tab: Optional[str] = None) -> dict:
         "message": f"Cleared all filters in {target_tab} tab",
         "tab": target_tab,
         "visible_clips": clip_browser.get_visible_clip_count(),
-        "total_clips": len(clip_browser.thumbnails),
+        "total_clips": clip_browser.get_total_clip_count(),
     }
 
 

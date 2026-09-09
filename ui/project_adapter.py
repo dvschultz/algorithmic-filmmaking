@@ -101,9 +101,10 @@ class ProjectSignalAdapter(QObject):
             self.clip_model.remove_source(data.id)
         elif event == "sources_changed":
             # Atomic removal/restoration (undo history): reconcile without a
-            # reset so surviving rows keep their identity.
+            # reset so surviving rows keep their identity and views keep
+            # their selection.
             self.clip_model.sync_project(project)
-            self.frame_model.set_frames(project.frames)
+            self.frame_model.sync_project(project)
         elif event == "clips_added":
             sources = project.sources_by_id
             self.clip_model.upsert(
@@ -129,7 +130,12 @@ class ProjectSignalAdapter(QObject):
             event: Event name from Project
             data: Event-specific data
         """
-        self._project_models(event, data)
+        # Mirror into the models first, but never let a model failure swallow
+        # the Qt signal: the views must still hear about the change.
+        try:
+            self._project_models(event, data)
+        except Exception:
+            logger.exception("Library models out of sync after project event %s", event)
         if event == "source_added":
             self.source_added.emit(data)
         elif event == "source_removed":

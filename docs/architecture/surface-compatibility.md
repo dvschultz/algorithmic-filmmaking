@@ -171,10 +171,16 @@ in-process copy of clip/source/frame data for the Cut, Analyze and Frames
 workspaces; `ProjectSignalAdapter` owns and updates them before emitting its
 signals. Browsers keep only membership, selection and filters, mutations are
 refused off the GUI thread, and thumbnails for removed clips are dropped by
-`ClipLibraryModel.thumbnail_ready`. Public browser methods (`add_clip(s)`,
-`set_virtual_clips`, `update_clips`, `remove_clips_by_ids`,
-`get_source_for_clip`) are unchanged; `FrameBrowserModel` remains as an alias
-of `FrameLibraryModel`. Recorded 1k/10k budgets: `docs/architecture/library-models.md`.
+`ClipLibraryModel.thumbnail_ready` (both the detection and project-load
+delivery paths). Public browser method signatures (`add_clip(s)`,
+`set_virtual_clips`, `update_clips`, `remove_clips_by_ids`, `get_source_for_clip`)
+are unchanged, with one semantic broadening: `get_source_for_clip` now answers
+for any clip in the library, not only clips the workspace shows (no caller
+relied on the old `None`). `FrameBrowser.set_frames`/`clear` are no-ops on a
+shared model (`clear` only drops selection); `FrameBrowserModel` remains as an
+alias of `FrameLibraryModel` with a `get_frame` shim.
+`Project.replace_source_clips` now emits `clips_removed` for the replaced clips
+before `clips_added`. Recorded 1k/10k budgets: `docs/architecture/library-models.md`.
 
 ## Persistence and media-time defects
 

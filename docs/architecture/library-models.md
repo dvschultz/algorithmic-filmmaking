@@ -22,8 +22,20 @@ only touch membership. `get_source_for_clip()` is a library lookup, so it
 answers for any clip in the project, not only clips the workspace shows.
 
 `FrameBrowser.set_model(model)` renders the view straight from the shared
-model; `FramesTab.update_frame_browser()` then only toggles the empty state and
-does not reset the model (a reset would drop the view's selection).
+model; `set_frames` becomes a no-op and `clear` only drops the selection, so
+`FramesTab.update_frame_browser()` effectively just toggles the empty state (a
+model reset would drop the view's selection).
+
+Undo/redo of source removal arrives as one `sources_changed` event; both
+models reconcile incrementally (`sync_project`) so surviving rows keep their
+identity and selection. Restored rows are appended, so model row order can
+differ from project order after an undo; browsers order their own membership.
+Re-detection (`Project.replace_source_clips`) emits `clips_removed` for the old
+clips before `clips_added`, so stale rows never linger in the model.
+
+If a model mutation fails inside the adapter (for example an off-thread
+project mutation hitting the owner-thread assertion), the adapter logs the
+traceback and still emits its Qt signal so the views are not silently starved.
 
 ## Threading
 
