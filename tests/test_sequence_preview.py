@@ -217,21 +217,42 @@ def test_corrupt_managed_preview_is_recomputed(monkeypatch, tmp_path):
     assert second.path.read_bytes() == b"complete render"
 
 
-def test_source_edit_with_restored_mtime_invalidates_preview_signature(tmp_path):
-    import os
 
+def _edit_keeping_mtime(path, data: bytes, before) -> None:
+    """Rewrite the file with the same size, restore its mtime, and let the edit register.
+
+    The signature detects this edit through ``st_ctime_ns``. Linux stamps inode
+    times from a coarse clock (one scheduler tick, typically 1-4 ms), so an edit
+    made in the same tick as the baseline stat carries an identical ctime and is
+    genuinely indistinguishable by stat alone -- the property under test is that
+    an edit the filesystem recorded is detected, not that stat has sub-tick
+    resolution. Wait for the clock to move rather than asserting into that gap.
+    """
+    import os
+    import time
+
+    assert len(data) == before.st_size, "the edit must keep the size to exercise the ctime path"
+    for _ in range(400):
+        path.write_bytes(data)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = path.stat()
+        if after.st_ctime_ns != before.st_ctime_ns:
+            assert after.st_mtime_ns == before.st_mtime_ns
+            return
+        time.sleep(0.005)
+    raise AssertionError("filesystem never recorded a new ctime for the edit")
+
+
+def test_source_edit_with_restored_mtime_invalidates_preview_signature(tmp_path):
     sequence, sources, clips = _make_sequence_with_clips(tmp_path)
     source = next(iter(sources.values())).file_path
     before = source.stat()
     first = compute_sequence_preview_signature(sequence, sources, clips)
-    source.write_bytes(b"change")
-    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    _edit_keeping_mtime(source, b"change", before)
     assert first != compute_sequence_preview_signature(sequence, sources, clips)
 
 
 def test_source_edit_during_render_is_not_published(monkeypatch, tmp_path):
-    import os
-
     sequence, sources, clips = _make_sequence_with_clips(tmp_path)
     source = next(iter(sources.values())).file_path
     before = source.stat()
@@ -239,8 +260,7 @@ def test_source_edit_during_render_is_not_published(monkeypatch, tmp_path):
     class FakeExporter:
         def export(self, **kwargs):
             kwargs["config"].output_path.write_bytes(b"stale render")
-            source.write_bytes(b"change")
-            os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+            _edit_keeping_mtime(source, b"change", before)
             return True
 
     monkeypatch.setattr("core.sequence_preview.SequenceExporter", FakeExporter)

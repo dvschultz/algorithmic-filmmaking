@@ -112,9 +112,120 @@ def test_native_analysis_runtime_smoke_runs_the_audio_family_in_source_mode(monk
     """U14 packaged-proof target, exercised in source mode for the model-free audio family."""
     import importlib.util
 
+    from core.runtime_profiles import profile_status
+
     if importlib.util.find_spec("librosa") is None:
         pytest.skip("librosa not installed")
+    # The audio profile also covers Demucs stem separation (torch, torchaudio,
+    # demucs_infer). Those live in requirements-optional.txt, so an environment
+    # built from requirements.txt alone cannot run this family; the smoke would
+    # report the profile "missing" rather than exercise the isolation seam.
+    status = profile_status("audio-librosa")
+    if not status["installed"]:
+        pytest.skip("audio-librosa profile is not installed: " + ", ".join(status["missing"]))
     monkeypatch.setenv("SCENE_RIPPER_SMOKE_FAMILIES", "audio")
     monkeypatch.delenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", raising=False)
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
     assert run_runtime_smoke_target("native-analysis") == "native-analysis"
+
+
+class _FakeWorker:
+    """In-memory stand-in for ManagedWorker; records the launch it was started with."""
+
+    _next_pid = 1000
+
+    def __init__(self, launch):
+        self.launch = launch
+        self.python = launch.interpreter
+        _FakeWorker._next_pid += 1
+        self.pid = _FakeWorker._next_pid
+
+    def run(self, kind, args, **options):
+        assert kind == "echo"
+        return {"echo": args["value"], "pid": self.pid}
+
+
+class _FakeSupervisor:
+    """RuntimeSupervisor stand-in: one worker per family, replaced by restart_family."""
+
+    def __init__(self, **_kwargs):
+        self.launch_factory = None
+        self._workers = {}
+
+    def worker(self, family="default"):
+        worker = self._workers.get(family)
+        if worker is None:
+            worker = _FakeWorker(self.launch_factory(family))
+            self._workers[family] = worker
+        return worker
+
+    def run(self, family, kind, args, **options):
+        return self.worker(family).run(kind, args, **options)
+
+    def restart_family(self, family):
+        self._workers.pop(family, None)
+
+    def shutdown(self):
+        self._workers.clear()
+
+
+def test_native_worker_smoke_transcribes_on_a_worker_that_sees_the_promoted_overlay(
+    monkeypatch, tmp_path
+):
+    """Regression: the smoke must re-resolve the launch after installing the profile.
+
+    A launch captured once, before the install, carries the package directories
+    that existed at that moment. On a clean machine that set is empty, so the
+    worker used for the transcription never had the promoted overlay on its
+    path and faster-whisper was missing even though the install succeeded.
+    """
+    import core.runtime_profiles as runtime_profiles
+    import core.runtime_supervisor as supervisor_module
+    import core.transcription as transcription_module
+    from core.runtime_supervisor import WorkerLaunch
+
+    overlays = tmp_path / "packages-overlays"
+    overlays.mkdir()
+    promoted = overlays / "overlay-1-transcription-whisper"
+
+    def fake_default_launch(family, *, ensure_interpreter=False, staged_paths=()):
+        # Mirrors the real resolver: only directories that exist right now.
+        return WorkerLaunch(
+            interpreter=tmp_path / "python3",
+            worker_root=tmp_path / "runtime_worker",
+            package_paths=tuple(p for p in sorted(overlays.iterdir()) if p.is_dir()),
+            family=family,
+        )
+
+    installed = {"done": False}
+
+    def fake_profile_status(profile_id):
+        return {"profile": profile_id, "installed": installed["done"], "missing": ["faster-whisper"]}
+
+    def fake_install_profile(profile_id, *args, **kwargs):
+        promoted.mkdir()
+        installed["done"] = True
+        # The real install retires the family worker through the default supervisor.
+        supervisor_module.default_supervisor().restart_family("transcription")
+        return {"profile": profile_id, "installed": True, "missing": [], "promoted_dir": str(promoted)}
+
+    seen: dict = {}
+
+    def fake_transcribe(media_path, model, language, progress, *, extract_audio, cancel_event=None):
+        worker = supervisor_module.default_supervisor().worker("transcription")
+        seen["package_paths"] = tuple(worker.launch.package_paths)
+        return ([], "en")
+
+    monkeypatch.setenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", "1")
+    monkeypatch.setattr("core.paths.is_frozen", lambda: False)
+    monkeypatch.setattr(supervisor_module, "RuntimeSupervisor", _FakeSupervisor)
+    monkeypatch.setattr(supervisor_module, "default_launch", fake_default_launch)
+    monkeypatch.setattr(runtime_profiles, "profile_status", fake_profile_status)
+    monkeypatch.setattr(runtime_profiles, "install_profile", fake_install_profile)
+    monkeypatch.setattr(transcription_module, "_transcribe_in_worker", fake_transcribe)
+
+    assert run_runtime_smoke_target("native-worker") == "native-worker"
+    assert seen["package_paths"] == (promoted,), (
+        "transcription ran on a worker whose path lacks the freshly promoted overlay"
+    )
+    assert supervisor_module._default is None

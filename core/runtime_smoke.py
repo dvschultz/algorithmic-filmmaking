@@ -692,12 +692,19 @@ def _run_native_worker_smoke() -> None:
     """
     import os
 
+    import core.runtime_supervisor as supervisor_module
     from core.paths import get_managed_python_dir, is_frozen
     from core.runtime_profiles import install_profile, profile_status
-    from core.runtime_supervisor import RuntimeSupervisor, default_launch, worker_package_root
+    from core.runtime_supervisor import RuntimeSupervisor, WorkerLaunch, default_launch, worker_package_root
     from core.transcription import _transcribe_in_worker
 
-    launch = default_launch("transcription", ensure_interpreter=is_frozen())
+    def launch_factory(family: str) -> WorkerLaunch:
+        # Resolved again on every worker start: a profile install promotes a new
+        # package overlay, and only a worker launched afterwards has it on its
+        # path. A launch captured once (before the install) can never see it.
+        return default_launch(family, ensure_interpreter=is_frozen())
+
+    launch = launch_factory("transcription")
     if is_frozen():
         if launch.interpreter.resolve() == Path(sys.executable).resolve():
             raise RuntimeError("Frozen app resolved the worker interpreter to its own executable.")
@@ -708,7 +715,14 @@ def _run_native_worker_smoke() -> None:
             raise RuntimeError("Frozen app did not resolve the staged runtime_worker_src package.")
 
     supervisor = RuntimeSupervisor(allow_test_tasks=True)
-    supervisor.launch_factory = lambda family: launch
+    supervisor.launch_factory = launch_factory
+    # The smoke's supervisor is the default one for its duration, so
+    # install_profile retires the warm family worker through the same path the
+    # app uses, and the transcription below runs on a worker started afterwards.
+    previous_default = supervisor_module._default
+    supervisor_module._default = supervisor
+    previous_env = os.environ.get("SCENE_RIPPER_NATIVE_WORKERS")
+    os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
     try:
         worker = supervisor.worker("transcription")
         if worker.python is None or Path(worker.python).resolve() != launch.interpreter.resolve():
@@ -717,6 +731,7 @@ def _run_native_worker_smoke() -> None:
         if echoed.get("echo") != "smoke" or echoed.get("pid") == os.getpid():
             raise RuntimeError("Worker echo task did not run in a separate process.")
         logger.info("Native worker handshake OK: pid=%s python=%s", worker.pid, worker.python)
+        handshake_pid = worker.pid
 
         status = profile_status("transcription-whisper")
         if not status["installed"]:
@@ -727,25 +742,37 @@ def _run_native_worker_smoke() -> None:
                     "transcription-whisper profile is not installed; missing "
                     + ", ".join(status["missing"]) + ". Set SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 to install."
                 )
+            promoted = status.get("promoted_dir")
+            if promoted:
+                _check_worker_sees_promoted_overlay(supervisor, Path(promoted), handshake_pid)
         with tempfile.TemporaryDirectory(prefix="scene-ripper-native-worker-smoke-") as tmp:
             wav = _write_tone_wav(Path(tmp) / "tone.wav", sample_rate=16000)
-            import core.runtime_supervisor as supervisor_module
-
-            previous_env = os.environ.get("SCENE_RIPPER_NATIVE_WORKERS")
-            os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = "1"
-            previous = supervisor_module._default
-            supervisor_module._default = supervisor
-            try:
-                segments, language = _transcribe_in_worker(wav, "tiny.en", "en", None, extract_audio=True)
-            finally:
-                supervisor_module._default = previous
-                if previous_env is None:
-                    os.environ.pop("SCENE_RIPPER_NATIVE_WORKERS", None)
-                else:
-                    os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = previous_env
+            segments, language = _transcribe_in_worker(wav, "tiny.en", "en", None, extract_audio=True)
             logger.info("Native worker transcription OK: %d segments, language=%s", len(segments), language)
     finally:
         supervisor.shutdown()
+        supervisor_module._default = previous_default
+        if previous_env is None:
+            os.environ.pop("SCENE_RIPPER_NATIVE_WORKERS", None)
+        else:
+            os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = previous_env
+
+
+def _check_worker_sees_promoted_overlay(supervisor, promoted: Path, previous_pid) -> None:
+    """After an install the family worker must be a fresh process with the overlay on its path."""
+    fresh = supervisor.worker("transcription")
+    if fresh.pid == previous_pid:
+        raise RuntimeError(
+            "Profile install did not restart the transcription worker; the warm worker "
+            f"(pid {previous_pid}) can never import the packages promoted to {promoted}."
+        )
+    on_path = {path.resolve() for path in fresh.launch.package_paths}
+    if promoted.resolve() not in on_path:
+        raise RuntimeError(
+            f"Restarted transcription worker does not have the promoted overlay {promoted} on its "
+            f"path: {[str(path) for path in fresh.launch.package_paths]}"
+        )
+    logger.info("Worker restarted after install: pid=%s sees %s", fresh.pid, promoted)
 
 
 # Per-family packaged proof (plan U14). Each runtime profile is health-checked

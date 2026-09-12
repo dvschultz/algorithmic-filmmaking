@@ -52,7 +52,7 @@ jobs:
           python -m pip install --upgrade pip
           # Tests need full deps (including optional ML packages)
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest pytest-asyncio
 
       - name: Verify FFmpeg
         run: ffmpeg -version

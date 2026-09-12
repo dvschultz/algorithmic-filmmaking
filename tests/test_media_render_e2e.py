@@ -1,5 +1,6 @@
 """Decode actual output to verify source-frame identity, not FFmpeg arguments."""
 
+import functools
 from pathlib import Path
 import subprocess
 
@@ -18,6 +19,21 @@ def ffmpeg():
     if binary is None:
         pytest.skip("FFmpeg is required for decoded media regression tests")
     return binary
+
+
+
+@functools.lru_cache(maxsize=4)
+def variable_frame_rate_flags(ffmpeg: str) -> tuple[str, ...]:
+    """Flags that ask ffmpeg to write variable-rate output, for this ffmpeg build.
+
+    ``-fps_mode`` arrived in ffmpeg 5.0; ubuntu-22.04 runners still ship 4.4,
+    where it aborts with "Unrecognized option 'fps_mode'". ``-vsync`` is the
+    older spelling and is still accepted by ffmpeg 8, so fall back to it.
+    """
+    help_text = subprocess.run(
+        [ffmpeg, "-hide_banner", "-h", "full"], capture_output=True, text=True, timeout=60,
+    ).stdout
+    return ("-fps_mode", "vfr") if "fps_mode" in help_text else ("-vsync", "vfr")
 
 
 def make_numbered_video(ffmpeg: str, path: Path, rate: float = 24, count: int = 24, *, id_offset: int = 0) -> Source:
@@ -342,7 +358,7 @@ def test_vfr_import_records_verified_mapping_and_export_uses_it(ffmpeg, tmp_path
     subprocess.run([
         ffmpeg, "-v", "error", "-i", str(original.file_path),
         "-vf", "select='eq(n,0)+eq(n,1)+eq(n,3)+eq(n,4)+eq(n,7)+eq(n,8)'",
-        "-fps_mode", "vfr", "-c:v", "libx264", "-crf", "0", str(path),
+        *variable_frame_rate_flags(ffmpeg), "-c:v", "libx264", "-crf", "0", str(path),
     ], check=True, timeout=30)
     source = probe_source(path)
     assert source.variable_frame_rate and len(source.frame_timestamps) == 7
