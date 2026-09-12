@@ -1342,7 +1342,7 @@ class MainWindow(QMainWindow):
 
         help_menu.addSeparator()
 
-        from core.update_checker import _GITHUB_OWNER, _GITHUB_REPO
+        from core.update_service import GITHUB_OWNER as _GITHUB_OWNER, GITHUB_REPO as _GITHUB_REPO
         _docs_base = f"https://github.com/{_GITHUB_OWNER}/{_GITHUB_REPO}/blob/main/docs/user-guide"
 
         _help_docs = [
