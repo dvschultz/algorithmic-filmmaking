@@ -143,8 +143,13 @@ jobs:
         run: |
           # U13 gate: the installed AppImage must launch the worker under its own
           # interpreter and run real inference. --appimage-extract-and-run avoids FUSE.
-          APPIMAGE="$(ls -1 ./*.AppImage packaging/linux/*.AppImage 2>/dev/null | head -n1)"
-          test -n "$APPIMAGE" || { echo "No AppImage produced"; exit 1; }
+          APPIMAGE="$(find . -maxdepth 2 -name '*.AppImage' -print 2>/dev/null | head -n1 || true)"
+          if [ -z "$APPIMAGE" ]; then
+            echo "No AppImage found under $PWD (depth 2); the build step produced nothing to test."
+            find . -maxdepth 2 -name '*.AppImage*' -o -maxdepth 1 -name 'AppDir*' || true
+            exit 1
+          fi
+          echo "Testing $APPIMAGE"
           chmod +x "$APPIMAGE"
           LOG="$(mktemp)"
           if ! timeout 1800 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
@@ -163,7 +168,8 @@ jobs:
         run: |
           # U14 gate: every runtime family is health-checked in its own worker and the
           # model-free/tiny-model families run a real isolated analysis.
-          APPIMAGE="$(ls -1 ./*.AppImage packaging/linux/*.AppImage 2>/dev/null | head -n1)"
+          APPIMAGE="$(find . -maxdepth 2 -name '*.AppImage' -print 2>/dev/null | head -n1 || true)"
+          test -n "$APPIMAGE" || { echo "No AppImage found under $PWD (depth 2)"; exit 1; }
           chmod +x "$APPIMAGE"
           LOG="$(mktemp)"
           if ! timeout 3600 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then

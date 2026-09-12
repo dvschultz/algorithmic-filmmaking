@@ -459,3 +459,42 @@ def test_real_runtime_worker_package_is_stdlib_only_at_import():
     code = f"import sys; sys.path.insert(0, {str(root)!r}); " + code
     result = subprocess.run([sys.executable, "-I", "-c", code], cwd=str(root), capture_output=True, text=True)
     assert result.returncode == 0 and "ok" in result.stdout, result.stderr
+
+
+def test_appimage_build_script_verifies_its_own_output():
+    """The Linux build must fail when appimage-builder produces no AppImage.
+
+    The old script renamed with `mv Scene_Ripper-*.AppImage ... || true` and then
+    printed "Output: ..." unconditionally, so a build that produced nothing was
+    reported as a success and the first sign of trouble was the smoke step
+    exiting 2 with no output four minutes later.
+    """
+    script = (PROJECT_ROOT / "packaging" / "linux" / "build-appimage.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "did not produce an .AppImage" in script
+    swallowed = [
+        line for line in script.splitlines()
+        if line.strip().startswith("mv ") and "|| true" in line
+    ]
+    assert not swallowed, f"the rename must not be swallowed: {swallowed}"
+    output_line = next(
+        line for line in script.splitlines() if line.strip().startswith('echo "Output:')
+    )
+    assert "$TARGET" in output_line, "the reported path must be the file that exists"
+
+
+def test_linux_smoke_lookup_survives_a_missing_appimage():
+    """A missing AppImage must report which directory was searched, not exit silently.
+
+    The step runs under `bash -e -o pipefail`, where `ls` on a glob that matches
+    nothing fails the assignment and aborts before the guard below it can run.
+    """
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "linux-build.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ls -1 ./*.AppImage" not in workflow
+    assert workflow.count("-name '*.AppImage' -print 2>/dev/null | head -n1 || true") == 2
+    assert "No AppImage found under" in workflow

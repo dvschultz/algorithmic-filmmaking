@@ -80,12 +80,28 @@ RECIPE="$PROJECT_ROOT/AppImageBuilder-resolved.yml"
 sed "s/\!ENV \${VERSION:-0.1.0}/$VERSION/g" "$SCRIPT_DIR/AppImageBuilder.yml" > "$RECIPE"
 appimage-builder --recipe "$RECIPE" --skip-test
 
-# Rename output
-mv Scene_Ripper-*.AppImage "Scene_Ripper-${VERSION}-x86_64.AppImage" 2>/dev/null || true
+# Rename output. appimage-builder derives the file name from the recipe's app
+# name ("Scene Ripper"), so the produced file may use a space or an underscore
+# and the old fixed "Scene_Ripper-*" pattern could miss it. Find whatever was
+# written instead, and fail loudly when nothing was: the previous version
+# swallowed the rename with "|| true" and then announced a build that did not
+# exist, so the first sign of trouble was an unrelated step four minutes later.
+TARGET="Scene_Ripper-${VERSION}-x86_64.AppImage"
+PRODUCED="$(find . -maxdepth 2 -name '*.AppImage' -newer "$RECIPE" -print 2>/dev/null | head -n1)"
+if [ -z "$PRODUCED" ]; then
+    echo "ERROR: appimage-builder did not produce an .AppImage" >&2
+    echo "Searched $PROJECT_ROOT (depth 2). Contents:" >&2
+    find . -maxdepth 2 -name '*.AppImage*' -o -maxdepth 1 -name 'AppDir*' >&2 || true
+    exit 1
+fi
+if [ "$PRODUCED" != "./$TARGET" ]; then
+    mv "$PRODUCED" "$TARGET"
+fi
+test -s "$TARGET" || { echo "ERROR: $TARGET is empty" >&2; exit 1; }
 
 echo ""
 echo "Build complete!"
-echo "Output: Scene_Ripper-${VERSION}-x86_64.AppImage"
+echo "Output: $TARGET ($(du -h "$TARGET" | cut -f1))"
 echo ""
 echo "To run:"
 echo "  chmod +x Scene_Ripper-${VERSION}-x86_64.AppImage"
