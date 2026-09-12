@@ -735,12 +735,21 @@ def _run_native_worker_smoke() -> None:
 
         status = profile_status("transcription-whisper")
         if not status["installed"]:
-            if os.environ.get("SCENE_RIPPER_SMOKE_INSTALL_PROFILES") == "1":
+            attempted = os.environ.get("SCENE_RIPPER_SMOKE_INSTALL_PROFILES") == "1"
+            if attempted:
                 status = install_profile("transcription-whisper")
             if not status["installed"]:
+                missing = ", ".join(status.get("missing") or []) or "unknown"
+                if attempted:
+                    # Telling an operator to set a variable they already set sent a
+                    # Windows probe timeout looking like a configuration mistake.
+                    raise RuntimeError(
+                        f"transcription-whisper install did not complete; still missing {missing}. "
+                        f"Install reported: {status.get('error') or 'no error detail'}"
+                    )
                 raise RuntimeError(
-                    "transcription-whisper profile is not installed; missing "
-                    + ", ".join(status["missing"]) + ". Set SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 to install."
+                    f"transcription-whisper profile is not installed; missing {missing}. "
+                    "Set SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 to install."
                 )
             promoted = status.get("promoted_dir")
             if promoted:

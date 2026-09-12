@@ -147,7 +147,7 @@ jobs:
           test -n "$APPIMAGE" || { echo "No AppImage produced"; exit 1; }
           chmod +x "$APPIMAGE"
           LOG="$(mktemp)"
-          if ! timeout 900 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
+          if ! timeout 1800 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
             tail -200 "$LOG"; echo "native-worker smoke failed"; exit 1
           fi
           grep -q "Runtime smoke test 'native-worker' completed successfully" "$LOG" \
@@ -166,7 +166,7 @@ jobs:
           APPIMAGE="$(ls -1 ./*.AppImage packaging/linux/*.AppImage 2>/dev/null | head -n1)"
           chmod +x "$APPIMAGE"
           LOG="$(mktemp)"
-          if ! timeout 2400 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
+          if ! timeout 3600 "$APPIMAGE" --appimage-extract-and-run >"$LOG" 2>&1; then
             tail -200 "$LOG"; echo "native-analysis smoke failed"; exit 1
           fi
           grep -q "Runtime smoke test 'native-analysis' completed successfully" "$LOG" \

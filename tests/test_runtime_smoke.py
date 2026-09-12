@@ -316,3 +316,59 @@ def test_native_analysis_calls_a_failed_install_a_failure_not_a_missing_profile(
 
     with pytest.raises(RuntimeError, match="install did not complete"):
         run_runtime_smoke_target("native-analysis")
+
+
+def test_native_worker_smoke_reports_why_an_attempted_install_failed(monkeypatch, tmp_path):
+    """A failed install must not be reported as an unset environment variable.
+
+    The packaged Windows run timed the staged health check out, install_profile
+    reported the profile still missing, and the smoke answered with "Set
+    SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 to install" -- which the workflow had
+    already set. The real cause was carried in the install outcome's error and
+    never shown.
+    """
+    import core.runtime_profiles as runtime_profiles
+    import core.runtime_supervisor as supervisor_module
+    from core.runtime_supervisor import WorkerLaunch
+
+    monkeypatch.setenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", "1")
+    monkeypatch.setattr("core.paths.is_frozen", lambda: False)
+    monkeypatch.setattr(supervisor_module, "RuntimeSupervisor", _FakeSupervisor)
+    monkeypatch.setattr(
+        supervisor_module, "default_launch",
+        lambda family, **kw: WorkerLaunch(
+            interpreter=tmp_path / "python3", worker_root=tmp_path / "w", family=family
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_profiles, "profile_status",
+        lambda pid: {"profile": pid, "installed": False, "missing": ["package:faster_whisper"]},
+    )
+    monkeypatch.setattr(
+        runtime_profiles, "install_profile",
+        lambda pid, *a, **k: {
+            "profile": pid, "installed": False, "missing": ["package:faster_whisper"],
+            "error": "Health check failed; previous runtime kept: Task probe timed out after 600s",
+        },
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_runtime_smoke_target("native-worker")
+
+    message = str(excinfo.value)
+    assert "install did not complete" in message
+    assert "probe timed out" in message
+    assert "Set SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1" not in message
+
+
+def test_probe_timeout_is_generous_and_overridable(monkeypatch):
+    """The ceiling must cover a cold native import and stay operator-tunable."""
+    from core.runtime_profiles import _probe_timeout
+
+    monkeypatch.delenv("SCENE_RIPPER_PROBE_TIMEOUT", raising=False)
+    assert _probe_timeout() >= 600.0
+    monkeypatch.setenv("SCENE_RIPPER_PROBE_TIMEOUT", "90")
+    assert _probe_timeout() == 90.0
+    for bogus in ("", "soon", "0", "-5"):
+        monkeypatch.setenv("SCENE_RIPPER_PROBE_TIMEOUT", bogus)
+        assert _probe_timeout() >= 600.0, bogus

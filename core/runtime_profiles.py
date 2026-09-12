@@ -147,7 +147,23 @@ def get_managed_staging_dir() -> Path:
     return get_app_support_dir() / "packages-staging"
 
 
-PROBE_TIMEOUT = 240.0
+def _probe_timeout() -> float:
+    """Seconds to wait for a worker to import a freshly installed runtime.
+
+    Cold-cache imports of a native stack take minutes, and on Windows runners a
+    package tree pip has only just written is scanned on first read, which put
+    faster-whisper's import past the old 240s ceiling. The value is a ceiling,
+    not a delay, so err generous; SCENE_RIPPER_PROBE_TIMEOUT overrides it.
+    """
+    raw = os.environ.get("SCENE_RIPPER_PROBE_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 600.0
+    return value if value > 0 else 600.0
+
+
+PROBE_TIMEOUT = 600.0
 """Cold-cache imports of a freshly installed runtime can take minutes."""
 
 STALE_STAGE_SECONDS = 6 * 3600
@@ -450,14 +466,14 @@ def probe_profile_runtime(
             worker = ManagedWorker(launch)
             worker.start()
             try:
-                result = worker.run("probe", {"module": profile.probe_module}, timeout=PROBE_TIMEOUT)
+                result = worker.run("probe", {"module": profile.probe_module}, timeout=_probe_timeout())
             finally:
                 worker.close()
         else:
             supervisor = default_supervisor()
             if restart:
                 supervisor.restart_family(profile.family)
-            result = supervisor.run(profile.family, "probe", {"module": profile.probe_module}, timeout=PROBE_TIMEOUT)
+            result = supervisor.run(profile.family, "probe", {"module": profile.probe_module}, timeout=_probe_timeout())
     except WorkerError as exc:
         raise RuntimeError(f"{profile.probe_module} runtime is incomplete in the {profile.family} worker: {exc}") from exc
     result["profile"] = profile.id

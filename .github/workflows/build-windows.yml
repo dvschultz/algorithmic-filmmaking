@@ -385,9 +385,12 @@ jobs:
           # U13 gate: managed-interpreter worker launch and real inference from the packaged app.
           $env:SCENE_RIPPER_SMOKE_INSTALL_PROFILES = "1"
           try {
-            Invoke-SceneRipperSmokeTarget -Target "native-worker" -TimeoutSeconds 900
+            # A cold install writes a managed interpreter, ffmpeg and the wheel tree,
+            # then imports it. First reads of that tree are scanned on this runner,
+            # so the budget covers the install plus a slow first import.
+            Invoke-SceneRipperSmokeTarget -Target "native-worker" -TimeoutSeconds 1800
             # U14 gate: per-family worker health checks and isolated analysis.
-            Invoke-SceneRipperSmokeTarget -Target "native-analysis" -TimeoutSeconds 2400
+            Invoke-SceneRipperSmokeTarget -Target "native-analysis" -TimeoutSeconds 3600
           } finally {
             Remove-Item Env:\SCENE_RIPPER_SMOKE_INSTALL_PROFILES -ErrorAction SilentlyContinue
           }

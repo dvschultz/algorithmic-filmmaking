@@ -408,11 +408,11 @@ jobs:
           run_smoke_target "transcription"
           # U13 gate: managed-interpreter worker launch and real inference from the packaged app.
           # The target installs the transcription profile into the managed runtime when allowed.
-          SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 run_smoke_target "native-worker"
+          SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 run_smoke_target "native-worker" 1800
           # U14 gate: every runtime family (audio, ocr, vision, vlm, alignment) is health-checked
           # in its own worker and the model-free/tiny-model families run a real isolated analysis.
           # Installs the profiles into the managed runtime; large downloads, so a longer timeout.
-          SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 run_smoke_target "native-analysis" 2400
+          SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 run_smoke_target "native-analysis" 3600
 
       - name: Import signing certificate
         if: env.MACOS_CERTIFICATE != ''
