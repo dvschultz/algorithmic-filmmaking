@@ -656,3 +656,44 @@ def test_readiness_probe_reuses_the_warm_worker_and_caches(monkeypatch, tmp_path
     finally:
         sup.shutdown()
         runtime_profiles._probe_cache.clear()
+
+
+def test_task_timeout_reports_the_worker_stderr_tail(tmp_path, monkeypatch):
+    """A timeout must say how far the worker got, not just that it ran out of time.
+
+    The packaged Windows probe sat silent for its whole ceiling twice; the error
+    named the timeout and nothing else, so two CI cycles produced no evidence
+    about where the import stopped.
+    """
+    from core.runtime_supervisor import ManagedWorker, WorkerError, WorkerLaunch
+
+    script = tmp_path / "slow_worker.py"
+    script.write_text(
+        "import sys, json, time\n"
+        "sys.stderr.write('probe: importing thing\\n'); sys.stderr.flush()\n"
+        "line = sys.stdin.readline()\n"
+        "sys.stdout.write(json.dumps({'type': 'ready', 'protocol': "
+        "json.loads(line)['protocol'], 'pid': 1, 'python': sys.executable, "
+        "'capabilities': ['probe']}) + '\\n'); sys.stdout.flush()\n"
+        "sys.stdin.readline()\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    # start() insists the worker package exists under worker_root before spawning.
+    (tmp_path / "runtime_worker").mkdir()
+    (tmp_path / "runtime_worker" / "__main__.py").write_text("", encoding="utf-8")
+    launch = WorkerLaunch(interpreter=Path(sys.executable), worker_root=tmp_path)
+    launch_cmd = [str(launch.interpreter), str(script)]
+    monkeypatch.setattr(WorkerLaunch, "command", lambda self: launch_cmd)
+    worker = ManagedWorker(launch, staging_root=tmp_path / "staging")
+
+    worker.start()
+    try:
+        with pytest.raises(WorkerError) as excinfo:
+            worker.run("probe", {"module": "thing"}, timeout=1.0)
+    finally:
+        worker.close()
+
+    message = str(excinfo.value)
+    assert "timed out" in message
+    assert "probe: importing thing" in message, message

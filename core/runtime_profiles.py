@@ -357,7 +357,13 @@ def _staged_install(profile: RuntimeProfile, progress_callback, cancel_event) ->
         return outcome
     finally:
         if not keep_stage and stage_dir.exists():
+            # Discarding a staged install deletes tens of thousands of files. On
+            # the Windows runner the step ran its full budget after a failed
+            # probe, and this is the main suspect; time it so the next run says.
+            started = time.monotonic()
+            logger.info("Discarding staged install at %s", stage_dir)
             shutil.rmtree(stage_dir, ignore_errors=True)
+            logger.info("Discarded staged install in %.1fs", time.monotonic() - started)
 
 
 def _failure(outcome: dict[str, Any], error: str, **extra: Any) -> dict[str, Any]:

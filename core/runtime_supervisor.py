@@ -565,7 +565,10 @@ class ManagedWorker:
                     process = self._process
                     if process is not None:
                         _terminate_tree(process, cancel_grace)
-                    raise WorkerError(f"Task {kind} timed out after {timeout}s; worker terminated")
+                    raise WorkerError(
+                        f"Task {kind} timed out after {timeout}s; worker terminated. "
+                        f"Worker stderr tail: {self.stderr_tail() or '(none)'}"
+                    )
                 try:
                     message = self._next(0.25)
                 except WorkerPollTimeout:

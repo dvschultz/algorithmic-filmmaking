@@ -208,14 +208,26 @@ PROBE_MODULES: dict[str, str] = {
 }
 
 
+def _note(text: str) -> None:
+    """Progress breadcrumb on stderr; the host keeps a tail of these."""
+    sys.stderr.write(text.rstrip() + "\n")
+    sys.stderr.flush()
+
+
 def probe(args: dict[str, Any], context: WorkerContext) -> dict[str, Any]:
     """Import an allowlisted runtime module here and report its version."""
     name = str(args.get("module", ""))
     attribute = PROBE_MODULES.get(name)
     if attribute is None:
         raise ValueError(f"Unknown probe module {name!r}; known: {', '.join(sorted(PROBE_MODULES))}")
+    # A probe that times out used to leave no trace of where it stopped: on a
+    # Windows runner importing a tree pip had just written, the worker was silent
+    # for the whole 600s ceiling. These land on stderr, which the host keeps.
+    _note(f"probe: importing {name}")
     module = importlib.import_module(name)
+    _note(f"probe: imported {name}, resolving {attribute}")
     getattr(module, attribute)  # a half-installed runtime fails here, like a real import would
+    _note(f"probe: {name} ok")
     return {
         "ok": True, "module": name,
         "version": str(getattr(module, "__version__", "") or ""),
