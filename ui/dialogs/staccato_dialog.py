@@ -811,8 +811,14 @@ class StaccatoDialog(QDialog):
             # Check if demucs-infer is available — the worker thread will
             # install on demand if needed, but warn the user upfront about
             # the download size so they can opt out before waiting.
-            from core.feature_registry import check_feature_ready
-            available, _missing = check_feature_ready("stem_separation")
+            from ui.widgets.dependency_widgets import (
+                _check_feature_ready_responsive,
+                readiness_check_cancelled,
+            )
+            available, missing = _check_feature_ready_responsive("stem_separation", self)
+            if readiness_check_cancelled(missing):
+                self._stem_combo.setVisible(False)
+                return
             if not available:
                 reply = QMessageBox.question(
                     self,

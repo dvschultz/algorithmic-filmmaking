@@ -453,9 +453,15 @@ class ReferenceGuideDialog(QDialog):
 
         # Check embedding dependencies if the embedding dimension is active
         if active.get("embedding", 0) > 0:
-            from core.feature_registry import check_feature_ready, install_for_feature
+            from core.feature_registry import install_for_feature
+            from ui.widgets.dependency_widgets import (
+                _check_feature_ready_responsive,
+                readiness_check_cancelled,
+            )
 
-            available, _missing = check_feature_ready("embeddings")
+            available, missing = _check_feature_ready_responsive("embeddings", self)
+            if readiness_check_cancelled(missing):
+                return
             if not available:
                 reply = QMessageBox.question(
                     self,

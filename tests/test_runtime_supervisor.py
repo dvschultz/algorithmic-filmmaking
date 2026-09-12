@@ -46,6 +46,71 @@ def test_handshake_reports_interpreter_and_capabilities(supervisor):
     assert supervisor.run("test", "echo", {"value": {"n": 1}})["echo"] == {"n": 1}
 
 
+def test_analysis_payload_reference_cannot_escape_its_task_staging(tmp_path, monkeypatch):
+    """An analysis envelope is untrusted until its payload path is contained."""
+    from types import SimpleNamespace
+
+    victim = tmp_path / "unrelated.json"
+    victim.write_text('{"private": true}', encoding="utf-8")
+    worker = ManagedWorker(_launch(), staging_root=tmp_path / "staging")
+    worker._process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(worker, "_send", lambda *args: None)
+    monkeypatch.setattr(
+        worker,
+        "_next",
+        lambda *args: {"type": "result", "result": {"value_path": str(victim)}},
+    )
+    monkeypatch.setattr("core.runtime_supervisor._terminate_tree", lambda *args: None)
+
+    with pytest.raises(WorkerProtocolViolation, match="outside"):
+        worker.run("analysis", {"call": "embeddings.thumbnails", "kwargs": {}})
+
+    assert victim.read_text(encoding="utf-8") == '{"private": true}'
+
+
+@pytest.mark.parametrize("value_path", [None, 12, {}, []])
+def test_analysis_payload_reference_must_be_a_string_path(tmp_path, monkeypatch, value_path):
+    from types import SimpleNamespace
+
+    worker = ManagedWorker(_launch(), staging_root=tmp_path / "staging")
+    worker._process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(worker, "_send", lambda *args: None)
+    monkeypatch.setattr(
+        worker,
+        "_next",
+        lambda *args: {"type": "result", "result": {"value_path": value_path}},
+    )
+    monkeypatch.setattr("core.runtime_supervisor._terminate_tree", lambda *args: None)
+
+    with pytest.raises(WorkerProtocolViolation, match="must be"):
+        worker.run("analysis", {"call": "embeddings.thumbnails", "kwargs": {}})
+
+
+def test_analysis_value_keeps_engine_output_paths(tmp_path, monkeypatch):
+    """Engine data may name a host-approved output directory, as stems do."""
+    from types import SimpleNamespace
+
+    output = tmp_path / "stems" / "vocals.wav"
+    worker = ManagedWorker(_launch(), staging_root=tmp_path / "staging")
+    worker._process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(worker, "_send", lambda *args: None)
+    monkeypatch.setattr(
+        worker,
+        "_next",
+        lambda *args: {
+            "type": "result",
+            "result": {"value": {"vocals": str(output)}},
+        },
+    )
+
+    result = worker.run(
+        "analysis",
+        {"call": "audio.separate_stems", "kwargs": {"output_dir": str(output.parent)}},
+    )
+
+    assert result == {"value": {"vocals": str(output)}}
+
+
 # Scenario 1: a crash is contained and the host keeps editing/saving.
 
 def test_worker_crash_is_contained_and_project_edits_continue(supervisor, tmp_path):
@@ -118,6 +183,61 @@ def test_cooperative_cancellation_returns_promptly(supervisor):
     assert supervisor.worker("test").alive  # cooperative cancel keeps the warm worker
 
 
+def test_cancelled_caller_stops_waiting_for_busy_family_without_touching_worker(monkeypatch):
+    cancel = threading.Event()
+    holder_started = threading.Event()
+    release_holder = threading.Event()
+    sup = RuntimeSupervisor()
+    family_lock = sup._family_lock("vision")
+    worker_calls = []
+    terminations = []
+    monkeypatch.setattr(sup, "worker", lambda family: worker_calls.append(family))
+    monkeypatch.setattr("core.runtime_supervisor._terminate_tree", lambda *args: terminations.append(args))
+
+    def hold_family():
+        with family_lock:
+            holder_started.set()
+            release_holder.wait(5)
+
+    holder = threading.Thread(target=hold_family)
+    holder.start()
+    assert holder_started.wait(2)
+
+    outcome = []
+
+    def queue_call():
+        try:
+            sup.run("vision", "probe", {"module": "torch"}, cancel_event=cancel)
+        except Exception as exc:  # capture the caller-thread outcome
+            outcome.append(exc)
+
+    queued = threading.Thread(target=queue_call)
+    queued.start()
+    cancel.set()
+    queued.join(1)
+    try:
+        assert not queued.is_alive(), "cancelled caller remained blocked on the family lock"
+        assert len(outcome) == 1 and isinstance(outcome[0], WorkerCancelled)
+        assert worker_calls == []  # a pre-dispatch cancellation must not resolve or launch a worker
+        assert terminations == []  # the task holding the family remains untouched
+    finally:
+        release_holder.set()
+        holder.join(2)
+
+
+def test_pre_cancelled_caller_does_not_launch_worker(monkeypatch):
+    cancel = threading.Event()
+    cancel.set()
+    sup = RuntimeSupervisor()
+    worker_calls = []
+    monkeypatch.setattr(sup, "worker", lambda family: worker_calls.append(family))
+
+    with pytest.raises(WorkerCancelled, match="cancelled"):
+        sup.run("vision", "probe", {"module": "torch"}, cancel_event=cancel)
+
+    assert worker_calls == []
+
+
 # Scenario 3: protocol mismatch, truncated/excessive/malformed output fail the job without data.
 
 def test_protocol_mismatch_is_refused(tmp_path, monkeypatch):
@@ -177,7 +297,10 @@ def test_install_requests_cannot_name_packages_or_executables(monkeypatch):
     from core import runtime_profiles
 
     calls = []
-    monkeypatch.setattr("core.feature_registry.install_for_feature", lambda name, cb=None: calls.append(name) or True)
+    monkeypatch.setattr(
+        "core.feature_registry.install_for_feature",
+        lambda name, cb=None, **_kwargs: calls.append(name) or True,
+    )
     monkeypatch.setattr("core.feature_registry.check_feature", lambda name: (True, []))
     for bad in ("torch", "/usr/bin/python", "http://evil/pkg.whl", "transcribe; rm -rf /", None, 3):
         with pytest.raises(ValueError, match="Unknown runtime profile"):

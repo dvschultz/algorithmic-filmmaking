@@ -462,7 +462,11 @@ class ExquisiteCorpusDialog(QDialog):
         """Start the text extraction worker."""
         from ui.workers.text_extraction_worker import TextExtractionWorker
         from core.settings import load_settings
-        from core.feature_registry import check_feature_ready, install_for_feature
+        from core.feature_registry import install_for_feature
+        from ui.widgets.dependency_widgets import (
+            _check_feature_ready_responsive,
+            readiness_check_cancelled,
+        )
 
         if not self._inputs_current() or (self.worker and self.worker.isRunning()):
             return
@@ -474,7 +478,9 @@ class ExquisiteCorpusDialog(QDialog):
 
         # Ensure OCR dependencies are installed for non-VLM methods
         if not vlm_only:
-            available, _missing = check_feature_ready("ocr")
+            available, missing = _check_feature_ready_responsive("ocr", self)
+            if readiness_check_cancelled(missing):
+                return
             if not available:
                 if not install_for_feature("ocr"):
                     self._on_extraction_error("OCR dependencies (PaddleOCR) could not be installed.")

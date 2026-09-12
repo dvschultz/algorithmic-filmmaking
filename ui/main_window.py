@@ -361,12 +361,17 @@ class MainWindow(QMainWindow):
         if not feature_candidates:
             return True
 
-        from core.feature_registry import check_feature_ready
+        from ui.widgets.dependency_widgets import (
+            _check_feature_ready_responsive,
+            readiness_check_cancelled,
+        )
 
         preferred_feature = feature_candidates[0]
         alternate_available = False
         for feature_name in feature_candidates:
-            available, _ = check_feature_ready(feature_name)
+            available, missing = _check_feature_ready_responsive(feature_name, self)
+            if readiness_check_cancelled(missing):
+                return False
             if available:
                 if feature_name == preferred_feature:
                     if prompt_cache is not None:
@@ -391,7 +396,9 @@ class MainWindow(QMainWindow):
                     return True
                 continue
 
-            ready, _ = check_feature_ready(feature_name)
+            ready, missing = _check_feature_ready_responsive(feature_name, self)
+            if readiness_check_cancelled(missing):
+                return False
             if ready:
                 if prompt_cache is not None:
                     prompt_cache[feature_name] = True

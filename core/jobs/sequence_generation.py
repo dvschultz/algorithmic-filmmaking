@@ -13,7 +13,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable
+from typing import Callable
 
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.spec import OperationSpec
@@ -63,10 +63,11 @@ def sequence_generation_job_spec(
     name: str | None = None,
     parent_recipe_id: str | None = None,
 ) -> OperationSpec:
-    from core.remix.registry import registry, normalize_parameters, resolve_seed
+    from core.remix.registry import registry, resolve_seed
+    from core.spine.sequences import prepare_generation_parameters
 
     definition = registry.require(algorithm)
-    normalized = normalize_parameters(definition, parameters)
+    normalized = prepare_generation_parameters(project, algorithm, parameters)
     # Draw the seed now so a retried job reproduces the same run.
     resolved_seed = resolve_seed(definition, seed)
     arguments = _request_arguments(algorithm, clip_ids, normalized, resolved_seed, name, parent_recipe_id)
@@ -80,6 +81,73 @@ def sequence_generation_job_spec(
         session_id=project.session.session_id,
         input_revision=revision.digest if revision else None,
     )
+
+
+def sequence_generation_retry_spec(
+    store: JobStore,
+    path: Path,
+    project: Project,
+    algorithm: str,
+    *,
+    idempotency_key: str | None,
+    clip_ids: list[str] | None = None,
+    parameters: dict | None = None,
+    seed: int | None = None,
+    name: str | None = None,
+    parent_recipe_id: str | None = None,
+) -> OperationSpec:
+    """Restore exact metadata for a keyed retry, or build an independent request."""
+    restored = restored_sequence_generation_operation(store, path, project, idempotency_key)
+    if restored is not None:
+        return restored
+    return sequence_generation_job_spec(
+        project,
+        algorithm,
+        clip_ids=clip_ids,
+        parameters=parameters,
+        seed=seed,
+        name=name,
+        parent_recipe_id=parent_recipe_id,
+    )
+
+
+def restored_sequence_generation_operation(
+    store: JobStore,
+    path: Path,
+    project: Project,
+    idempotency_key: str | None,
+) -> OperationSpec | None:
+    """Return the exact failed operation named by an explicit retry key."""
+    from core.jobs.store import TERMINAL_ERROR_STATUSES
+
+    canonical_path = str(path.expanduser().resolve())
+    if idempotency_key is not None:
+        previous = store.find_by_idempotency(
+            kind="generate_sequence",
+            project_path=canonical_path,
+            idempotency_key=idempotency_key,
+        )
+        if (
+            previous is not None
+            and previous.status in TERMINAL_ERROR_STATUSES
+            and previous.operation_json is not None
+        ):
+            operation = OperationSpec.from_json(previous.operation_json)
+            if operation.kind != "generate_sequence" or operation.version != OPERATION_VERSION:
+                raise ValueError("Stored retry operation is not supported by this build")
+            from core.spine.sequences import prepare_generation_parameters
+
+            validated = prepare_generation_parameters(
+                project,
+                operation.arguments["algorithm"],
+                operation.arguments["parameters"],
+            )
+            if validated != operation.arguments["parameters"]:
+                raise ValueError("Stored retry parameters are not canonical")
+            if _inputs(project, operation.arguments) != json.loads(operation.inputs_json):
+                raise StaleJobResult("Sequence generation inputs changed before retry")
+            return operation
+    return None
 
 
 def run_sequence_generation_job(
@@ -107,8 +175,6 @@ def run_sequence_generation_job(
             target_id=operation.session_id or "project",
             arguments=arguments, inputs=expected_inputs,
         )
-        published: dict[str, Any] = {}
-
         def compute() -> dict:
             progress(0.0, f"Generating {arguments['algorithm']}...")
             candidates = _candidates(project, arguments)
@@ -139,15 +205,16 @@ def run_sequence_generation_job(
             }
 
         def validate_input(current: Project) -> bool:
-            return _inputs(current, arguments) == expected_inputs or bool(published)
+            return not cancel.is_set() and _inputs(current, arguments) == expected_inputs
 
         def apply(current: Project, payload: dict) -> None:
+            if cancel.is_set():
+                raise StaleJobResult("Sequence generation was cancelled before publication")
             recipe = SequenceRecipe.from_dict(payload["recipe"])
             label = arguments["name"] or _default_name(definition.key)
-            sequence = publish_recipe(
+            publish_recipe(
                 current, recipe, name=label, sequence_settings=payload.get("sequence_settings") or {},
             )
-            published["sequence_id"] = sequence.id
 
         def is_applied(current: Project, payload: dict) -> bool:
             recipe_id = payload["recipe"]["id"]
@@ -165,6 +232,22 @@ def run_sequence_generation_job(
         result["result_id"] = outcome["result_id"]
         result["replayed"] = not outcome["applied"]
         return result
+
+
+def run_sequence_generation_runtime_job(
+    store: JobStore,
+    path: Path,
+    operation: OperationSpec,
+    progress: Callable[[float, str], None],
+    cancel: Event,
+) -> dict:
+    """Adapt publication cancellation to the JobRuntime terminal contract."""
+    try:
+        return run_sequence_generation_job(store, path, operation, progress, cancel)
+    except StaleJobResult:
+        if cancel.is_set():
+            return {"success": False, "error": "Sequence generation was cancelled", "cancelled": True}
+        raise
 
 
 def _candidates(project: Project, arguments: dict) -> list:

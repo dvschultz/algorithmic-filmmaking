@@ -7,6 +7,7 @@ to download exactly what's needed.
 
 import logging
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -71,7 +72,7 @@ def _scaled_progress_callback(
     return _callback
 
 
-def _validate_feature_runtime(name: str) -> None:
+def _validate_feature_runtime(name: str, cancel_event: threading.Event | None = None) -> None:
     """Run narrow runtime import checks for fragile on-demand features.
 
     A feature whose runtime family is isolated is validated by probing the
@@ -85,7 +86,7 @@ def _validate_feature_runtime(name: str) -> None:
     if profile is not None and profile.probe_module and family_isolated(profile.family):
         from core.runtime_profiles import probe_profile_runtime
 
-        probe_profile_runtime(profile.id, restart=False)
+        probe_profile_runtime(profile.id, restart=False, cancel_event=cancel_event)
         return
     if name == "describe_local":
         from core.analysis.description import ensure_local_description_runtime_available
@@ -365,14 +366,16 @@ def check_feature(name: str) -> tuple[bool, list[str]]:
     return len(missing) == 0, missing
 
 
-def check_feature_ready(name: str) -> tuple[bool, list[str]]:
+def check_feature_ready(
+    name: str, *, cancel_event: threading.Event | None = None,
+) -> tuple[bool, list[str]]:
     """Check whether a feature is both installed and runtime-usable."""
     available, missing = check_feature(name)
     if not available:
         return available, missing
 
     try:
-        _validate_feature_runtime(name)
+        _validate_feature_runtime(name, cancel_event=cancel_event)
     except Exception as e:
         reason = str(e).strip() or e.__class__.__name__
         return False, [f"runtime:{reason}"]
@@ -413,7 +416,7 @@ def stage_feature_packages(
     name: str,
     target_dir: Path,
     progress_callback: Optional[Callable] = None,
-    cancel_event=None,
+    cancel_event: threading.Event | None = None,
 ) -> bool:
     """Install a feature's full manifest package set into ``target_dir`` only.
 
@@ -454,6 +457,8 @@ def stage_feature_packages(
 def install_for_feature(
     name: str,
     progress_callback: Optional[Callable] = None,
+    *,
+    cancel_event: threading.Event | None = None,
 ) -> bool:
     """Install all missing dependencies for a feature.
 
@@ -487,10 +492,12 @@ def install_for_feature(
 
     runtime_repair = False
 
+    if cancel_event is not None and cancel_event.is_set():
+        return False
     available, missing = check_feature(name)
     if available:
         try:
-            _validate_feature_runtime(name)
+            _validate_feature_runtime(name, cancel_event=cancel_event)
             logger.info(f"Feature '{name}' already has all dependencies")
             return True
         except Exception as e:
@@ -537,6 +544,8 @@ def install_for_feature(
         return success
 
     for index, (dep_name, installer) in enumerate(binary_steps):
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         start = index / total_steps
         end = (index + 1) / total_steps
         scaled_callback = _scaled_progress_callback(progress_callback, start, end)
@@ -545,6 +554,8 @@ def install_for_feature(
         except RuntimeError as e:
             logger.error(f"Failed to install {dep_name}: {e}")
             success = False
+        if cancel_event is not None and cancel_event.is_set():
+            return False
 
     if package_names:
         start = len(binary_steps) / total_steps
@@ -559,12 +570,14 @@ def install_for_feature(
         if runtime_repair and repair_package_names:
             clear_package_roots(repair_package_names)
         installer = install_native_packages if deps.native_install else install_packages
-        if specifiers and not installer(specifiers, scaled_callback, no_deps=deps.no_deps):
+        if specifiers and not installer(
+            specifiers, scaled_callback, no_deps=deps.no_deps, cancel_event=cancel_event
+        ):
             success = False
 
     if success:
         try:
-            _validate_feature_runtime(name)
+            _validate_feature_runtime(name, cancel_event=cancel_event)
         except Exception as e:
             logger.error(f"Runtime validation failed for {name}: {e}")
             raise RuntimeError(str(e)) from e

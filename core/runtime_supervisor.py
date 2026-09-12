@@ -596,11 +596,29 @@ class ManagedWorker:
                     result = message.get("result")
                     if not isinstance(result, dict):
                         raise WorkerProtocolViolation("Task result must be an object")
-                    if kind != "analysis":
+                    if kind == "analysis":
+                        value_path = result.get("value_path")
+                        if "value_path" in result and not isinstance(value_path, str):
+                            raise WorkerProtocolViolation(
+                                "Analysis value_path must be an absolute staged path"
+                            )
+                        if isinstance(value_path, str):
+                            validate_result_paths({"value_path": value_path}, task_staging)
+                            path = Path(value_path)
+                            try:
+                                result["value"] = json.loads(path.read_text(encoding="utf-8"))
+                            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                                raise WorkerProtocolViolation(
+                                    f"Could not decode staged analysis payload: {exc}"
+                                ) from exc
+                            finally:
+                                try:
+                                    path.unlink()
+                                except OSError:
+                                    pass
+                            result.pop("value_path", None)
+                    else:
                         validate_result_paths(result, task_staging)
-                    # Analysis values are engine data the host decodes itself;
-                    # decoders that receive files (stems) check them against
-                    # the directory the host named (see core.runtime_families).
                     return result
                 elif kind_ == "cancelled":
                     raise WorkerCancelled("Task cancelled")
@@ -657,7 +675,19 @@ class RuntimeSupervisor:
         The worker is resolved inside the family lock, so callers queued behind a
         crash get a fresh worker instead of the retired one.
         """
-        with self._family_lock(family):
+        family_lock = self._family_lock(family)
+        cancel_event = options.get("cancel_event")
+        if cancel_event is None:
+            family_lock.acquire()
+        else:
+            while not cancel_event.is_set():
+                if family_lock.acquire(timeout=0.05):
+                    break
+            else:
+                raise WorkerCancelled("Task cancelled while waiting for the runtime family")
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise WorkerCancelled("Task cancelled before worker dispatch")
             worker = self.worker(family)
             try:
                 return worker.run(kind, args, **options)
@@ -667,6 +697,8 @@ class RuntimeSupervisor:
                         worker.close()
                         self._workers.pop(family, None)
                 raise
+        finally:
+            family_lock.release()
 
     def restart_family(self, family: str) -> None:
         """Retire the family's warm worker so the next task starts a fresh one.

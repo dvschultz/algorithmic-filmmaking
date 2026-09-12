@@ -1312,6 +1312,7 @@ def install_native_packages(
     progress_callback: ProgressCallback = None,
     *,
     no_deps: bool = False,
+    cancel_event: "threading.Event | None" = None,
 ) -> bool:
     """Install packages with native extensions into the standalone Python's site-packages.
 
@@ -1324,8 +1325,12 @@ def install_native_packages(
     normalized = [s.strip() for s in specifiers if s.strip()]
     if not normalized:
         return True
+    if cancel_event is not None and cancel_event.is_set():
+        return False
 
     python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
+    if cancel_event is not None and cancel_event.is_set():
+        return False
     install_label = ", ".join(normalized)
     _emit_progress(progress_callback, 0.2, f"Installing native packages: {install_label}...")
 
@@ -1359,20 +1364,40 @@ def install_native_packages(
         logger.error("Native pip install failed to start: %s", exc)
         return False
 
+    watcher_stop = threading.Event()
+
+    def _cancel_watcher() -> None:
+        while not watcher_stop.wait(0.5):
+            if cancel_event is not None and cancel_event.is_set():
+                process.kill()
+                return
+            if process.poll() is not None:
+                return
+
+    watcher = threading.Thread(target=_cancel_watcher, name="native-pip-cancel-watcher", daemon=True)
+    if cancel_event is not None:
+        watcher.start()
     try:
         assert process.stdout is not None
         for raw_line in process.stdout:
+            if cancel_event is not None and cancel_event.is_set():
+                process.kill()
+                process.wait(timeout=30)
+                return False
             line = raw_line.rstrip()
             parsed = _pip_progress_from_output_line(line, install_label)
             if parsed is not None:
                 progress, message = parsed
                 _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
         returncode = process.wait(timeout=600)
+        if cancel_event is not None and cancel_event.is_set():
+            return False
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=30)
         return False
     finally:
+        watcher_stop.set()
         if process.stdout is not None:
             process.stdout.close()
 

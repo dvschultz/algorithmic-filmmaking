@@ -216,13 +216,12 @@ def run_isolated(
     """Run one allowlisted engine call in the family's worker.
 
     Returns the JSON ``value`` (or the whole worker result with ``raw=True``,
-    which also carries the collected ``executions``). Large values arrive via
-    a file in the task's staging directory and are read back here.
+    which also carries the collected ``executions``). The supervisor validates
+    and consumes staged files for large values before returning the result.
     """
-    import json
-
     from core.runtime_supervisor import (
-        WorkerCancelled, WorkerCrashed, WorkerError, WorkerTaskError, default_supervisor,
+        WorkerCancelled, WorkerCrashed, WorkerError, WorkerProtocolViolation,
+        WorkerTaskError, default_supervisor,
     )
 
     if call not in ISOLATED_CALLS:
@@ -256,14 +255,12 @@ def run_isolated(
         raise IsolatedCallError(f"{call} could not run in the {family} worker: {exc}") from exc
     value_path = result.get("value_path")
     if isinstance(value_path, str):
-        path = Path(value_path)
-        try:
-            result["value"] = json.loads(path.read_text(encoding="utf-8"))
-        finally:
-            try:
-                path.unlink()
-            except OSError:
-                pass
+        # Real supervisors consume staged payloads after validating them against
+        # the assigned task directory. Refuse references from alternate or
+        # outdated supervisor implementations rather than reading host paths.
+        raise WorkerProtocolViolation(
+            "Analysis payload reference was not validated by the worker supervisor"
+        )
     return result if raw else result.get("value")
 
 

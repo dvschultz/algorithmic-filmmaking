@@ -169,7 +169,7 @@ def test_ui_install_prompt_uses_the_staged_profile_path_when_isolated(monkeypatc
     calls = []
     monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
     monkeypatch.setattr("core.spine.runtime.install_runtime_profile", lambda profile, progress_callback=None, cancel_event=None: calls.append(("profile", profile)) or {"success": True})
-    legacy = lambda name, cb: calls.append(("legacy", name)) or True  # noqa: E731
+    legacy = lambda name, cb, **_kwargs: calls.append(("legacy", name)) or True  # noqa: E731
     assert dependency_widgets._install_feature("transcribe", None, legacy)
     assert dependency_widgets._install_feature("ocr", None, legacy)  # every profiled feature routes the same way
     assert dependency_widgets._install_feature("video_download", None, legacy)  # no profile: in-place path
@@ -206,7 +206,7 @@ def test_install_profile_reports_a_raising_native_install_instead_of_raising(
     _missing(monkeypatch, ["package:mlx_vlm"])
     monkeypatch.setattr("core.runtime_profiles.profile_can_stage", lambda profile: False)
 
-    def raising_install(feature, progress_callback=None):
+    def raising_install(feature, progress_callback=None, *, cancel_event=None):
         raise RuntimeError("mlx_vlm runtime is incomplete in the vlm worker: ImportError: tokenizers")
 
     monkeypatch.setattr("core.feature_registry.install_for_feature", raising_install)
@@ -217,3 +217,29 @@ def test_install_profile_reports_a_raising_native_install_instead_of_raising(
     assert status["installed"] is False
     assert status["failed_features"], "the feature that raised must be reported as failed"
     assert "tokenizers" in status["error"]
+
+
+def test_native_profile_stops_dispatching_features_after_cancel(monkeypatch, isolated_support):
+    import threading
+
+    from core.runtime_profiles import install_profile
+
+    cancel = threading.Event()
+    calls = []
+
+    def install(feature, progress_callback=None, *, cancel_event=None):
+        calls.append(feature)
+        assert cancel_event is cancel
+        cancel.set()
+        return False
+
+    monkeypatch.setattr("core.feature_registry.install_for_feature", install)
+    monkeypatch.setattr("core.runtime_profiles._retire_family_worker", lambda *_args: None)
+    monkeypatch.setattr("core.runtime_profiles.profile_status", lambda *_args: {"installed": True})
+
+    result = install_profile("vision-torch", cancel_event=cancel)
+
+    assert calls == ["worker_engine"]
+    assert result["cancelled"] is True
+    assert result["success"] is False
+    assert "changes already made" in result["error"]

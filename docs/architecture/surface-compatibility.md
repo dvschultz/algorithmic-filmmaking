@@ -179,7 +179,12 @@ allowlisted in `core/runtime_worker/calls.py`), paths travel as strings,
 `on_execution` provenance is replayed on the host, cancel events reach the
 worker task, and dependency/model failures keep their exception classes
 (`ImportError`, `ModelDownloadError`). Inside a worker the decorator is a
-no-op. The worker imports `core.analysis` itself: source runs put the
+no-op. Face environment probes also run in the vision worker, so querying
+provider availability does not import ONNX Runtime into the editor. Large
+analysis payload references are validated and decoded by the supervisor inside
+their assigned task staging directory; paths inside decoded engine data retain
+their operation-specific validation, such as the requested stem output directory.
+The worker imports `core.analysis` itself: source runs put the
 checkout on its path, frozen builds stage `core`/`models` as source beside
 the worker package (`packaging/build_support.collect_runtime_worker_datas`).
 
@@ -217,6 +222,10 @@ now cover every family (`transcription-whisper`, `vision-torch`, `ocr-paddle`,
 `native_install` (torch, mlx, insightface, ...) cannot be staged with
 `pip --target`, so their profiles install in place and are health-checked in a
 worker afterwards (`staged_installs: false` in the status).
+Cancellation stops subsequent feature dispatch and reaches the active package
+installer in both modes. In-place installation does not roll back packages
+already installed before cancellation. Desktop readiness checks run off the GUI
+thread while Qt continues processing events, including cancellation.
 `SCENE_RIPPER_APP_SUPPORT_DIR` relocates the managed runtime root for tests and
 smoke runs.
 
@@ -233,6 +242,10 @@ nothing. Switching A/B keeps the elapsed playhead time clamped to the arriving
 sequence. `SequenceTab._load_active_sequence` now maps timeline entries to
 library clips before feeding the preview strip (it passed `SequenceClip`
 objects before, which have no thumbnail).
+Recipe matching compares absolute source trims and complete timeline placement,
+including rational timing. A gap or a slip edit with unchanged duration therefore
+marks the timeline as changed. Generation and regeneration validate declared
+asset parameters through the same shared preparation path before work is queued.
 
 ## Shared library item models (U15)
 

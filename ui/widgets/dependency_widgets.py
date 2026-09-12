@@ -1,6 +1,7 @@
 """Widgets for dependency management: banners, download dialogs, progress."""
 
 import logging
+import inspect
 import threading
 from typing import Optional
 
@@ -20,6 +21,13 @@ from PySide6.QtCore import Qt, Signal, QThread
 from ui.theme import theme, Spacing, TypeScale
 
 logger = logging.getLogger(__name__)
+
+_READINESS_CANCELLED = "runtime:readiness check cancelled"
+
+
+def readiness_check_cancelled(missing: list[str]) -> bool:
+    """Return whether the user cancelled the GUI readiness probe."""
+    return _READINESS_CANCELLED in missing
 
 
 class DependencyBanner(QWidget):
@@ -148,9 +156,14 @@ class _DownloadWorker(QThread):
 
     def run(self):
         try:
-            try:
+            parameters = inspect.signature(self._install_func).parameters.values()
+            accepts_cancel = any(
+                parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD)
+                for parameter in parameters
+            ) or len(parameters) >= 2
+            if accepts_cancel:
                 result = self._install_func(self._progress_adapter, self.cancel_event)
-            except TypeError:
+            else:
                 result = self._install_func(self._progress_adapter)  # legacy single-argument installers
             if not self._cancelled:
                 if result is False:
@@ -160,6 +173,76 @@ class _DownloadWorker(QThread):
         except Exception as e:
             if not self._cancelled:
                 self.failed.emit(str(e))
+
+
+class _ReadinessWorker(QThread):
+    """Run a potentially cold native-runtime probe outside the GUI thread."""
+
+    result_ready = Signal(object)
+
+    def __init__(self, feature_name: str):
+        super().__init__()
+        self._feature_name = feature_name
+        self.cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def run(self) -> None:
+        from core.feature_registry import check_feature_ready
+
+        try:
+            result = check_feature_ready(self._feature_name, cancel_event=self.cancel_event)
+        except Exception as exc:  # noqa: BLE001 - convert probe failure to readiness detail
+            result = (False, [f"runtime:{str(exc).strip() or type(exc).__name__}"])
+        if self.cancel_event.is_set():
+            result = (False, [_READINESS_CANCELLED])
+        self.result_ready.emit(result)
+
+
+class _ReadinessDialog(QDialog):
+    """Keep the nested event loop alive until a cancelled probe has stopped."""
+
+    def __init__(self, cancel_callback, parent=None):
+        super().__init__(parent)
+        self._cancel_callback = cancel_callback
+        self.setWindowTitle("Checking dependencies")
+        self.setWindowModality(Qt.WindowModal)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(Spacing.MD)
+        self._label = QLabel("Checking runtime readiness...")
+        layout.addWidget(self._label)
+        progress = QProgressBar()
+        progress.setRange(0, 0)
+        layout.addWidget(progress)
+        self._cancel_button = QPushButton("Cancel")
+        self._cancel_button.clicked.connect(self._request_cancel)
+        layout.addWidget(self._cancel_button)
+
+    def _request_cancel(self) -> None:
+        self._cancel_callback()
+        self._label.setText("Cancelling readiness check...")
+        self._cancel_button.setEnabled(False)
+
+    def reject(self) -> None:
+        self._request_cancel()
+
+
+def _check_feature_ready_responsive(feature_name: str, parent_widget=None) -> tuple[bool, list[str]]:
+    """Synchronously return readiness while a nested Qt loop keeps the UI alive."""
+    worker = _ReadinessWorker(feature_name)
+    outcome: list[tuple[bool, list[str]]] = []
+    qt_parent = parent_widget if isinstance(parent_widget, QWidget) else None
+    dialog = _ReadinessDialog(worker.cancel, qt_parent)
+
+    def _done(result) -> None:
+        outcome.append(result)
+
+    worker.result_ready.connect(_done)
+    worker.finished.connect(lambda: dialog.done(QDialog.Accepted))
+    worker.start()
+    dialog.exec()
+    return outcome[0] if outcome else (False, [_READINESS_CANCELLED])
 
 
 class DependencyDownloadDialog(QDialog):
@@ -191,6 +274,8 @@ class DependencyDownloadDialog(QDialog):
 
         self._install_func = install_func
         self._worker: Optional[_DownloadWorker] = None
+        self._cancel_pending = False
+        self._pending_outcome: tuple[_DownloadWorker, bool, str] | None = None
         self._log_host = self._resolve_log_host(parent)
 
         layout = QVBoxLayout(self)
@@ -248,38 +333,59 @@ class DependencyDownloadDialog(QDialog):
             if self._worker:
                 self._worker.progress.emit(progress, message)
 
-        self._worker = _DownloadWorker(self._install_func, progress_callback)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.finished_ok.connect(self._on_success)
-        self._worker.failed.connect(self._on_failure)
-        self._worker.start()
+        worker = _DownloadWorker(self._install_func, progress_callback)
+        self._worker = worker
+        worker.progress.connect(self._on_progress)
+        worker.finished_ok.connect(lambda: self._on_success(worker))
+        worker.failed.connect(lambda message: self._on_failure(worker, message))
+        worker.finished.connect(lambda: self._on_worker_stopped(worker))
+        worker.start()
 
     def _on_progress(self, progress: float, message: str):
         self._progress_bar.setValue(int(progress * 1000))
         self._status_label.setText(message)
 
-    def _on_success(self):
+    def _on_success(self, worker: _DownloadWorker):
+        self._download_btn.setEnabled(False)
         self._progress_bar.setValue(1000)
         self._status_label.setText("Download complete!")
-        self._worker = None
-        self.download_completed.emit()
-        self.accept()
+        self._pending_outcome = (worker, True, "")
 
-    def _on_failure(self, error_msg: str):
-        self._worker = None
+    def _on_failure(self, worker: _DownloadWorker, error_msg: str):
+        self._download_btn.setEnabled(False)
         self._status_label.setText(f"Failed: {error_msg}")
-        self._cancel_btn.setText("Close")
-
-        # Offer retry
-        self._download_btn.setText("Retry")
-        self._download_btn.setEnabled(True)
+        self._pending_outcome = (worker, False, error_msg)
 
     def reject(self):
         if self._worker and self._worker.isRunning():
+            self._cancel_pending = True
             self._worker.cancel()
-            self._worker.wait(5000)
-            self._worker = None
+            self._status_label.setText("Cancelling download...")
+            self._cancel_btn.setEnabled(False)
+            return
         super().reject()
+
+    def _on_worker_stopped(self, worker: _DownloadWorker) -> None:
+        if worker is not self._worker:
+            return
+        self._worker = None
+        if self._cancel_pending:
+            self._cancel_pending = False
+            self._pending_outcome = None
+            super().reject()
+            return
+        outcome = self._pending_outcome
+        self._pending_outcome = None
+        if outcome is None or outcome[0] is not worker:
+            return
+        if outcome[1]:
+            self.download_completed.emit()
+            self.accept()
+            return
+        self._cancel_btn.setText("Close")
+        self._cancel_btn.setEnabled(True)
+        self._download_btn.setText("Retry")
+        self._download_btn.setEnabled(True)
 
 
 def _is_compiler_available() -> bool:
@@ -324,7 +430,9 @@ def _install_feature(feature_name: str, progress_callback, install_for_feature, 
         if not result.get("success"):
             raise RuntimeError(str(result.get("error") or "Runtime profile install failed"))
         return True
-    return install_for_feature(feature_name, progress_callback)
+    return install_for_feature(
+        feature_name, progress_callback, cancel_event=cancel_event
+    )
 
 
 def prompt_feature_download(
@@ -345,15 +453,16 @@ def prompt_feature_download(
     """
     from core.feature_registry import (
         FEATURE_DEPS,
-        check_feature_ready,
         get_feature_size_estimate,
         install_for_feature,
         requires_full_package_repair,
     )
 
-    available, missing = check_feature_ready(feature_name)
+    available, missing = _check_feature_ready_responsive(feature_name, parent_widget)
     if available:
         return True
+    if readiness_check_cancelled(missing):
+        return False
 
     # Check if this feature needs a C/C++ compiler and warn early
     deps = FEATURE_DEPS.get(feature_name)
@@ -401,5 +510,5 @@ def prompt_feature_download(
         return False
 
     # Re-check full runtime readiness, not just package presence.
-    available, _ = check_feature_ready(feature_name)
+    available, _ = _check_feature_ready_responsive(feature_name, parent_widget)
     return available

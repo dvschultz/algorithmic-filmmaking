@@ -36,8 +36,8 @@ from ui.workers.variation_worker import VariationWorker
 from core.cost_estimates import estimate_sequence_cost
 from core.remix import run_registry_algorithm
 from core.analysis_dependencies import get_operation_feature_candidates
-from core.feature_registry import check_feature_ready
 from core.settings import get_llm_api_key, get_replicate_api_key, load_settings, save_settings
+from ui.widgets.dependency_widgets import _check_feature_ready_responsive as check_feature_ready
 
 logger = logging.getLogger(__name__)
 

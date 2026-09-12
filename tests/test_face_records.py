@@ -14,6 +14,40 @@ from core.operations.face_records import face_packages
 from tests.test_spine_analyze import _build_project
 
 
+def test_isolated_face_environment_does_not_import_onnx_in_host(monkeypatch):
+    import builtins
+
+    monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKERS", "1")
+    monkeypatch.setenv("SCENE_RIPPER_NATIVE_WORKER_FAMILIES", "vision")
+    monkeypatch.delenv("SCENE_RIPPER_WORKER_PROCESS", raising=False)
+    attempted = []
+    actual_import = builtins.__import__
+
+    def host_import(name, *args, **kwargs):
+        if name == "onnxruntime":
+            attempted.append(name)
+            raise AssertionError("ONNX Runtime must only be imported by the vision worker")
+        return actual_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", host_import)
+    monkeypatch.setattr(
+        "core.runtime_supervisor.default_supervisor",
+        lambda: SimpleNamespace(
+            run=lambda *args, **kwargs: {
+                "value": {
+                    "packages": face_packages(),
+                    "available_providers": ["CPUExecutionProvider"],
+                }
+            }
+        ),
+    )
+
+    from core.operations.face_records import face_environment
+
+    assert face_environment()["available_providers"] == ["CPUExecutionProvider"]
+    assert attempted == []
+
+
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     project = _build_project(tmp_path, 1)

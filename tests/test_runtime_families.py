@@ -109,6 +109,25 @@ def test_worker_failures_keep_their_exception_classes(monkeypatch, worker_superv
         run_isolated("vision", "selftest.identity", {"unexpected": object()})  # not JSON-encodable
 
 
+def test_analysis_payload_is_decoded_only_after_supervisor_validation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from core.runtime_supervisor import WorkerProtocolViolation
+
+    victim = tmp_path / "unrelated.json"
+    victim.write_text('{"private": true}', encoding="utf-8")
+    monkeypatch.setattr(
+        "core.runtime_supervisor.default_supervisor",
+        lambda: SimpleNamespace(
+            run=lambda *args, **kwargs: {"value_path": str(victim)}
+        ),
+    )
+
+    with pytest.raises(WorkerProtocolViolation):
+        run_isolated("vision", "embeddings.thumbnails", {"thumbnail_paths": []})
+
+    assert victim.exists()
+
+
 @pytest.mark.skipif(not __import__("importlib.util").util.find_spec("librosa"), reason="librosa not installed")
 def test_audio_family_analyzes_in_the_worker_without_importing_librosa_here(monkeypatch, worker_supervisor, tmp_path):
     from core.analysis.audio import AudioAnalysis, analyze_audio

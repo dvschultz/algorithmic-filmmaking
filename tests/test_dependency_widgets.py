@@ -5,9 +5,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from PySide6.QtWidgets import QDialog, QMessageBox
+from PySide6.QtCore import QTimer
 
 from ui.main_window import MainWindow
-from ui.widgets.dependency_widgets import _DownloadWorker, prompt_feature_download
+from ui.widgets.dependency_widgets import (
+    DependencyDownloadDialog,
+    _DownloadWorker,
+    prompt_feature_download,
+)
 
 
 def test_download_worker_reports_failed_verification():
@@ -19,6 +24,47 @@ def test_download_worker_reports_failed_verification():
     worker.run()
 
     assert events == [("failed", "Install completed but dependency verification failed.")]
+
+
+def test_download_worker_does_not_retry_internal_type_error():
+    calls = []
+    events = []
+
+    def install(_progress, _cancel_event):
+        calls.append(True)
+        raise TypeError("installer bug")
+
+    worker = _DownloadWorker(install, lambda *_args: None)
+    worker.failed.connect(events.append)
+    worker.run()
+
+    assert calls == [True]
+    assert events == ["installer bug"]
+
+
+def test_download_dialog_waits_for_matching_thread_finish_before_retry(monkeypatch):
+    dialog = DependencyDownloadDialog("Install", "Installing", lambda _progress: True)
+    old_worker = _DownloadWorker(lambda _progress: True, lambda *_args: None)
+    replacement = _DownloadWorker(lambda _progress: True, lambda *_args: None)
+    dialog._worker = old_worker
+
+    dialog._on_failure(old_worker, "failed")
+
+    assert dialog._worker is old_worker
+    assert not dialog._download_btn.isEnabled()
+
+    dialog._worker = replacement
+    dialog._on_worker_stopped(old_worker)
+
+    assert dialog._worker is replacement
+    assert not dialog._download_btn.isEnabled()
+
+    dialog._worker = old_worker
+    dialog._on_worker_stopped(old_worker)
+
+    assert dialog._worker is None
+    assert dialog._download_btn.isEnabled()
+    assert dialog._download_btn.text() == "Retry"
 
 
 def test_prompt_feature_download_rechecks_runtime_readiness(monkeypatch):
@@ -36,7 +82,7 @@ def test_prompt_feature_download_rechecks_runtime_readiness(monkeypatch):
 
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda _feature: next(checks),
+        lambda _feature, **_kwargs: next(checks),
     )
     monkeypatch.setattr("core.feature_registry.get_feature_size_estimate", lambda _feature: 450)
     monkeypatch.setattr(
@@ -49,12 +95,92 @@ def test_prompt_feature_download_rechecks_runtime_readiness(monkeypatch):
     assert prompt_feature_download("shot_classify") is False
 
 
+def test_readiness_cancel_keeps_gui_responsive_until_probe_stops(monkeypatch):
+    import time
+
+    from ui.widgets.dependency_widgets import (
+        _ReadinessDialog,
+        _check_feature_ready_responsive,
+    )
+
+    probe_stopped = []
+    heartbeat = []
+
+    def _blocked_probe(_feature, *, cancel_event=None):
+        assert cancel_event is not None
+        while not cancel_event.wait(0.01):
+            pass
+        time.sleep(0.05)
+        probe_stopped.append(True)
+        return True, []  # a late successful probe must not override cancellation
+
+    monkeypatch.setattr("core.feature_registry.check_feature_ready", _blocked_probe)
+    original_exec = _ReadinessDialog.exec
+
+    def _exec_and_cancel(self):
+        timer = QTimer(self)
+        timer.timeout.connect(lambda: heartbeat.append(True))
+        timer.start(5)
+        QTimer.singleShot(10, self.reject)  # exercise the window-close path
+        return original_exec(self)
+
+    monkeypatch.setattr(_ReadinessDialog, "exec", _exec_and_cancel)
+
+    assert _check_feature_ready_responsive("transcribe") == (
+        False,
+        ["runtime:readiness check cancelled"],
+    )
+    assert probe_stopped == [True]
+    assert heartbeat  # nested Qt event processing continued during cancellation
+
+
+def test_cancelled_readiness_does_not_offer_install(monkeypatch):
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets._check_feature_ready_responsive",
+        lambda *_args: (False, ["runtime:readiness check cancelled"]),
+    )
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets.QMessageBox.question",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cancelled readiness must not offer installation")
+        ),
+    )
+
+    assert prompt_feature_download("transcribe") is False
+
+
+def test_analysis_gate_cancel_stops_fallback_and_install_prompt(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace()
+
+    checks = []
+    monkeypatch.setattr(
+        "ui.main_window.get_operation_feature_candidates",
+        lambda *_args, **_kwargs: ["describe_local", "describe_local_cpu"],
+    )
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets._check_feature_ready_responsive",
+        lambda feature, *_args: checks.append(feature)
+        or (False, ["runtime:readiness check cancelled"]),
+    )
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets.prompt_feature_download",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cancelled readiness must not start an install prompt")
+        ),
+    )
+
+    assert MainWindow._ensure_analysis_operation_available(Harness(), "describe") is False
+    assert checks == ["describe_local"]
+
+
 def test_prompt_feature_download_shows_full_repair_stack(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda _feature: (False, ["package:ultralytics"]),
+        lambda _feature, **_kwargs: (False, ["package:ultralytics"]),
     )
     monkeypatch.setattr("core.feature_registry.get_feature_size_estimate", lambda _feature: 430)
 
@@ -79,7 +205,7 @@ def test_analysis_operation_gate_uses_runtime_ready_check(monkeypatch):
     )
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda _feature: (False, ["runtime:broken"]),
+        lambda _feature, **_kwargs: (False, ["runtime:broken"]),
     )
     monkeypatch.setattr(
         "ui.widgets.dependency_widgets.prompt_feature_download",
@@ -98,7 +224,7 @@ def test_extract_text_hybrid_prompts_for_ocr_install(monkeypatch):
 
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda _feature: (False, ["package:paddleocr"]),
+        lambda _feature, **_kwargs: (False, ["package:paddleocr"]),
     )
     monkeypatch.setattr(
         "ui.widgets.dependency_widgets.prompt_feature_download",
@@ -121,7 +247,7 @@ def test_description_gate_attempts_preferred_install_before_cpu_fallback(monkeyp
         lambda *_args, **_kwargs: ["describe_local", "describe_local_cpu"],
     )
 
-    def _check_feature_ready(feature_name):
+    def _check_feature_ready(feature_name, **_kwargs):
         if feature_name == "describe_local":
             return False, ["package:mlx_vlm"]
         if feature_name == "describe_local_cpu":
@@ -151,7 +277,7 @@ def test_analysis_gate_prompts_alternate_when_preferred_install_fails(monkeypatc
     )
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda _feature: (False, ["package:missing"]),
+        lambda _feature, **_kwargs: (False, ["package:missing"]),
     )
     monkeypatch.setattr(
         "ui.widgets.dependency_widgets.prompt_feature_download",
@@ -175,7 +301,7 @@ def test_description_gate_uses_fresh_preferred_install_when_available(monkeypatc
     )
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda feature_name: ((feature_name == "describe_local"), []),
+        lambda feature_name, **_kwargs: ((feature_name == "describe_local"), []),
     )
     monkeypatch.setattr(
         "ui.widgets.dependency_widgets.prompt_feature_download",

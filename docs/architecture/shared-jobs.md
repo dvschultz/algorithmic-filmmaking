@@ -71,6 +71,16 @@ model. A retry after a checkpoint failure verifies the project receipt and outpu
 and acknowledges it without applying twice. Missing or corrupt results, changed
 inputs, removed receipts, and edited committed outputs fail closed.
 
+Sequence-generation retries with an explicit idempotency key restore the failed
+job's persisted `OperationSpec`, including its original seed and result identity.
+They revalidate the stored asset parameters and input snapshot before dispatch.
+A fresh unkeyed invocation remains an independent generation; direct engine
+retries must retain their original spec rather than construct a new request.
+Sequence publication checks cancellation both before application and when the
+batch is flushed. An interrupted publication discards the detached edit and the
+runtime reports cancellation, while the computed recipe remains available for
+an explicit retry.
+
 `result_batch()` owns the private model and writer lease. Normal exit flushes a
 partial group; exceptional exit discards unsaved changes. Failed application or
 publication makes the batch unusable, even if a caller catches the exception;

@@ -259,26 +259,40 @@ def install_profile(
             _retire_family_worker(profile.family)
             failed: list[str] = []
             errors: list[str] = []
+            cancelled = False
             for feature in profile.features:
+                if _cancelled(cancel_event):
+                    cancelled = True
+                    break
                 # install_for_feature raises when its post-install runtime
                 # validation fails (a version conflict in the installed set, say).
                 # This function reports install failures, so surface it as a
                 # failed feature instead of unwinding through the caller.
                 try:
-                    installed_ok = bool(install_for_feature(feature, progress_callback))
+                    installed_ok = bool(
+                        install_for_feature(feature, progress_callback, cancel_event=cancel_event)
+                    )
                 except Exception as exc:  # noqa: BLE001 - reported in the outcome
                     logger.warning("Install of %s for profile %s failed: %s", feature, profile.id, exc)
                     installed_ok = False
                     errors.append(f"{feature}: {exc}")
                 if not installed_ok:
                     failed.append(feature)
+                if _cancelled(cancel_event):
+                    cancelled = True
+                    break
             with _probe_cache_lock:
                 _probe_cache.clear()
             _retire_family_worker(profile.family)
             status = profile_status(profile_id)
             status["failed_features"] = failed
             status["staged"] = False
-            status["success"] = not failed and status["installed"]
+            status["success"] = not cancelled and not failed and status["installed"]
+            if cancelled:
+                status["cancelled"] = True
+                status["error"] = (
+                    "Install cancelled; changes already made by the in-place installer were kept"
+                )
             if errors:
                 status["error"] = "; ".join(errors)
             if status["success"] and profile.probe_module:
@@ -438,6 +452,7 @@ def _retire_family_worker(family: str) -> None:
 
 def probe_profile_runtime(
     profile_id: str, *, staged_paths: tuple[Path, ...] = (), restart: bool = True,
+    cancel_event: "threading.Event | None" = None,
 ) -> dict[str, Any]:
     """Import the profile's runtime inside a worker and report the result.
 
@@ -472,14 +487,20 @@ def probe_profile_runtime(
             worker = ManagedWorker(launch)
             worker.start()
             try:
-                result = worker.run("probe", {"module": profile.probe_module}, timeout=_probe_timeout())
+                result = worker.run(
+                    "probe", {"module": profile.probe_module},
+                    cancel_event=cancel_event, timeout=_probe_timeout(),
+                )
             finally:
                 worker.close()
         else:
             supervisor = default_supervisor()
             if restart:
                 supervisor.restart_family(profile.family)
-            result = supervisor.run(profile.family, "probe", {"module": profile.probe_module}, timeout=_probe_timeout())
+            result = supervisor.run(
+                profile.family, "probe", {"module": profile.probe_module},
+                cancel_event=cancel_event, timeout=_probe_timeout(),
+            )
     except WorkerError as exc:
         raise RuntimeError(f"{profile.probe_module} runtime is incomplete in the {profile.family} worker: {exc}") from exc
     result["profile"] = profile.id

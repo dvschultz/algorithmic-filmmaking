@@ -1946,8 +1946,11 @@ async def start_generate_sequence(
     edit. A retry after a crash replays the recorded recipe rather than
     repeating paid inference; cancellation publishes nothing.
     """
-    from scene_ripper_mcp.security import validate_project_path, validate_path
-    from core.jobs.sequence_generation import run_sequence_generation_job, sequence_generation_job_spec
+    from scene_ripper_mcp.security import validate_project_path
+    from core.jobs.sequence_generation import (
+        run_sequence_generation_runtime_job,
+        sequence_generation_retry_spec,
+    )
     from core.remix.registry import registry
     from core.spine.project_io import load_with_mtime
 
@@ -1961,29 +1964,17 @@ async def start_generate_sequence(
                 f"Algorithm {algorithm!r} is not available through the registry. "
                 f"Registry algorithms: {', '.join(registry.keys())}"
             )
-        parameters = dict(parameters or {})
-        for pname in definition.asset_parameters:
-            value = parameters.get(pname)
-            if value in (None, "", []):
-                continue
-            values = value if isinstance(value, list) else [value]
-            resolved = []
-            for item in values:
-                ok, err, resolved_path = validate_path(str(item), must_exist=True, must_be_file=True)
-                if not ok:
-                    raise ValueError(f"Parameter {pname!r}: {err}")
-                resolved.append(str(resolved_path))
-            parameters[pname] = resolved if isinstance(value, list) else resolved[0]
         if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
             raise ValueError("Seed must be a non-negative integer")
         project, mtime = load_with_mtime(path)
-        operation = sequence_generation_job_spec(
-            project, algorithm, clip_ids=clip_ids, parameters=parameters, seed=seed, name=name,
-        )
         store = _lifespan(ctx)["job_store"]
+        operation = sequence_generation_retry_spec(
+            store, path, project, algorithm, idempotency_key=idempotency_key,
+            clip_ids=clip_ids, parameters=parameters, seed=seed, name=name,
+        )
 
         def run(progress, cancel):
-            return run_sequence_generation_job(store, path, operation, progress, cancel)
+            return run_sequence_generation_runtime_job(store, path, operation, progress, cancel)
 
         return start_job(
             ctx, kind=operation.kind, args=operation.arguments,
@@ -2012,57 +2003,39 @@ async def start_regenerate_sequence(
     and the recorded recipe is replayed on retry instead of paying again.
     """
     from scene_ripper_mcp.security import validate_project_path
-    from core.jobs.sequence_generation import run_sequence_generation_job, sequence_generation_job_spec
-    from core.remix.registry import registry
+    from core.jobs.sequence_generation import (
+        restored_sequence_generation_operation,
+        run_sequence_generation_runtime_job,
+        sequence_generation_retry_spec,
+    )
     from core.spine.project_io import load_with_mtime
-    from core.spine.sequences import recipe_input_problems
+    from core.spine.sequences import prepare_regeneration
 
     valid, error, path = validate_project_path(project_path)
     if not valid:
         return json.dumps({"success": False, "error": error})
     try:
         project, mtime = load_with_mtime(path)
-        sequence = project.sequence if sequence_id is None else next(
-            (s for s in project.sequences if s.id == sequence_id), None
-        )
-        if sequence is None:
-            raise ValueError("Sequence not found")
-        recipe = sequence.readable_recipe
-        if recipe is None:
-            raise ValueError("This sequence has no readable recipe")
-        definition = registry.get(recipe.algorithm)
-        if definition is None:
-            raise ValueError(f"Algorithm {recipe.algorithm!r} is not available in this build")
-        if definition.version != recipe.algorithm_version:
-            raise ValueError(
-                f"Recipe was made with {recipe.algorithm} version {recipe.algorithm_version}; "
-                f"this build has version {definition.version}"
-            )
-        problems = recipe_input_problems(project, recipe)
-        if problems:
-            raise ValueError("Recipe inputs changed: " + "; ".join(problems))
-        merged = dict(recipe.parameters)
-        for key in definition.variation_resets:
-            merged.pop(key, None)
-        if parameters is not None:
-            if not isinstance(parameters, dict):
-                raise ValueError("Parameters must be an object")
-            merged.update(parameters)
-        if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
-            raise ValueError("Seed must be a non-negative integer")
-        if definition.seeded and seed is None and keep_seed:
-            seed = recipe.seed
-        if not definition.seeded:
-            seed = None
-        label = name.strip() if isinstance(name, str) and name.strip() else f"{sequence.name} variation"
-        operation = sequence_generation_job_spec(
-            project, recipe.algorithm, clip_ids=[item.clip_id for item in recipe.inputs],
-            parameters=merged, seed=seed, name=label, parent_recipe_id=recipe.id,
-        )
         store = _lifespan(ctx)["job_store"]
+        operation = restored_sequence_generation_operation(
+            store, path, project, idempotency_key,
+        )
+        if operation is None:
+            plan = prepare_regeneration(
+                project, sequence_id, parameters=parameters, seed=seed,
+                keep_seed=keep_seed, name=name,
+            )
+            if isinstance(plan, dict):
+                return json.dumps(plan)
+            operation = sequence_generation_retry_spec(
+                store, path, project, plan.algorithm, idempotency_key=idempotency_key,
+                clip_ids=list(plan.clip_ids),
+                parameters=plan.parameters, seed=plan.seed, name=plan.name,
+                parent_recipe_id=plan.parent_recipe_id,
+            )
 
         def run(progress, cancel):
-            return run_sequence_generation_job(store, path, operation, progress, cancel)
+            return run_sequence_generation_runtime_job(store, path, operation, progress, cancel)
 
         return start_job(
             ctx, kind=operation.kind, args=operation.arguments,

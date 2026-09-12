@@ -14,6 +14,7 @@ from core.analysis_records import (
 )
 from models.analysis_record import AnalysisRecord
 from core.jobs.media import MediaFingerprints
+from core.runtime_families import isolated
 
 FACE_SAMPLING = {
     "policy": "half-open-uniform-frames/v1",
@@ -62,8 +63,9 @@ def face_packages() -> dict:
     )
 
 
+@isolated("vision", "faces.environment")
 def face_environment() -> dict:
-    """Worker-only runtime selection; no face model is loaded here."""
+    """Report the native face runtime selected in the executing process."""
     import onnxruntime
 
     return {

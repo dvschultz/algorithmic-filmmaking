@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from math import isfinite
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, cast
 
 from models.recipe import SequenceRecipe
 from models.sequence import Sequence
@@ -128,6 +128,36 @@ def unique_sequence_name(project: Project, name: str) -> str:
 # --- Registry-backed generation -------------------------------------------
 
 SEQUENCE_SETTING_FIELDS = frozenset({"music_path", "reference_source_id", "dimension_weights", "allow_repeats"})
+
+
+def prepare_generation_parameters(project: Project, algorithm: str, parameters: dict | None) -> dict[str, Any]:
+    """Normalize and validate registry parameters shared by every agent surface."""
+    from core.remix.registry import normalize_parameters, registry
+
+    definition = registry.require(algorithm)
+    if parameters is not None and not isinstance(parameters, dict):
+        raise ValueError("Parameters must be an object")
+    prepared = dict(parameters or {})
+    for name in definition.asset_parameters:
+        value = prepared.get(name)
+        if value in (None, "", []):
+            continue
+        values = value if isinstance(value, list) else [value]
+        resolved: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                raise ValueError(f"Parameter {name!r} must hold file paths")
+            ok, error, path = validate_path(item, must_exist=True, must_be_file=True)
+            if not ok:
+                raise ValueError(f"Parameter {name!r}: {error}")
+            resolved.append(str(path))
+        prepared[name] = resolved if isinstance(value, list) else resolved[0]
+    normalized = normalize_parameters(definition, prepared)
+    for name in definition.source_parameters:
+        source_id = normalized.get(name)
+        if not isinstance(source_id, str) or source_id not in project.sources_by_id:
+            raise ValueError(f"Parameter {name!r} must name a source in this project")
+    return cast(dict[str, Any], normalized)
 
 
 def recipe_input_problems(project: Project, recipe: SequenceRecipe) -> list[str]:
@@ -292,25 +322,12 @@ def generate_sequence(
     candidates, error = _generation_candidates(project, clip_ids)
     if error:
         return {"success": False, "error": error}
-    if parameters is not None and not isinstance(parameters, dict):
-        return {"success": False, "error": "Parameters must be an object"}
     if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
         return {"success": False, "error": "Seed must be a non-negative integer"}
-    parameters = dict(parameters or {})
-    for name in definition.asset_parameters:
-        value = parameters.get(name)
-        if value is None or value == "" or value == []:
-            continue
-        values = value if isinstance(value, list) else [value]
-        resolved = []
-        for item in values:
-            if not isinstance(item, str):
-                return {"success": False, "error": f"Parameter {name!r} must hold file paths"}
-            ok, error, path = validate_path(item, must_exist=True, must_be_file=True)
-            if not ok:
-                return {"success": False, "error": f"Parameter {name!r}: {error}"}
-            resolved.append(str(path))
-        parameters[name] = resolved if isinstance(value, list) else resolved[0]
+    try:
+        parameters = prepare_generation_parameters(project, definition.key, parameters)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
     for name in definition.source_parameters:
         source_id = (parameters or {}).get(name)
         if not isinstance(source_id, str) or source_id not in project.sources_by_id:
@@ -361,20 +378,54 @@ def _find_sequence(project: Project, sequence_id: str | None) -> Sequence | None
     return next((s for s in project.sequences if s.id == sequence_id), None)
 
 
-def recipe_matches_timeline(sequence: Sequence, recipe: SequenceRecipe) -> bool:
+def recipe_matches_timeline(
+    sequence: Sequence, recipe: SequenceRecipe, project: Project | None = None,
+) -> bool:
     """Whether track 0 still holds exactly the realized entries, in order."""
     placed = sequence.tracks[0].clips if sequence.tracks else []
     if len(placed) != len(recipe.realized) or len(sequence.tracks) > 1 and any(
         track.clips for track in sequence.tracks[1:]
     ):
         return False
+    from fractions import Fraction
+    from core.sequence_time import video_entry
+    from models.clip import Clip, Source
+
+    position = Fraction(0)
+    inputs_by_id = {item.clip_id: item for item in recipe.inputs}
+    snapshot_sources: dict[tuple[str, float], Source] = {}
     for entry, realized in zip(placed, recipe.realized):
-        if entry.source_clip_id != realized.clip_id or entry.source_id != realized.source_id:
+        snapshot = inputs_by_id.get(realized.clip_id)
+        if snapshot is None:
             return False
-        if entry.hflip != realized.hflip or entry.vflip != realized.vflip or entry.reverse != realized.reverse:
+        source = project.sources_by_id.get(snapshot.source_id) if project is not None else None
+        source_key = (snapshot.source_id, snapshot.source_fps)
+        snapshot_source = snapshot_sources.get(source_key)
+        if snapshot_source is None:
+            snapshot_source = Source(
+                id=snapshot.source_id, fps=snapshot.source_fps,
+                variable_frame_rate=bool(source and source.variable_frame_rate),
+                frame_timestamps=source.frame_timestamps if source is not None else None,
+            )
+            snapshot_sources[source_key] = snapshot_source
+        try:
+            expected = video_entry(
+                Clip(
+                    id=snapshot.clip_id, source_id=snapshot.source_id,
+                    start_frame=snapshot.start_frame, end_frame=snapshot.end_frame,
+                ),
+                snapshot_source, timeline_fps=sequence.fps, start=position,
+                relative_range=realized.relative_range,
+            )
+            next_position = expected.timeline_range.end
+        except ValueError:
             return False
-        if entry.out_point - entry.in_point != realized.out_offset - realized.in_offset:
+        expected.hflip, expected.vflip, expected.reverse = (
+            realized.hflip, realized.vflip, realized.reverse,
+        )
+        if _timeline_identity(entry) != _timeline_identity(expected):
             return False
+        position = next_position
     return True
 
 
@@ -401,7 +452,7 @@ def get_sequence_recipe(project: Project, sequence_id: str | None = None) -> dic
         "uses_provider": recipe.uses_provider,
         "reconstructable": not problems,
         "problems": problems,
-        "matches_timeline": recipe_matches_timeline(sequence, recipe),
+        "matches_timeline": recipe_matches_timeline(sequence, recipe, project),
     }
 
 
@@ -634,6 +685,10 @@ def prepare_regeneration(
         if not isinstance(parameters, dict):
             return {"success": False, "error": "Parameters must be an object"}
         merged.update(parameters)
+    try:
+        merged = prepare_generation_parameters(project, definition.key, merged)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
     if seed is not None and (isinstance(seed, bool) or type(seed) is not int or seed < 0):
         return {"success": False, "error": "Seed must be a non-negative integer"}
     if definition.seeded and seed is None and keep_seed:
@@ -703,8 +758,10 @@ def _sequence_summary(sequence: Sequence) -> dict:
 def _timeline_identity(entry: Any) -> tuple:
     """Everything that makes two placed entries the same cut: media, range, place, transforms."""
     return (
-        entry.source_clip_id, entry.frame_id, entry.track_index, entry.start_frame,
+        entry.source_clip_id, entry.source_id, entry.frame_id, entry.track_index, entry.start_frame,
         entry.in_point, entry.out_point, entry.hold_frames, entry.hflip, entry.vflip, entry.reverse,
+        entry.source_rate, entry.timeline_rate, entry.timeline_start,
+        entry.source_presentation, entry.hold_duration,
     )
 
 

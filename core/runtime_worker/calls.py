@@ -35,6 +35,7 @@ ISOLATED_CALLS: dict[str, tuple[str, str]] = {
     "shots.classify": ("core.analysis.shots", "classify_shot_type"),
     "faces.from_image": ("core.analysis.faces", "extract_faces_from_image"),
     "faces.from_clip": ("core.analysis.faces", "extract_faces_from_clip"),
+    "faces.environment": ("core.operations.face_records", "face_environment"),
     "gaze.from_clip": ("core.analysis.gaze", "extract_gaze_from_clip"),
     "classification.frame": ("core.analysis.classification", "classify_frame"),
     # ocr (paddle; the VLM fallback stays in the host with its credentials)

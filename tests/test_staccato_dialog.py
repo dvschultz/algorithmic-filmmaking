@@ -167,7 +167,7 @@ def test_declining_stem_dependency_prompt_keeps_balanced_profile(qapp, monkeypat
 
     monkeypatch.setattr(
         "core.feature_registry.check_feature_ready",
-        lambda feature: (False, ["demucs"]),
+        lambda feature, **_kwargs: (False, ["demucs"]),
     )
     monkeypatch.setattr(
         "ui.dialogs.staccato_dialog.QMessageBox.question",

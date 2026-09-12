@@ -280,7 +280,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     monkeypatch.setattr("core.dependency_manager.install_native_packages", _fake_install)
     monkeypatch.setattr(
         "core.feature_registry._validate_feature_runtime",
-        lambda name: validated.append(name),
+        lambda name, **_kwargs: validated.append(name),
     )
     # Exercise the full reinstall batch — the in-process-loaded-packages filter
     # is tested separately.
@@ -300,7 +300,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
     package_batches: list[list[str]] = []
     validations: list[str] = []
 
-    def _fake_validate(name: str):
+    def _fake_validate(name: str, **_kwargs):
         validations.append(name)
         if len(validations) == 1:
             raise RuntimeError("Could not import module 'AutoProcessor'")
@@ -404,7 +404,9 @@ def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_miss
         lambda _name: (False, missing),
     )
     monkeypatch.setattr("core.dependency_manager.get_pip_specifier", lambda name: f"{name}>=1.0")
-    monkeypatch.setattr("core.feature_registry._validate_feature_runtime", lambda _name: None)
+    monkeypatch.setattr(
+        "core.feature_registry._validate_feature_runtime", lambda _name, **_kwargs: None
+    )
     monkeypatch.setattr(
         "core.dependency_manager.clear_package_roots",
         lambda package_names: cleared.append(list(package_names)),
@@ -593,3 +595,46 @@ def test_install_packages_cancel_kills_a_silent_pip(monkeypatch, tmp_path):
     started = time.monotonic()
     assert install_packages(["faster-whisper>=1.0.0,<2"], target_dir=tmp_path / "stage", cancel_event=cancel) is False
     assert time.monotonic() - started < 5.0  # the watcher killed pip; we did not wait for output
+
+
+def test_install_native_packages_cancel_kills_a_silent_pip(monkeypatch, tmp_path):
+    import threading
+    import time
+
+    from core.dependency_manager import install_native_packages
+
+    class _SilentPopen:
+        def __init__(self, *args, **kwargs):
+            self.killed = threading.Event()
+            self.returncode = None
+            self.stdout = _BlockingStdout(self.killed)
+
+        def poll(self):
+            return 1 if self.killed.is_set() else None
+
+        def wait(self, timeout=None):
+            return 1
+
+        def kill(self):
+            self.killed.set()
+
+    class _BlockingStdout:
+        def __init__(self, killed):
+            self._killed = killed
+
+        def __iter__(self):
+            self._killed.wait(10)
+            return iter([])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: tmp_path / "python")
+    monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _SilentPopen)
+    monkeypatch.setattr("core.dependency_manager.manifest_constraint_args", lambda: [])
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    started = time.monotonic()
+    assert install_native_packages(["torch>=2"], cancel_event=cancel) is False
+    assert time.monotonic() - started < 5.0
