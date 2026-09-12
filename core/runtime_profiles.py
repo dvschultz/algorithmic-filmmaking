@@ -8,6 +8,7 @@ here accepts package names, URLs, or executable paths from a caller.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import threading
@@ -15,6 +16,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -238,7 +241,21 @@ def install_profile(
             staged = False  # site-packages installs cannot be staged; still probed in a worker below
         if not staged:
             _retire_family_worker(profile.family)
-            failed = [feature for feature in profile.features if not install_for_feature(feature, progress_callback)]
+            failed: list[str] = []
+            errors: list[str] = []
+            for feature in profile.features:
+                # install_for_feature raises when its post-install runtime
+                # validation fails (a version conflict in the installed set, say).
+                # This function reports install failures, so surface it as a
+                # failed feature instead of unwinding through the caller.
+                try:
+                    installed_ok = bool(install_for_feature(feature, progress_callback))
+                except Exception as exc:  # noqa: BLE001 - reported in the outcome
+                    logger.warning("Install of %s for profile %s failed: %s", feature, profile.id, exc)
+                    installed_ok = False
+                    errors.append(f"{feature}: {exc}")
+                if not installed_ok:
+                    failed.append(feature)
             with _probe_cache_lock:
                 _probe_cache.clear()
             _retire_family_worker(profile.family)
@@ -246,6 +263,8 @@ def install_profile(
             status["failed_features"] = failed
             status["staged"] = False
             status["success"] = not failed and status["installed"]
+            if errors:
+                status["error"] = "; ".join(errors)
             if status["success"] and profile.probe_module:
                 try:
                     status["health"] = probe_profile_runtime(profile_id)

@@ -731,7 +731,7 @@ def _run_native_worker_smoke() -> None:
         if echoed.get("echo") != "smoke" or echoed.get("pid") == os.getpid():
             raise RuntimeError("Worker echo task did not run in a separate process.")
         logger.info("Native worker handshake OK: pid=%s python=%s", worker.pid, worker.python)
-        handshake_pid = worker.pid
+        handshake_pid = echoed["pid"]  # the process that actually ran the task, not a cached handle
 
         status = profile_status("transcription-whisper")
         if not status["installed"]:
@@ -750,12 +750,15 @@ def _run_native_worker_smoke() -> None:
             segments, language = _transcribe_in_worker(wav, "tiny.en", "en", None, extract_audio=True)
             logger.info("Native worker transcription OK: %d segments, language=%s", len(segments), language)
     finally:
-        supervisor.shutdown()
+        # Restore the process globals first: shutdown() kills subprocesses and can
+        # raise, and leaving _default pointing at a dead supervisor (or the env
+        # override set) would poison every later caller in this process.
         supervisor_module._default = previous_default
         if previous_env is None:
             os.environ.pop("SCENE_RIPPER_NATIVE_WORKERS", None)
         else:
             os.environ["SCENE_RIPPER_NATIVE_WORKERS"] = previous_env
+        supervisor.shutdown()
 
 
 def _check_worker_sees_promoted_overlay(supervisor, promoted: Path, previous_pid) -> None:
@@ -766,6 +769,14 @@ def _check_worker_sees_promoted_overlay(supervisor, promoted: Path, previous_pid
             "Profile install did not restart the transcription worker; the warm worker "
             f"(pid {previous_pid}) can never import the packages promoted to {promoted}."
         )
+    if not fresh.launch.package_paths:
+        # default_launch hands managed package directories only to the managed
+        # interpreter. A caller-chosen interpreter (SCENE_RIPPER_WORKER_PYTHON, or
+        # a source run whose runtime resolves from the developer's environment)
+        # legitimately gets none and uses its own packages, so there is no overlay
+        # to look for -- the transcription below is the proof in that case.
+        logger.info("Worker restarted after install: pid=%s (interpreter supplies its own packages)", fresh.pid)
+        return
     on_path = {path.resolve() for path in fresh.launch.package_paths}
     if promoted.resolve() not in on_path:
         raise RuntimeError(
@@ -837,13 +848,24 @@ def _run_native_analysis_smoke() -> None:
                 if profile.probe_module == "mlx_vlm" and not (platform.system() == "Darwin" and platform.machine() == "arm64"):
                     results[profile_id] = "unsupported"
                     continue
-                status = profile_status(profile_id)
-                if not status["installed"] and install_allowed:
-                    status = install_profile(profile_id)
-                if not status.get("installed"):
-                    results[profile_id] = "missing: " + ", ".join(status.get("missing") or []) or "missing"
-                    continue
+                # The install is inside the try: one family whose install blows
+                # up must not cost the evidence for every family after it.
                 try:
+                    status = profile_status(profile_id)
+                    if not status["installed"] and install_allowed:
+                        status = install_profile(profile_id)
+                    if not status.get("installed"):
+                        detail = ", ".join(status.get("missing") or []) or status.get("error") or "unknown"
+                        if install_allowed:
+                            # An install was attempted and did not land. Reporting that
+                            # as merely "missing" would pass off a broken profile as an
+                            # absent one, which is the silent pass this target exists to
+                            # prevent.
+                            results[profile_id] = f"failed: install did not complete ({detail})"
+                            failures.append(profile_id)
+                        else:
+                            results[profile_id] = f"missing: {detail}"
+                        continue
                     health = probe_profile_runtime(profile_id)
                     logger.info("Family %s probe OK: %s %s", family, profile.probe_module, health.get("version"))
                     detail = _run_family_call(family, work)

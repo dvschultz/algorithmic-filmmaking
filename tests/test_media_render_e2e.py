@@ -21,7 +21,6 @@ def ffmpeg():
     return binary
 
 
-
 @functools.lru_cache(maxsize=4)
 def variable_frame_rate_flags(ffmpeg: str) -> tuple[str, ...]:
     """Flags that ask ffmpeg to write variable-rate output, for this ffmpeg build.

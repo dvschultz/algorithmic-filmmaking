@@ -218,6 +218,7 @@ def test_native_worker_smoke_transcribes_on_a_worker_that_sees_the_promoted_over
 
     monkeypatch.setenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", "1")
     monkeypatch.setattr("core.paths.is_frozen", lambda: False)
+    previous_default = supervisor_module._default
     monkeypatch.setattr(supervisor_module, "RuntimeSupervisor", _FakeSupervisor)
     monkeypatch.setattr(supervisor_module, "default_launch", fake_default_launch)
     monkeypatch.setattr(runtime_profiles, "profile_status", fake_profile_status)
@@ -228,4 +229,90 @@ def test_native_worker_smoke_transcribes_on_a_worker_that_sees_the_promoted_over
     assert seen["package_paths"] == (promoted,), (
         "transcription ran on a worker whose path lacks the freshly promoted overlay"
     )
-    assert supervisor_module._default is None
+    assert supervisor_module._default is previous_default
+
+
+def test_native_analysis_records_every_family_when_one_install_raises(monkeypatch, tmp_path):
+    """Regression: a raising install must not cost the evidence for later families.
+
+    The packaged macOS run installed profiles in order and vlm-local's install
+    raised a version conflict. That exception unwound the whole sweep, so no
+    family after it was ever probed and the per-family evidence U14 needs was
+    lost behind a single traceback.
+    """
+    import core.runtime_profiles as runtime_profiles
+    import core.runtime_smoke as smoke
+    from core.runtime_profiles import RuntimeProfile
+
+    profiles = {
+        "aaa-first": RuntimeProfile(
+            id="aaa-first", family="ocr", features=("f",), task_kinds=("analysis",),
+            description="", probe_module="aaa",
+        ),
+        "bbb-raises": RuntimeProfile(
+            id="bbb-raises", family="vision", features=("f",), task_kinds=("analysis",),
+            description="", probe_module="bbb",
+        ),
+        "ccc-last": RuntimeProfile(
+            id="ccc-last", family="audio", features=("f",), task_kinds=("analysis",),
+            description="", probe_module="ccc",
+        ),
+    }
+
+    def fake_install_profile(profile_id, *args, **kwargs):
+        if profile_id == "bbb-raises":
+            raise RuntimeError("bbb runtime is incomplete in the vision worker")
+        return {"profile": profile_id, "installed": True, "missing": []}
+
+    monkeypatch.setenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", "1")
+    monkeypatch.delenv("SCENE_RIPPER_SMOKE_FAMILIES", raising=False)
+    monkeypatch.setattr(runtime_profiles, "PROFILES", profiles)
+    monkeypatch.setattr(runtime_profiles, "install_profile", fake_install_profile)
+    monkeypatch.setattr(
+        runtime_profiles, "profile_status",
+        lambda pid: {"profile": pid, "installed": False, "missing": ["dep"]},
+    )
+    monkeypatch.setattr(
+        runtime_profiles, "probe_profile_runtime", lambda pid, **kw: {"ok": True, "version": "1"}
+    )
+    monkeypatch.setattr(smoke, "_analysis_smoke_families", lambda: frozenset({"ocr", "vision", "audio"}))
+    monkeypatch.setattr(smoke, "_FAMILY_SMOKE_CALLS", {})
+
+    logged: list[str] = []
+    monkeypatch.setattr(smoke.logger, "info", lambda msg, *a: logged.append(str(msg) % a if a else str(msg)))
+
+    with pytest.raises(RuntimeError, match="bbb-raises"):
+        run_runtime_smoke_target("native-analysis")
+
+    reported = [line for line in logged if line.startswith("Native analysis family result")]
+    assert any("aaa-first -> ok" in line for line in reported), reported
+    assert any("ccc-last -> ok" in line for line in reported), reported
+    assert any("bbb-raises -> failed" in line for line in reported), reported
+
+
+def test_native_analysis_calls_a_failed_install_a_failure_not_a_missing_profile(monkeypatch, tmp_path):
+    """An install that was attempted and did not land must fail the target."""
+    import core.runtime_profiles as runtime_profiles
+    import core.runtime_smoke as smoke
+    from core.runtime_profiles import RuntimeProfile
+
+    profile = RuntimeProfile(
+        id="ocr-x", family="ocr", features=("f",), task_kinds=("analysis",),
+        description="", probe_module="x",
+    )
+    monkeypatch.setenv("SCENE_RIPPER_SMOKE_INSTALL_PROFILES", "1")
+    monkeypatch.delenv("SCENE_RIPPER_SMOKE_FAMILIES", raising=False)
+    monkeypatch.setattr(runtime_profiles, "PROFILES", {"ocr-x": profile})
+    monkeypatch.setattr(smoke, "_analysis_smoke_families", lambda: frozenset({"ocr"}))
+    monkeypatch.setattr(
+        runtime_profiles, "profile_status",
+        lambda pid: {"profile": pid, "installed": False, "missing": ["paddlepaddle"]},
+    )
+    monkeypatch.setattr(
+        runtime_profiles, "install_profile",
+        lambda pid, *a, **k: {"profile": pid, "installed": False, "missing": ["paddlepaddle"],
+                              "error": "f: conflict"},
+    )
+
+    with pytest.raises(RuntimeError, match="install did not complete"):
+        run_runtime_smoke_target("native-analysis")

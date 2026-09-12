@@ -22,6 +22,16 @@ import pytest
 class TestGetAppSupportDirLinux:
     """Test get_app_support_dir() Linux branch."""
 
+    @pytest.fixture(autouse=True)
+    def _ignore_app_support_override(self, monkeypatch):
+        """SCENE_RIPPER_APP_SUPPORT_DIR outranks the platform branch under test.
+
+        Runtime-install work tells developers and test runs to export it (it keeps
+        real installs out of the user's app-support directory), so leaving it set
+        turns these platform tests into confusing false failures.
+        """
+        monkeypatch.delenv("SCENE_RIPPER_APP_SUPPORT_DIR", raising=False)
+
     def test_uses_xdg_data_home(self, tmp_path):
         """On Linux, should use XDG_DATA_HOME."""
         import core.paths

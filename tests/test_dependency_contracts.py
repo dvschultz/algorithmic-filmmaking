@@ -81,3 +81,60 @@ def test_engine_has_no_gui_or_ml_runtime():
     optional = _requirements("requirements-optional.txt")
     assert not set(engine) & set(optional), set(engine) & set(optional)
     assert not set(engine) & {n.lower() for n in GUI_ONLY}
+
+
+def _upper_bound(specifier_set):
+    """Highest version a specifier set allows, or None when it is open-ended."""
+    from packaging.version import Version
+
+    bounds = [
+        Version(spec.version)
+        for spec in specifier_set
+        if spec.operator in ("<", "<=")
+    ]
+    return max(bounds) if bounds else None
+
+
+def test_tokenizers_pin_is_not_looser_than_the_installed_transformers_allows():
+    """The manifest must not let pip land a tokenizers transformers rejects at import.
+
+    transformers re-checks its tokenizers bound at import time. The manifest
+    pinned tokenizers<0.24 while transformers 4.57 requires <=0.23.0, so a
+    sequential profile install with --upgrade landed 0.23.2 and every vlm
+    worker import then failed with "tokenizers>=0.22.0,<=0.23.0 is required
+    ... but found tokenizers==0.23.2". The packaged native-analysis gate caught
+    it; this keeps a future widening from reintroducing it.
+    """
+    import json
+    from importlib.metadata import PackageNotFoundError, requires
+
+    import pytest
+    from packaging.requirements import Requirement
+    from packaging.specifiers import SpecifierSet
+
+    try:
+        declared = requires("transformers") or []
+    except PackageNotFoundError:
+        pytest.skip("transformers is not installed in this environment")
+
+    wanted = None
+    for raw in declared:
+        requirement = Requirement(raw)
+        if requirement.name == "tokenizers" and requirement.marker is None:
+            wanted = requirement.specifier
+            break
+    if wanted is None:
+        pytest.skip("this transformers does not constrain tokenizers")
+
+    manifest = json.loads((ROOT / "core" / "package_manifest.json").read_text())
+    ours = SpecifierSet(
+        Requirement(manifest["packages"]["tokenizers"]["pip_specifier"]).specifier.__str__()
+    )
+
+    ours_max, wanted_max = _upper_bound(ours), _upper_bound(wanted)
+    assert wanted_max is not None
+    assert ours_max is not None, f"tokenizers pin {ours} has no upper bound"
+    assert ours_max <= wanted_max, (
+        f"manifest allows tokenizers up to {ours_max} but the installed transformers "
+        f"requires {wanted}; a --upgrade install can land a version it rejects at import"
+    )

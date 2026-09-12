@@ -181,3 +181,34 @@ def test_ui_install_prompt_uses_the_staged_profile_path_when_isolated(monkeypatc
     monkeypatch.setattr("core.spine.runtime.install_runtime_profile", lambda profile, **kw: {"success": False, "error": "Health check failed; previous runtime kept"})
     with pytest.raises(RuntimeError, match="previous runtime kept"):
         dependency_widgets._install_feature("transcribe", None, legacy)  # the dialog shows the real reason
+
+
+def test_install_profile_reports_a_raising_native_install_instead_of_raising(
+    monkeypatch, isolated_support
+):
+    """install_profile documents that it never raises for install failures.
+
+    Non-stageable profiles (mlx, torch, paddle -- anything with native
+    extensions) go through install_for_feature, which raises when its
+    post-install runtime validation fails. On the packaged macOS runner
+    mlx-vlm's install produced a tokenizers version its own import rejects,
+    and that RuntimeError unwound every caller, including the per-family
+    packaged-proof sweep.
+    """
+    from core.runtime_profiles import PROFILES, install_profile
+
+    profile_id = next(pid for pid, p in PROFILES.items() if p.probe_module == "mlx_vlm")
+    _missing(monkeypatch, ["package:mlx_vlm"])
+    monkeypatch.setattr("core.runtime_profiles.profile_can_stage", lambda profile: False)
+
+    def raising_install(feature, progress_callback=None):
+        raise RuntimeError("mlx_vlm runtime is incomplete in the vlm worker: ImportError: tokenizers")
+
+    monkeypatch.setattr("core.feature_registry.install_for_feature", raising_install)
+
+    status = install_profile(profile_id)
+
+    assert status["success"] is False
+    assert status["installed"] is False
+    assert status["failed_features"], "the feature that raised must be reported as failed"
+    assert "tokenizers" in status["error"]

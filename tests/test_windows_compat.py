@@ -7,6 +7,8 @@ on any platform (macOS, Linux, or Windows CI).
 import io
 import os
 import sys
+
+import pytest
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +21,16 @@ from unittest.mock import patch
 
 class TestGetAppSupportDirWindows:
     """Test get_app_support_dir() Windows branch."""
+
+    @pytest.fixture(autouse=True)
+    def _ignore_app_support_override(self, monkeypatch):
+        """SCENE_RIPPER_APP_SUPPORT_DIR outranks the platform branch under test.
+
+        Runtime-install work tells developers and test runs to export it (it keeps
+        real installs out of the user's app-support directory), so leaving it set
+        turns these platform tests into confusing false failures.
+        """
+        monkeypatch.delenv("SCENE_RIPPER_APP_SUPPORT_DIR", raising=False)
 
     def test_uses_localappdata(self, tmp_path):
         """On Windows, should use LOCALAPPDATA."""
