@@ -12,7 +12,10 @@ AppDir:
     name: Scene Ripper
     icon: scene-ripper
     version: !ENV ${VERSION:-0.1.0}
-    exec: usr/bin/python3
+    # Must match the interpreter the wheels in usr/lib/python3/site-packages
+    # were built for (the build host's python, 3.11) and the project's
+    # requires-python >=3.11. jammy's bare "python3" is 3.10.
+    exec: usr/bin/python3.11
     exec_args: "$APPDIR/usr/src/main.py $@"
 
   apt:
@@ -24,10 +27,12 @@ AppDir:
         key_url: 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C'
 
     include:
-      # Python runtime
-      - python3
+      # Python runtime. 3.11 explicitly: the project requires >=3.11 and the
+      # bundled wheels are cp311, while jammy's "python3" is 3.10.
+      - python3.11
+      - python3.11-dev
+      - python3.11-venv
       - python3-pip
-      - python3-dev
 
       # OpenGL/EGL for Qt
       - libgl1

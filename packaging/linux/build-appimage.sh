@@ -66,7 +66,7 @@ export PYTHONPATH="${APPDIR}/usr/lib/python3/site-packages:${PYTHONPATH}"
 export QT_PLUGIN_PATH="${APPDIR}/usr/lib/x86_64-linux-gnu/qt6/plugins"
 export GST_PLUGIN_PATH="${APPDIR}/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
 export LD_LIBRARY_PATH="${APPDIR}/usr/lib:${APPDIR}/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
-exec "${APPDIR}/usr/bin/python3" "${APPDIR}/usr/src/main.py" "$@"
+exec "${APPDIR}/usr/bin/python3.11" "${APPDIR}/usr/src/main.py" "$@"
 APPRUN
 chmod +x AppDir/AppRun
 

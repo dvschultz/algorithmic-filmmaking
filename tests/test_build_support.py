@@ -498,3 +498,45 @@ def test_linux_smoke_lookup_survives_a_missing_appimage():
     assert "ls -1 ./*.AppImage" not in workflow
     assert workflow.count("-name '*.AppImage' -print 2>/dev/null | head -n1 || true") == 2
     assert "No AppImage found under" in workflow
+
+
+def test_appimage_interpreter_matches_the_projects_minimum_python():
+    """The AppImage must run the Python its bundled wheels were built for.
+
+    The recipe launched jammy's bare `python3` (3.10) while the build host's pip
+    wrote cp311 wheels into the bundle, so every C extension was unloadable:
+    "_multiarray_umath.cpython-311-x86_64-linux-gnu.so ... seem incompatible
+    with python 'cpython-310'". pyproject declares requires-python >=3.11, so
+    3.10 was wrong on its own terms. Three files name the interpreter and only
+    one of them disagreeing is enough to break the bundle.
+    """
+    import re
+    import tomllib
+
+    recipe = (PROJECT_ROOT / "packaging" / "linux" / "AppImageBuilder.yml").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "packaging" / "linux" / "build-appimage.sh").read_text(
+        encoding="utf-8"
+    )
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    minimum = pyproject["project"]["requires-python"].lstrip(">=~^ ")
+    exec_line = next(
+        line for line in recipe.splitlines() if line.strip().startswith("exec:")
+    )
+    interpreter = exec_line.split(":", 1)[1].strip()
+    assert interpreter == f"usr/bin/python{minimum}", (
+        f"recipe launches {interpreter!r}, expected the declared minimum {minimum}"
+    )
+
+    apt_pythons = re.findall(r"^\s*-\s*(python3(?:\.\d+)?)(?:-\w+)?\s*$", recipe, re.M)
+    assert f"python{minimum}" in apt_pythons, (
+        f"the apt list must bundle python{minimum}; it has {sorted(set(apt_pythons))}"
+    )
+
+    apprun_exec = [line for line in script.splitlines() if line.startswith('exec "${APPDIR}')]
+    assert len(apprun_exec) == 1, apprun_exec
+    assert f"python{minimum}" in apprun_exec[0], (
+        f"the generated AppRun disagrees with the recipe: {apprun_exec[0]}"
+    )
