@@ -391,6 +391,20 @@ jobs:
             Invoke-SceneRipperSmokeTarget -Target "native-worker" -TimeoutSeconds 1800
             # U14 gate: per-family worker health checks and isolated analysis.
             Invoke-SceneRipperSmokeTarget -Target "native-analysis" -TimeoutSeconds 3600
+            # Record which families the packaged run proved; the diagnostics
+            # artifact only uploads on failure.
+            Write-Host "--- Native analysis family results ---"
+            $familyLogs = @(
+              "runtime-validation-artifacts\native-analysis\stderr.log",
+              "runtime-validation-artifacts\native-analysis\stdout.log"
+            ) | Where-Object { Test-Path $_ }
+            if ($familyLogs) {
+              Select-String -Path $familyLogs -Pattern "Native analysis family result" |
+                ForEach-Object { ($_.Line -split "family result: ")[-1] } |
+                Sort-Object -Unique | ForEach-Object { Write-Host "  $_" }
+            } else {
+              Write-Host "  (no family result lines found)"
+            }
           } finally {
             Remove-Item Env:\SCENE_RIPPER_SMOKE_INSTALL_PROFILES -ErrorAction SilentlyContinue
           }

@@ -413,6 +413,15 @@ jobs:
           # in its own worker and the model-free/tiny-model families run a real isolated analysis.
           # Installs the profiles into the managed runtime; large downloads, so a longer timeout.
           SCENE_RIPPER_SMOKE_INSTALL_PROFILES=1 run_smoke_target "native-analysis" 3600
+          # Record which families the packaged run actually proved. The smoke
+          # artifact only uploads on failure, so without this a green run leaves
+          # no per-family evidence anywhere.
+          echo "--- Native analysis family results ---"
+          grep -h "Native analysis family result" \
+            runtime-validation-artifacts/native-analysis/stderr.log \
+            runtime-validation-artifacts/native-analysis/stdout.log \
+            "$HOME/Library/Logs/Scene Ripper/scene-ripper.log" 2>/dev/null \
+            | sed 's/.*family result: //' | sort -u || echo "(no family result lines found)"
 
       - name: Import signing certificate
         if: env.MACOS_CERTIFICATE != ''
