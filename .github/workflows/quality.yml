@@ -70,7 +70,7 @@ jobs:
       - name: Install the engine + MCP contract only
         # U17 scenario 1: no PySide6, no python-mpv, no optional ML runtimes.
         run: |
-          pip install -r requirements-engine.txt "mcp[cli]>=1.2.0" pytest pytest-asyncio
+          pip install -r requirements-engine.txt "mcp[cli]>=1.2.0,<2" pytest pytest-asyncio
           python -c "import importlib.util as u; assert u.find_spec('PySide6') is None, 'PySide6 leaked into the engine env'"
 
       - name: Dependency contracts and import boundaries

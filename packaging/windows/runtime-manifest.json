@@ -1,13 +1,13 @@
 {
   "mpv": {
-    "asset_name": "mpv-dev-x86_64-20260524-git-9e06c32.7z",
-    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260524/mpv-dev-x86_64-20260524-git-9e06c32.7z",
-    "sha256": "3dd0754d2a95ba2f09b030d9a21d437c901e2103c0bdaf3e988763461ebc5447"
+    "asset_name": "mpv-dev-x86_64-20260903-git-69e63f425a.7z",
+    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260903/mpv-dev-x86_64-20260903-git-69e63f425a.7z",
+    "sha256": "fac135c68a35b7639e39d72c0c365104edbaebdea39a0dfdd8c36e8c8e80faef"
   },
   "ffmpeg": {
-    "asset_name": "ffmpeg-n8.1.1-8-gb21e00eda5-win64-gpl-8.1.zip",
-    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-05-24-13-16/ffmpeg-n8.1.1-8-gb21e00eda5-win64-gpl-8.1.zip",
-    "sha256": "fe99b6a7e667000943d5d60fcbe156d988726d0a1c88ff4204e2665827d6f643"
+    "asset_name": "ffmpeg-n8.1.2-52-g5a03dfa0f6-win64-gpl-8.1.zip",
+    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-11-13-20/ffmpeg-n8.1.2-52-g5a03dfa0f6-win64-gpl-8.1.zip",
+    "sha256": "dbc1cb948c6deb6bbc1b12fab563f4ceb1b81e330c9902269288947bb7307d90"
   },
   "winsparkle": {
     "asset_name": "WinSparkle-0.9.2.zip",

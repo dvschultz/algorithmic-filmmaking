@@ -39,7 +39,7 @@ desktop = [
 ]
 mcp = [
     "scene-ripper[engine]",
-    "mcp[cli]>=1.2.0",
+    "mcp[cli]>=1.2.0,<2",
 ]
 ml = [
     "yt-dlp>=2024.1",

@@ -13,7 +13,7 @@
    ```bash
    pip install -e ".[mcp]"
    # Or with pip:
-   pip install mcp[cli]>=1.2.0
+   pip install "mcp[cli]>=1.2.0,<2"
    ```
 
 2. Configure Claude Desktop:
