@@ -2,6 +2,169 @@
   "python_version": "3.11.11",
   "python_build_tag": "20250317",
   "packages": {
+    "ctc_forced_aligner": {
+      "pip_specifier": "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
+      "size_mb": 400,
+      "depends_on": [
+        "torch"
+      ],
+      "features": [
+        "word_alignment"
+      ]
+    },
+    "demucs_infer": {
+      "pip_specifier": "demucs-infer>=4.1.0,<5",
+      "size_mb": 200,
+      "depends_on": [
+        "torch"
+      ],
+      "features": [
+        "stem_separation"
+      ]
+    },
+    "einops": {
+      "pip_specifier": "einops>=0.7.0,<1.0",
+      "size_mb": 1,
+      "depends_on": [
+        "torch"
+      ],
+      "features": [
+        "shot_classify"
+      ]
+    },
+    "faster_whisper": {
+      "pip_specifier": "faster-whisper>=1.0.0,<2",
+      "size_mb": 150,
+      "features": [
+        "transcribe"
+      ]
+    },
+    "huggingface_hub": {
+      "pip_specifier": "huggingface-hub>=0.34.0,<1.0",
+      "size_mb": 8,
+      "features": [
+        "shot_classify",
+        "describe_local_cpu"
+      ]
+    },
+    "insightface": {
+      "pip_specifier": "insightface>=0.7.3,<1.0",
+      "size_mb": 200,
+      "features": [
+        "face_detect"
+      ]
+    },
+    "librosa": {
+      "pip_specifier": "librosa>=0.10.0,<1.0",
+      "size_mb": 80,
+      "features": [
+        "audio_analysis"
+      ]
+    },
+    "lightning_whisper_mlx": {
+      "pip_specifier": "lightning-whisper-mlx>=0.0.10,<1.0",
+      "size_mb": 100,
+      "features": [
+        "transcribe_mlx"
+      ]
+    },
+    "mediapipe": {
+      "pip_specifier": "mediapipe>=0.10.14,<1.0",
+      "size_mb": 50,
+      "features": [
+        "gaze_detect"
+      ]
+    },
+    "mlx": {
+      "pip_specifier": "mlx>=0.9,<1.0",
+      "size_mb": 100,
+      "features": [
+        "transcribe_mlx",
+        "describe_local"
+      ]
+    },
+    "mlx_vlm": {
+      "pip_specifier": "mlx-vlm>=0.1.0,<1.0",
+      "depends_on": [
+        "transformers",
+        "sentencepiece",
+        "protobuf"
+      ],
+      "size_mb": 200,
+      "features": [
+        "describe_local"
+      ]
+    },
+    "numpy": {
+      "pip_specifier": "numpy>=1.24",
+      "size_mb": 20,
+      "features": [
+        "worker_engine"
+      ]
+    },
+    "onnxruntime": {
+      "pip_specifier": "onnxruntime>=1.16.0,<2.0",
+      "size_mb": 100,
+      "features": [
+        "face_detect"
+      ]
+    },
+    "opencv-python-headless": {
+      "pip_specifier": "opencv-python-headless>=4.8",
+      "size_mb": 60,
+      "features": [
+        "worker_engine"
+      ]
+    },
+    "paddleocr": {
+      "pip_specifier": "paddleocr>=3.0.0,<4",
+      "size_mb": 300,
+      "features": [
+        "ocr"
+      ]
+    },
+    "paddlepaddle": {
+      "pip_specifier": "paddlepaddle>=3.0,<4",
+      "size_mb": 400,
+      "features": [
+        "ocr"
+      ]
+    },
+    "pillow": {
+      "pip_specifier": "Pillow>=10.0",
+      "size_mb": 5,
+      "features": [
+        "worker_engine"
+      ]
+    },
+    "protobuf": {
+      "pip_specifier": "protobuf>=4.25,<6",
+      "size_mb": 8,
+      "features": [
+        "shot_classify"
+      ]
+    },
+    "sentencepiece": {
+      "pip_specifier": "sentencepiece>=0.2.0,<1.0",
+      "size_mb": 8,
+      "features": [
+        "shot_classify"
+      ]
+    },
+    "tiktoken": {
+      "pip_specifier": "tiktoken>=0.7.0,<0.8",
+      "size_mb": 5,
+      "features": []
+    },
+    "tokenizers": {
+      "pip_specifier": "tokenizers>=0.22,<=0.23.0",
+      "size_mb": 20,
+      "features": [
+        "shot_classify",
+        "describe_local",
+        "describe_local_cpu"
+      ]
+    },
     "torch": {
       "pip_specifier": "torch>=2.4,<2.7",
       "size_mb": 350,
@@ -23,6 +186,17 @@
         "stem_separation"
       ]
     },
+    "torchvision": {
+      "pip_specifier": "torchvision>=0.19,<0.22",
+      "size_mb": 50,
+      "depends_on": [
+        "torch"
+      ],
+      "features": [
+        "shot_classify",
+        "image_classify"
+      ]
+    },
     "transformers": {
       "pip_specifier": "transformers>=4.50,<5",
       "size_mb": 100,
@@ -36,58 +210,6 @@
         "describe_local_cpu"
       ]
     },
-    "huggingface_hub": {
-      "pip_specifier": "huggingface-hub>=0.34.0,<1.0",
-      "size_mb": 8,
-      "features": [
-        "shot_classify",
-        "describe_local_cpu"
-      ]
-    },
-    "tokenizers": {
-      "pip_specifier": "tokenizers>=0.22,<=0.23.0",
-      "size_mb": 20,
-      "features": [
-        "shot_classify",
-        "describe_local",
-        "describe_local_cpu"
-      ]
-    },
-    "torchvision": {
-      "pip_specifier": "torchvision>=0.19,<0.22",
-      "size_mb": 50,
-      "depends_on": [
-        "torch"
-      ],
-      "features": [
-        "shot_classify",
-        "image_classify"
-      ]
-    },
-    "einops": {
-      "pip_specifier": "einops>=0.7.0,<1.0",
-      "size_mb": 1,
-      "depends_on": [
-        "torch"
-      ],
-      "features": [
-        "shot_classify"
-      ]
-    },
-    "sentencepiece": {
-      "pip_specifier": "sentencepiece>=0.2.0,<1.0",
-      "size_mb": 8,
-      "features": [
-        "shot_classify"
-      ]
-    },
-    "protobuf": {
-      "pip_specifier": "protobuf>=4.25,<6",
-      "size_mb": 8,
-      "features": [
-        "shot_classify"
-      ]
-    },
     "ultralytics": {
       "pip_specifier": "ultralytics>=8.4.0,<9",
       "size_mb": 80,
@@ -96,106 +218,6 @@
       ],
       "features": [
         "object_detect"
-      ]
-    },
-    "faster_whisper": {
-      "pip_specifier": "faster-whisper>=1.0.0,<2",
-      "size_mb": 150,
-      "features": [
-        "transcribe"
-      ]
-    },
-    "lightning_whisper_mlx": {
-      "pip_specifier": "lightning-whisper-mlx>=0.0.10,<1.0",
-      "size_mb": 100,
-      "features": [
-        "transcribe_mlx"
-      ]
-    },
-    "mlx_vlm": {
-      "pip_specifier": "mlx-vlm>=0.1.0,<1.0",
-      "depends_on": [
-        "transformers",
-        "sentencepiece",
-        "protobuf"
-      ],
-      "size_mb": 200,
-      "features": [
-        "describe_local"
-      ]
-    },
-    "paddleocr": {
-      "pip_specifier": "paddleocr>=3.0.0,<4",
-      "size_mb": 300,
-      "features": [
-        "ocr"
-      ]
-    },
-    "librosa": {
-      "pip_specifier": "librosa>=0.10.0,<1.0",
-      "size_mb": 80,
-      "features": [
-        "audio_analysis"
-      ]
-    },
-    "insightface": {
-      "pip_specifier": "insightface>=0.7.3,<1.0",
-      "size_mb": 200,
-      "features": [
-        "face_detect"
-      ]
-    },
-    "onnxruntime": {
-      "pip_specifier": "onnxruntime>=1.16.0,<2.0",
-      "size_mb": 100,
-      "features": [
-        "face_detect"
-      ]
-    },
-    "tiktoken": {
-      "pip_specifier": "tiktoken>=0.7.0,<0.8",
-      "size_mb": 5,
-      "features": []
-    },
-    "demucs_infer": {
-      "pip_specifier": "demucs-infer>=4.1.0,<5",
-      "size_mb": 200,
-      "depends_on": [
-        "torch"
-      ],
-      "features": [
-        "stem_separation"
-      ]
-    },
-    "ctc_forced_aligner": {
-      "pip_specifier": "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
-      "size_mb": 400,
-      "depends_on": [
-        "torch"
-      ],
-      "features": [
-        "word_alignment"
-      ]
-    },
-    "numpy": {
-      "pip_specifier": "numpy>=1.24",
-      "size_mb": 20,
-      "features": [
-        "worker_engine"
-      ]
-    },
-    "pillow": {
-      "pip_specifier": "Pillow>=10.0",
-      "size_mb": 5,
-      "features": [
-        "worker_engine"
-      ]
-    },
-    "opencv-python-headless": {
-      "pip_specifier": "opencv-python-headless>=4.8",
-      "size_mb": 60,
-      "features": [
-        "worker_engine"
       ]
     }
   }

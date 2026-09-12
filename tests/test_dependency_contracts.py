@@ -138,3 +138,54 @@ def test_tokenizers_pin_is_not_looser_than_the_installed_transformers_allows():
         f"manifest allows tokenizers up to {ours_max} but the installed transformers "
         f"requires {wanted}; a --upgrade install can land a version it rejects at import"
     )
+
+
+def test_manifest_constraints_cover_transitive_resolutions(monkeypatch, tmp_path):
+    """Every manifest pin must reach pip as a constraint, not just as a named package.
+
+    Naming a package on the command line pins only that package. faster-whisper
+    declares tokenizers<1,>=0.13, so its staged install resolved tokenizers 0.23.2
+    into the transcription overlay; overlays precede site-packages on a worker's
+    path, so that one loose resolution shadowed the pinned tokenizers for every
+    other family and broke transformers' import check.
+    """
+    from core.dependency_manager import manifest_constraint_args
+
+    # Never let a test write into the user's real app-support directory.
+    monkeypatch.setenv("SCENE_RIPPER_APP_SUPPORT_DIR", str(tmp_path))
+    monkeypatch.setattr("core.paths.get_app_support_dir", lambda: tmp_path)
+
+    args = manifest_constraint_args()
+    assert tmp_path in Path(args[1]).parents
+    assert args[:1] == ["-c"], args
+    written = Path(args[1]).read_text(encoding="utf-8").splitlines()
+
+    assert any(line.startswith("tokenizers") for line in written)
+    # pip rejects both forms inside a constraints file.
+    assert not [line for line in written if "@" in line or "[" in line], written
+
+
+def test_ocr_feature_installs_the_paddle_runtime():
+    """paddleocr depends on paddlex, never on the engine it runs on."""
+    from core.feature_registry import FEATURE_DEPS
+
+    assert "paddlepaddle" in FEATURE_DEPS["ocr"].packages
+
+
+def test_every_feature_package_is_pinned_in_the_manifest():
+    """An unpinned package is resolved freely and can shadow a pinned one."""
+    import json
+
+    from core.feature_registry import FEATURE_DEPS
+
+    manifest = json.loads((ROOT / "core" / "package_manifest.json").read_text())
+    known = set(manifest["packages"])
+    missing = sorted(
+        {
+            package
+            for deps in FEATURE_DEPS.values()
+            for package in list(deps.packages) + list(deps.repair_packages or [])
+        }
+        - known
+    )
+    assert not missing, f"feature packages with no manifest pin: {missing}"

@@ -365,9 +365,12 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
             ["insightface", "onnxruntime"],
         ),
         (
+            # Repairing OCR must also repair the paddle runtime; paddleocr pulls
+            # paddlex, not the engine, so leaving it behind yields
+            # "Engine 'paddle_static' is unavailable".
             "ocr",
             ["package:paddleocr"],
-            ["paddleocr"],
+            ["paddleocr", "paddlepaddle"],
         ),
         (
             "audio_analysis",

@@ -1074,6 +1074,41 @@ def is_binary_available(name: str) -> bool:
     return path.is_file()
 
 
+def manifest_constraint_args() -> list[str]:
+    """pip arguments that apply every manifest pin to the whole resolution.
+
+    Naming a package on the pip command line pins only that package. Anything pip
+    resolves on its own ignores the manifest: faster-whisper declares
+    ``tokenizers<1,>=0.13``, so its staged install pulled tokenizers 0.23.2 into
+    the transcription overlay. Overlays precede site-packages on a worker's path,
+    so that one loose transitive resolution shadowed the correctly pinned
+    tokenizers for every other family and broke transformers' own import check.
+
+    Direct references (a git URL) and extras are filtered out; pip rejects both in
+    a constraints file. Best effort: an unwritable file returns no arguments
+    rather than blocking the install.
+    """
+    manifest = _load_package_manifest()
+    lines = sorted(
+        spec
+        for spec in (
+            info.get("pip_specifier", name)
+            for name, info in (manifest.get("packages") or {}).items()
+        )
+        if spec and "@" not in spec and "[" not in spec
+    )
+    if not lines:
+        return []
+    path = get_managed_packages_dir().parent / "pip-constraints.txt"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not write pip constraints file: %s", exc)
+        return []
+    return ["-c", str(path)]
+
+
 def install_package(
     specifier: str,
     progress_callback: ProgressCallback = None,
@@ -1129,6 +1164,8 @@ def install_packages(
     base_packages_dir = get_managed_packages_dir()
     base_packages_dir.mkdir(parents=True, exist_ok=True)
 
+    constraint_args = manifest_constraint_args()
+
     def _run_pip_install(target_dir: Path) -> tuple[bool, str]:
         cmd = [
             str(python_bin),
@@ -1141,6 +1178,7 @@ def install_packages(
         ]
         if no_deps:
             cmd.append("--no-deps")
+        cmd.extend(constraint_args)
         cmd.extend(normalized_specifiers)
 
         logger.info(f"Installing package: {' '.join(cmd)}")
@@ -1291,6 +1329,7 @@ def install_native_packages(
     install_label = ", ".join(normalized)
     _emit_progress(progress_callback, 0.2, f"Installing native packages: {install_label}...")
 
+    constraint_args = manifest_constraint_args()
     cmd = [
         str(python_bin),
         "-m", "pip", "install",
@@ -1301,6 +1340,7 @@ def install_native_packages(
     ]
     if no_deps:
         cmd.append("--no-deps")
+    cmd.extend(constraint_args)
     cmd.extend(normalized)
 
     logger.info(f"Installing native package (site-packages): {' '.join(cmd)}")
@@ -1370,6 +1410,7 @@ _PACKAGE_IMPORT_NAMES: dict[str, str] = {
     "pyyaml": "yaml",
     "opencv-python": "cv2",
     "opencv-python-headless": "cv2",
+    "paddlepaddle": "paddle",
 }
 
 

@@ -274,8 +274,12 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "ocr": FeatureDeps(
         binaries=[],
-        packages=["paddleocr"],
-        size_estimate_mb=300,
+        # paddleocr pulls paddlex, not the paddle runtime itself; without
+        # paddlepaddle every extraction fails with "Engine 'paddle_static' is
+        # unavailable because dependency 'paddlepaddle' is not installed".
+        packages=["paddleocr", "paddlepaddle"],
+        size_estimate_mb=700,
+        repair_packages=["paddleocr", "paddlepaddle"],
     ),
     "audio_analysis": FeatureDeps(
         binaries=[],
