@@ -194,10 +194,15 @@ def test_install_profile_reports_a_raising_native_install_instead_of_raising(
     mlx-vlm's install produced a tokenizers version its own import rejects,
     and that RuntimeError unwound every caller, including the per-family
     packaged-proof sweep.
+
+    Select the profile by id: vlm-local swaps its features and probe module by
+    platform (mlx_vlm only on Apple Silicon), so matching on the probe module
+    finds nothing off a Mac.
     """
     from core.runtime_profiles import PROFILES, install_profile
 
-    profile_id = next(pid for pid, p in PROFILES.items() if p.probe_module == "mlx_vlm")
+    profile_id = "vlm-local"
+    assert profile_id in PROFILES
     _missing(monkeypatch, ["package:mlx_vlm"])
     monkeypatch.setattr("core.runtime_profiles.profile_can_stage", lambda profile: False)
 
