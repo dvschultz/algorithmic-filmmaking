@@ -32,7 +32,9 @@ from core.constants import (
     VALID_ASPECT_RATIOS,
     VALID_COLOR_PALETTES,
     VALID_SORT_ORDERS,
+    canonical_shot_type,
     normalize_shot_type,
+    shot_type_matches,
 )
 from core.plan_controller import PlanController
 
@@ -771,8 +773,7 @@ def list_clips(
     if source_id is not None:
         clips = [c for c in clips if c.source_id == source_id]
     if shot_type is not None:
-        wanted = normalize_shot_type(shot_type) or shot_type
-        clips = [c for c in clips if (normalize_shot_type(c.shot_type) or c.shot_type) == wanted]
+        clips = [c for c in clips if shot_type_matches(c.shot_type, shot_type)]
     if has_description is True:
         clips = [c for c in clips if c.description is not None]
     elif has_description is False:
@@ -792,7 +793,7 @@ def list_clips(
     elif sort_by == "start_frame":
         clips = sorted(clips, key=lambda c: (c.source_id, c.start_frame))
     elif sort_by == "shot_type":
-        clips = sorted(clips, key=lambda c: c.shot_type or "")
+        clips = sorted(clips, key=lambda c: canonical_shot_type(c.shot_type) or "")
 
     # Apply limit
     total_matching = len(clips)
@@ -1095,7 +1096,7 @@ def sort_sequence(project, sort_by: str, reverse: bool = False) -> dict:
     def shot_type_key(item):
         _, source_clip = item
         if source_clip and source_clip.shot_type:
-            return source_clip.shot_type.lower()
+            return canonical_shot_type(source_clip.shot_type).lower()
         return "zzz"  # Sort unknowns to end
 
     # Sort based on criterion

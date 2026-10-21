@@ -25,6 +25,15 @@ _SHOT_TYPE_ALIASES = {
     **{display.lower(): value for value, display in SHOT_TYPE_DISPLAY.items()},
     # Older title-case labels ("Wide Shot", "Full Shot", ...) lowercase to the
     # canonical values above; "Extreme CU" lowercases to a display name.
+    # Cinematography's get_simple_shot_type() writes "wide"/"full"/"medium"
+    # (display names, above), "close-up" and "ECU".
+    "ecu": "extreme close-up",
+    # Cinematography shot sizes that name one canonical size. VLS, MLS, MCU
+    # and BCU sit between two canonical sizes, and Insert is not a size.
+    "els": "wide shot",
+    "ls": "full shot",
+    "ms": "medium shot",
+    "cu": "close-up",
 }
 
 
@@ -37,6 +46,26 @@ def normalize_shot_type(value: str) -> str | None:
     if not isinstance(value, str):
         return None
     return _SHOT_TYPE_ALIASES.get(value.strip().lower())
+
+
+def shot_type_matches(stored: str | None, wanted: str | None) -> bool:
+    """Whether a stored shot type is the wanted one, in any spelling.
+
+    Known values compare canonically. When either side is unknown, the raw
+    values compare case-insensitively.
+    """
+    if not isinstance(stored, str) or not isinstance(wanted, str):
+        return False
+    stored_canonical = normalize_shot_type(stored)
+    wanted_canonical = normalize_shot_type(wanted)
+    if stored_canonical is not None and wanted_canonical is not None:
+        return stored_canonical == wanted_canonical
+    return bool(stored.strip()) and stored.strip().lower() == wanted.strip().lower()
+
+
+def canonical_shot_type(value: str | None) -> str | None:
+    """Canonical value for a known shot type; other values unchanged."""
+    return normalize_shot_type(value) or value
 
 
 # Valid aspect ratios for filtering

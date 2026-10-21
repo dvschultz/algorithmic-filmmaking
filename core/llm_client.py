@@ -6,6 +6,7 @@ with a unified interface for streaming chat completions with tool support.
 
 import copy
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import AsyncIterator, Optional
@@ -380,6 +381,8 @@ class LLMClient:
         cache_control markers to:
         - The last tool (for cumulative tool schema caching)
         - System messages (for system prompt caching)
+        - The last message, so each tool iteration and turn reads the
+          conversation so far from cache (the chat history only appends)
 
         Args:
             messages: Conversation messages
@@ -415,6 +418,12 @@ class LLMClient:
             else:
                 cached_messages.append(msg)
 
+        last = cached_messages[-1] if cached_messages else None
+        if last is not None and last.get("role") in ("user", "tool") and isinstance(last.get("content"), str) and last["content"]:
+            # A message-level marker; LiteLLM moves it onto the content block.
+            # Moving a marker between requests doesn't invalidate thinking.
+            cached_messages[-1] = {**last, "cache_control": {"type": "ephemeral"}}
+
         return cached_messages, cached_tools
 
     async def stream_chat(
@@ -443,6 +452,9 @@ class LLMClient:
             "temperature": self.config.temperature,
             "timeout": 120,  # Prevent indefinite hangs on slow/unresponsive providers
         }
+        max_tokens = claude_max_tokens(kwargs["model"], CLAUDE_CHAT_MAX_TOKENS)
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         kwargs = prepare_claude_kwargs(kwargs["model"], kwargs)
 
         if self.config.api_key:
@@ -490,6 +502,9 @@ class LLMClient:
             "temperature": self.config.temperature,
             "timeout": 120,  # Prevent indefinite hangs on slow/unresponsive providers
         }
+        max_tokens = claude_max_tokens(kwargs["model"], CLAUDE_CALL_MAX_TOKENS)
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         kwargs = prepare_claude_kwargs(kwargs["model"], kwargs)
 
         if self.config.api_key:
@@ -591,10 +606,43 @@ _CLAUDE_REJECTED_PARAMS = ("temperature", "top_p", "top_k")
 # small cap can be spent before any text is written.
 CLAUDE_MIN_MAX_TOKENS = 4096
 
+# Without an explicit cap LiteLLM takes one from its model map, and the bundled
+# 1.82.6 map has no 5.x entries, so it falls back to 4096 whenever the remote
+# map can't be fetched. Thinking shares the cap. Streaming chat gets room for
+# long agent turns; non-streaming calls stay well inside the 120s timeout.
+CLAUDE_CHAT_MAX_TOKENS = 64000
+CLAUDE_CALL_MAX_TOKENS = 16000
+
 
 def is_claude_model(model: str) -> bool:
     """True for any Claude model string (anthropic/, bedrock/, openrouter/...)."""
     return "claude" in (model or "").lower()
+
+
+_CLAUDE_FAMILY_RE = re.compile(r"claude-(?:opus|sonnet|haiku|fable|mythos)-(\d+)")
+
+
+def claude_max_tokens(model: str, wanted: int) -> Optional[int]:
+    """Output cap to send for a Claude model, or None to leave it to LiteLLM.
+
+    Never above the model's own limit: older Claude models cap output at
+    8k-32k and reject a larger max_tokens.
+    """
+    if not is_claude_model(model):
+        return None
+    try:
+        import litellm
+
+        limit = litellm.get_model_info(model).get("max_output_tokens")
+    except Exception:
+        limit = None
+    if limit:
+        return min(wanted, int(limit))
+    # Not in LiteLLM's model map (the bundled 1.82.6 map predates 5.x).
+    match = _CLAUDE_FAMILY_RE.search(model.lower())
+    if match and int(match.group(1)) >= 5:
+        return wanted
+    return None
 
 
 def prepare_claude_kwargs(model: str, kwargs: dict) -> dict:

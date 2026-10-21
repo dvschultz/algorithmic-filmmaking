@@ -21,13 +21,20 @@ except ImportError:
 # Per-turn project/GUI state rides in the user message it was sent with, so the
 # system prompt stays fixed for the conversation. Claude thinking blocks are
 # bound to everything before them; editing earlier turns invalidates them.
-from core.chat_export import TURN_CONTEXT_CLOSE, TURN_CONTEXT_OPEN
+from core.chat_export import (
+    TURN_CONTEXT_CLOSE,
+    TURN_CONTEXT_OPEN,
+    strip_thinking_blocks,
+    strip_turn_context,
+)
+from core.constants import canonical_shot_type
 from core.chat_tools import get_tool_timeout, tools as tool_registry
 from core.llm_client import (
     LLMClient,
     ProviderConfig,
     check_ollama_health,
     normalize_provider_error,
+    raise_if_claude_refused,
 )
 from core.tool_executor import ToolExecutor
 from ui.workers.gui_tool_mailbox import GuiToolMailbox
@@ -42,12 +49,67 @@ AGENT_MAX_ITERATIONS = 25
 logger = logging.getLogger(__name__)
 
 
-def strip_thinking_blocks(messages: list[dict]) -> list[dict]:
-    """Return copies of messages without Claude thinking blocks."""
-    return [
-        {key: value for key, value in message.items() if key != "thinking_blocks"}
-        for message in messages
-    ]
+_CONTEXT_SECTIONS = ("paths", "project", "gui_state")
+_SECTION_RE = re.compile(r"<(paths|project|gui_state)>\n(.*?)\n</\1>", re.DOTALL)
+# Sources listed in the per-turn context; list_sources returns the rest.
+CONTEXT_MAX_SOURCES = 25
+# Longest tool result kept from a turn that failed, so a result that overflowed
+# the context doesn't make every later message fail too.
+FAILED_TURN_TOOL_RESULT_CHARS = 4000
+
+
+def _failed_turn_history(messages: list[dict], turn_start: int) -> list[dict]:
+    """History to keep after a turn failed partway through its tool rounds.
+
+    Tool results from the failed turn are truncated. Truncating edits messages
+    that later thinking blocks are bound to, so thinking is dropped as well.
+    """
+    kept = list(messages)
+    truncated = False
+    for index in range(turn_start, len(kept)):
+        message = kept[index]
+        content = message.get("content")
+        if message.get("role") == "tool" and isinstance(content, str) and len(content) > FAILED_TURN_TOOL_RESULT_CHARS:
+            kept[index] = {
+                **message,
+                "content": content[:FAILED_TURN_TOOL_RESULT_CHARS] + "\n... (truncated after the turn failed)",
+            }
+            truncated = True
+    return strip_thinking_blocks(kept) if truncated else kept
+
+
+def _sent_context_sections(messages: list[dict]) -> dict[str, str]:
+    """Latest version of each context section already in the history."""
+    latest: dict[str, str] = {}
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") != "user" or not isinstance(content, str):
+            continue
+        if not content.startswith(TURN_CONTEXT_OPEN + "\n"):
+            continue
+        end = content.find("\n" + TURN_CONTEXT_CLOSE)
+        for name, body in _SECTION_RE.findall(content[:end] if end != -1 else ""):
+            latest[name] = body
+    return latest
+
+
+def _missing_tool_results(messages: list[dict]) -> list[dict]:
+    """Tool messages for calls in the last assistant turn that never got a result."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") == "assistant":
+            answered = {m.get("tool_call_id") for m in messages[index + 1:] if m.get("role") == "tool"}
+            return [
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "name": call.get("function", {}).get("name") or "unknown",
+                    "content": json.dumps({"error": "Cancelled by the user before this tool ran."}),
+                }
+                for call in message.get("tool_calls") or []
+                if call.get("id") not in answered
+            ]
+    return []
 
 
 def _is_thinking_replay_error(error: Exception) -> bool:
@@ -239,6 +301,9 @@ class ChatAgentWorker(QThread):
         self.conversation: list[dict] = []
         self._thinking_blocks: list[dict] = []
         self._thinking_replayable = True
+        self._finish_reason: Optional[str] = None
+        # Text shown in the chat bubble this turn, across tool iterations.
+        self._turn_text = ""
         self._stop_requested = False
 
         # For GUI tool synchronization
@@ -273,10 +338,15 @@ class ChatAgentWorker(QThread):
         if not is_claude_model(self.config.model):
             history = strip_thinking_blocks(history)
         full_messages = [{"role": "system", "content": self.system_prompt}] + history
+        turn_start = len(full_messages) - 1  # this turn's user message
 
         iteration = 0
         tool_history = []  # Track tool interactions for history
         replay_retried = False
+        # End of the last completed tool round. On an error the history keeps
+        # the turn up to here, since those tools may already have changed the
+        # project.
+        checkpoint: Optional[int] = None
 
         while iteration < AGENT_MAX_ITERATIONS and not self._stop_requested:
             iteration += 1
@@ -285,6 +355,25 @@ class ChatAgentWorker(QThread):
                 content, tool_calls = await self._stream_response(
                     client, full_messages
                 )
+                if self._stop_requested:
+                    # The reply was cut off mid-stream; don't keep half of it.
+                    break
+
+                if self._finish_reason == "length":
+                    if tool_calls:
+                        raise RuntimeError(
+                            "The reply hit the output limit before its tool call was complete, "
+                            "so the tool was not run. Try a smaller request."
+                        )
+                    note = "\n\n*(Reply cut off: output limit reached.)*"
+                    content += note
+                    self._emit_text(note)
+
+                if not tool_calls and not content:
+                    # Nothing to show or keep (e.g. only thinking came back).
+                    self.conversation = full_messages[1:]
+                    self.complete.emit(content, tool_history)
+                    return
 
                 # Build assistant message
                 assistant_msg = {
@@ -386,6 +475,8 @@ class ChatAgentWorker(QThread):
                     full_messages.append(tool_msg)
                     tool_history.append(tool_msg)
 
+                if not self._stop_requested:
+                    checkpoint = len(full_messages)
                 # Continue loop for LLM to process tool results
 
             except Exception as e:
@@ -400,6 +491,9 @@ class ChatAgentWorker(QThread):
                     iteration -= 1
                     continue
                 logger.exception("Error in agent loop")
+                self.conversation = (
+                    _failed_turn_history(full_messages[:checkpoint], turn_start)[1:] if checkpoint else []
+                )
                 # Provide user-friendly message for rate limit errors
                 error_msg = str(e)
                 from core.auth_errors import (
@@ -435,11 +529,17 @@ class ChatAgentWorker(QThread):
                 self.error.emit(error_msg)
                 return
 
-        if iteration >= AGENT_MAX_ITERATIONS:
-            self.error.emit("Maximum tool iterations reached. The agent may be stuck in a loop.")
-        elif self._stop_requested:
+        if self._stop_requested:
+            # Calls the user stopped before they ran still need a result, or
+            # every later request is rejected for the dangling tool_use.
+            full_messages.extend(_missing_tool_results(full_messages))
             self.conversation = full_messages[1:]
             self.complete.emit("*Cancelled*", tool_history)
+        elif iteration >= AGENT_MAX_ITERATIONS:
+            self.conversation = (
+                _failed_turn_history(full_messages[:checkpoint], turn_start)[1:] if checkpoint else []
+            )
+            self.error.emit("Maximum tool iterations reached. The agent may be stuck in a loop.")
 
     async def _stream_response(
         self,
@@ -466,6 +566,8 @@ class ChatAgentWorker(QThread):
         thinking_text = ""
         seen_output = False
         self._thinking_replayable = True
+        self._finish_reason = None
+        text_before_stream = self._turn_text
         available_tools = [t.name for t in tool_registry.all_tools()]
 
         # Don't pass tools to Ollama - LiteLLM forces JSON mode which breaks responses
@@ -487,6 +589,8 @@ class ChatAgentWorker(QThread):
                 continue
 
             delta = choice.delta
+            if choice.finish_reason:
+                self._finish_reason = choice.finish_reason
 
             # Thinking streams as text fragments; a signature closes each block.
             for block in (getattr(delta, "thinking_blocks", None) or []) if claude else []:
@@ -504,13 +608,13 @@ class ChatAgentWorker(QThread):
             if getattr(delta, "content", None) or getattr(delta, "tool_calls", None):
                 seen_output = True
 
-            # LiteLLM reports Claude's stop_reason "refusal" as content_filter;
-            # discard any partial text so it isn't treated as an answer.
+            # LiteLLM reports Claude's stop_reason "refusal" as content_filter.
+            # Take this reply's partial text back off the screen.
             if choice.finish_reason == "content_filter" and is_claude_model(self.config.model):
-                raise RuntimeError(
-                    f"{self.config.model} declined this request (Anthropic safety filter). "
-                    "Rephrase it or choose a different model."
-                )
+                self.clear_current_bubble.emit()
+                self._turn_text = ""
+                self._emit_text(text_before_stream)
+                raise_if_claude_refused(self.config.model, chunk)
 
             # Accumulate content
             if hasattr(delta, 'content') and delta.content:
@@ -521,7 +625,7 @@ class ChatAgentWorker(QThread):
                 if not self._looks_like_json_tool_call(display_buffer, available_tools):
                     # Safe to display - emit buffered content
                     if display_buffer:
-                        self.text_chunk.emit(display_buffer)
+                        self._emit_text(display_buffer)
                         display_buffer = ""
                 # else: keep buffering, might be a tool call
 
@@ -547,10 +651,15 @@ class ChatAgentWorker(QThread):
                 display_buffer = ""
             elif display_buffer:
                 # Not a tool call, display remaining buffer
-                self.text_chunk.emit(display_buffer)
+                self._emit_text(display_buffer)
 
         self._thinking_blocks = thinking_blocks
         return content, tool_calls
+
+    def _emit_text(self, text: str) -> None:
+        if text:
+            self._turn_text += text
+            self.text_chunk.emit(text)
 
     def _looks_like_json_tool_call(self, text: str, available_tools: list[str]) -> bool:
         """Check if text looks like it might be a JSON tool call being streamed.
@@ -616,9 +725,9 @@ class ChatAgentWorker(QThread):
 
 When this is the first message in a new conversation, briefly introduce yourself and what you can help with (1-2 sentences), then answer the user's question. Do not repeat the introduction on subsequent messages.
 
-Each user message starts with a {TURN_CONTEXT_OPEN} block: the default paths, project state and GUI state when that message was sent. The newest one is current. The user didn't type it, so don't quote it back.
+A user message can start with a {TURN_CONTEXT_OPEN} block. It holds only the sections that changed since the previous block: <paths> (default download and export paths), <project> (project state) and <gui_state> (what the app shows). The newest copy of each section is current. The user didn't type it, so don't quote it back.
 
-When downloading videos, use the default paths from that block - do NOT ask the user for a path unless they specify one.
+When downloading videos, use the default paths from <paths> - do NOT ask the user for a path unless they specify one.
 
 You help users create video projects by:
 - Detecting scenes in videos
@@ -747,34 +856,72 @@ Available tools:
         return prompt
 
     def _with_turn_context(self, messages: list[dict]) -> list[dict]:
-        """Prefix the newest user message with this turn's context block."""
+        """Prefix the newest user message with the context sections that changed.
+
+        Earlier blocks stay in the history, so each section is sent again only
+        when it differs from the newest copy already there.
+        """
         messages = list(messages)
-        if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), str):
-            context = self._build_turn_context().strip()
+        if not (messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), str)):
+            return messages
+        if self._keeps_history_verbatim():
+            sent = _sent_context_sections(messages[:-1])
+        else:
+            # Nothing binds earlier turns here, so drop superseded blocks
+            # rather than let them pile up, and resend the full context.
+            messages = [
+                {**m, "content": strip_turn_context(m["content"])}
+                if m.get("role") == "user" and isinstance(m.get("content"), str)
+                else m
+                for m in messages
+            ]
+            sent = {}
+        sections = self._build_turn_context()
+        changed = [
+            f"<{name}>\n{sections[name]}\n</{name}>"
+            for name in _CONTEXT_SECTIONS
+            if sections.get(name) and sections[name] != sent.get(name)
+        ]
+        if changed:
+            block = "\n".join(changed)
             messages[-1] = {
                 **messages[-1],
-                "content": f"{TURN_CONTEXT_OPEN}\n{context}\n{TURN_CONTEXT_CLOSE}\n\n{messages[-1]['content']}",
+                "content": f"{TURN_CONTEXT_OPEN}\n{block}\n{TURN_CONTEXT_CLOSE}\n\n{messages[-1]['content']}",
             }
         return messages
 
-    def _build_turn_context(self) -> str:
-        """Build the project and GUI state sent with the current user message."""
+    def _keeps_history_verbatim(self) -> bool:
+        """Claude's thinking blocks need earlier turns left exactly as sent."""
+        from core.llm_client import ProviderType, is_claude_model
+
+        return self.config.provider == ProviderType.ANTHROPIC and is_claude_model(self.config.model)
+
+    def _build_turn_context(self) -> dict[str, str]:
+        """Build the paths, project and GUI state sections for this turn."""
         from core.settings import load_settings
 
         settings = load_settings()
 
-        prompt = f"""DEFAULT PATHS (from user settings):
-- Download directory: {settings.download_dir}
-- Export directory: {settings.export_dir}
-"""
+        sections = {
+            "paths": (
+                f"- Download directory: {settings.download_dir}\n"
+                f"- Export directory: {settings.export_dir}"
+            ),
+        }
+        # Always present, so a cleared state replaces the last one sent.
+        sections["gui_state"] = (self.gui_state_context or "").strip() or "(no GUI state)"
 
+        prompt = ""
         if self.project:
             # Add project context
             sources_info = []
-            for s in self.project.sources:
+            for s in self.project.sources[:CONTEXT_MAX_SOURCES]:
                 clip_count = len(self.project.clips_by_source.get(s.id, []))
                 status = "analyzed" if s.analyzed else "not analyzed"
                 sources_info.append(f"  - {s.file_path.name} ({s.duration_seconds:.1f}s, {clip_count} clips, {status})")
+            if len(self.project.sources) > CONTEXT_MAX_SOURCES:
+                hidden = len(self.project.sources) - CONTEXT_MAX_SOURCES
+                sources_info.append(f"  - ... and {hidden} more (call list_sources for all of them)")
 
             seq_length = 0
             seq_duration_seconds = 0.0
@@ -789,7 +936,8 @@ Available tools:
                     for sc in track.clips:
                         src_clip = clips_by_id.get(sc.source_clip_id)
                         if src_clip and src_clip.shot_type:
-                            seq_shot_counts[src_clip.shot_type] = seq_shot_counts.get(src_clip.shot_type, 0) + 1
+                            shot = canonical_shot_type(src_clip.shot_type)
+                            seq_shot_counts[shot] = seq_shot_counts.get(shot, 0) + 1
                 if seq_shot_counts:
                     sorted_seq_shots = sorted(seq_shot_counts.items(), key=lambda x: x[1], reverse=True)
                     seq_shot_strs = [f"{name}: {cnt}" for name, cnt in sorted_seq_shots]
@@ -834,7 +982,8 @@ Available tools:
                 shot_counts: dict[str, int] = {}
                 for c in self.project.clips:
                     if c.shot_type:
-                        shot_counts[c.shot_type] = shot_counts.get(c.shot_type, 0) + 1
+                        shot = canonical_shot_type(c.shot_type)
+                        shot_counts[shot] = shot_counts.get(shot, 0) + 1
                 if shot_counts:
                     sorted_shots = sorted(shot_counts.items(), key=lambda x: x[1], reverse=True)
                     shot_strs = [f"{name}: {cnt}" for name, cnt in sorted_shots]
@@ -884,15 +1033,8 @@ You can reference existing clips by their IDs and build on this project.
 NO PROJECT LOADED - The user should open or create a project first, or you can help them start by detecting scenes in a video.
 """
 
-        # Add GUI state context if available
-        if self.gui_state_context:
-            prompt += f"""
-
-CURRENT GUI STATE:
-{self.gui_state_context}
-"""
-
-        return prompt
+        sections["project"] = prompt.strip()
+        return sections
 
     def _emit_gui_sync_signal(self, tool_name: str, args: dict, result: dict):
         """Emit GUI sync signals for tools that should update the GUI.

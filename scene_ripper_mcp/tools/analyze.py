@@ -7,6 +7,7 @@ from typing import Annotated
 
 from mcp.server.fastmcp import Context
 
+from core.constants import canonical_shot_type
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_project_path
 
@@ -184,7 +185,7 @@ def _analyze_shots_sync(path, store=None):
             skipped_count = len(clips) - analyzed_count
             shot_type_counts: dict = {}
             for item in completed:
-                shot_type = item["shot_type"]
+                shot_type = canonical_shot_type(item["shot_type"])
                 shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
 
             return json.dumps(
@@ -357,7 +358,8 @@ async def get_analysis_status(
         runtime = shot_runtime()
         for clip in clips:
             if clip.shot_type and operation_is_complete_for_clip("shots", clip, source=sources.get(clip.source_id), runtime=runtime, settings=settings):
-                shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
+                shot_type = canonical_shot_type(clip.shot_type)
+                shot_types[shot_type] = shot_types.get(shot_type, 0) + 1
         analysis["shots"]["distribution"] = shot_types
 
         queried = 0

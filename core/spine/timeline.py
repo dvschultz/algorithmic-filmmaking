@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from fractions import Fraction
 
+from core.constants import SHOT_TYPES, normalize_shot_type
 from core.project import Project
 from core.sequence_time import timeline_end, video_entry
 from models.media_time import frame_rate
@@ -161,12 +162,10 @@ def shuffle_clips(
 
         entries.sort(key=hue)
     elif method == "by_shot_type":
-        order = ["wide shot", "medium shot", "close-up", "extreme close-up", None]
-
         def shot_index(entry):
             clip = project.clips_by_id.get(entry.source_clip_id)
-            shot = clip.shot_type if clip else None
-            return order.index(shot) if shot in order else len(order)
+            shot = normalize_shot_type(clip.shot_type) if clip else None
+            return SHOT_TYPES.index(shot) if shot else len(SHOT_TYPES)
 
         entries.sort(key=shot_index)
     else:

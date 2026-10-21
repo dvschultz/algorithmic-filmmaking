@@ -11,6 +11,7 @@ from collections import Counter
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from core.constants import canonical_shot_type
 from core.remix.engine import (
     AlgorithmDefinition, ParameterSpec, ProposedEntry, SequenceProposal,
 )
@@ -76,7 +77,7 @@ def _get_proximity_score(clip: "Clip") -> float:
     if clip.cinematography and clip.cinematography.shot_size:
         return _SHOT_SIZE_PROXIMITY.get(clip.cinematography.shot_size, 5.0)
     if clip.shot_type:
-        return _SHOT_TYPE_PROXIMITY.get(clip.shot_type, 5.0)
+        return _SHOT_TYPE_PROXIMITY.get(canonical_shot_type(clip.shot_type), 5.0)
     return 5.0
 
 

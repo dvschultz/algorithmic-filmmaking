@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from core.constants import normalize_shot_type
+from core.constants import (
+    SHOT_TYPES,
+    canonical_shot_type,
+    normalize_shot_type,
+    shot_type_matches,
+)
 from core.spine._agent_formatting import ASPECT_RATIO_RANGES, append_gaze_fields
 
 if TYPE_CHECKING:
@@ -60,17 +65,14 @@ def filter_clips(
                 anchor_embedding = anchor_arr
 
     results = []
-    wanted_shot_type = (normalize_shot_type(shot_type) or shot_type) if shot_type else None
 
     for clip in project.clips:
         source = project.sources_by_id.get(clip.source_id)
         fps = source.fps if source else 30.0
         duration = (clip.end_frame - clip.start_frame) / fps
 
-        if wanted_shot_type:
-            clip_shot_type = getattr(clip, "shot_type", None)
-            if (normalize_shot_type(clip_shot_type) or clip_shot_type) != wanted_shot_type:
-                continue
+        if shot_type and not shot_type_matches(getattr(clip, "shot_type", None), shot_type):
+            continue
 
         if has_speech is not None:
             clip_has_speech = bool(getattr(clip, "transcript", None))
@@ -317,17 +319,16 @@ def find_similar_clips(
 
         if "shot_type" in criteria:
             if clip.shot_type and reference.shot_type:
-                if clip.shot_type == reference.shot_type:
+                if shot_type_matches(clip.shot_type, reference.shot_type):
                     score += 1.0
-                elif clip.shot_type and reference.shot_type:
-                    close_types = {
-                        "close_up": ["extreme_close_up", "medium_close_up"],
-                        "medium_shot": ["medium_close_up", "medium_long_shot"],
-                        "wide_shot": ["medium_long_shot", "extreme_wide_shot"],
-                    }
-                    if reference.shot_type in close_types:
-                        if clip.shot_type in close_types[reference.shot_type]:
-                            score += 0.5
+                else:
+                    # Neighbouring sizes (e.g. close-up and extreme close-up)
+                    ref_size = normalize_shot_type(reference.shot_type)
+                    clip_size = normalize_shot_type(clip.shot_type)
+                    if ref_size and clip_size and abs(
+                        SHOT_TYPES.index(ref_size) - SHOT_TYPES.index(clip_size)
+                    ) == 1:
+                        score += 0.5
 
         if "color" in criteria and reference.dominant_colors and clip.dominant_colors:
             ref_hue = get_primary_hue(reference.dominant_colors)
@@ -394,7 +395,7 @@ def group_clips_by(project, criterion: str) -> dict:
         fps = source.fps if source else 30.0
 
         if criterion == "shot_type":
-            key = clip.shot_type if clip.shot_type else "unknown"
+            key = canonical_shot_type(clip.shot_type) if clip.shot_type else "unknown"
         elif criterion == "color":
             if clip.dominant_colors:
                 key = classify_color_palette(clip.dominant_colors)

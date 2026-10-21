@@ -395,7 +395,7 @@ with patch.object(DescriptionWorker,'run',describe), patch.object(ShotTypeWorker
             assert clip.description=='A description' and clip.shot_type=='wide'
             assert replies['description-request']['result']['described_clips']==1
             assert replies['description-request']['result']['sample_descriptions'][0]['description']=='A description'
-            assert replies['shot-request']['result']['shot_type_summary']=={'wide':1}
+            assert replies['shot-request']['result']['shot_type_summary']=={'wide shot':1}
         else:
             assert clip.description is None
             assert replies['description-request']['result']['cancelled']

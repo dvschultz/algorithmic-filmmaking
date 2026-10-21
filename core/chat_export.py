@@ -24,10 +24,17 @@ def strip_turn_context(text: str) -> str:
     return text[end + len(TURN_CONTEXT_CLOSE) + 3:]
 
 
+def strip_thinking_blocks(messages: list[dict]) -> list[dict]:
+    """Return copies of messages without Claude thinking blocks."""
+    return [
+        {key: value for key, value in message.items() if key != "thinking_blocks"}
+        for message in messages
+    ]
+
+
 def _messages_for_export(messages: list[dict]) -> list[dict]:
     cleaned = []
-    for message in messages:
-        message = {key: value for key, value in message.items() if key != "thinking_blocks"}
+    for message in strip_thinking_blocks(messages):
         if message.get("role") == "user" and isinstance(message.get("content"), str):
             message["content"] = strip_turn_context(message["content"])
         cleaned.append(message)

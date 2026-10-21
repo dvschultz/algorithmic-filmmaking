@@ -52,6 +52,23 @@ def test_cloud_classifier_writes_canonical_values():
         ("Close-up", "close-up"),
         ("extreme close-up", "extreme close-up"),
         ("Extreme CU", "extreme close-up"),
+        # cinematography get_simple_shot_type() output
+        ("wide", "wide shot"),
+        ("full", "full shot"),
+        ("medium", "medium shot"),
+        ("ECU", "extreme close-up"),
+        ("ecu", "extreme close-up"),
+        # cinematography shot sizes that name exactly one canonical size
+        ("ELS", "wide shot"),
+        ("LS", "full shot"),
+        ("MS", "medium shot"),
+        ("CU", "close-up"),
+        # in-between sizes and inserts have no single canonical equivalent
+        ("VLS", None),
+        ("MLS", None),
+        ("MCU", None),
+        ("BCU", None),
+        ("Insert", None),
         ("bogus", None),
         ("", None),
     ],

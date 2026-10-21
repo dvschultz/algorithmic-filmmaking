@@ -7,6 +7,7 @@ from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import QComboBox
 
 from core.analysis.shots import SHOT_TYPES, SHOT_TYPE_DISPLAY
+from core.constants import canonical_shot_type
 from ui.theme import theme
 
 
@@ -104,11 +105,11 @@ class ShotTypeDropdown(QComboBox):
         """Set current value programmatically (doesn't emit signal).
 
         Args:
-            shot_type: Shot type string or None/empty for "Not set"
+            shot_type: Shot type in any known spelling, or None/empty for "Not set"
         """
         self._change_in_progress = True
 
-        value = shot_type or NOT_SET_VALUE
+        value = canonical_shot_type(shot_type) or NOT_SET_VALUE
         self._current_value = value
 
         # Find matching item

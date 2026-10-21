@@ -33,7 +33,7 @@ from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescript
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
 from ui.workers.variation_worker import VariationWorker
-from core.constants import normalize_shot_type
+from core.constants import shot_type_matches
 from core.cost_estimates import estimate_sequence_cost
 from core.remix import run_registry_algorithm
 from core.analysis_dependencies import get_operation_feature_candidates
@@ -2886,8 +2886,6 @@ class SequenceTab(BaseTab):
         Returns:
             Number of clips remaining after filtering.
         """
-        if shot_type:
-            shot_type = normalize_shot_type(shot_type) or shot_type
         if self._current_state == self.STATE_TIMELINE:
             # Filter timeline clips
             seq = self.timeline.sequence
@@ -2900,7 +2898,7 @@ class SequenceTab(BaseTab):
             matching = 0
             for sc in all_seq_clips:
                 for clip, source in self._available_clips:
-                    if clip.id == sc.source_clip_id and normalize_shot_type(clip.shot_type or "") == shot_type:
+                    if clip.id == sc.source_clip_id and shot_type_matches(clip.shot_type, shot_type):
                         matching += 1
                         break
             return matching
@@ -2910,7 +2908,7 @@ class SequenceTab(BaseTab):
                 return len(self._available_clips)
             return sum(
                 1 for clip, source in self._available_clips
-                if normalize_shot_type(clip.shot_type or "") == shot_type
+                if shot_type_matches(clip.shot_type, shot_type)
             )
 
     def apply_gaze_filter(self, gaze_category: str | None) -> int:

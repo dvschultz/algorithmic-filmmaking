@@ -10,6 +10,7 @@ from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success, output_info
 from cli.utils.progress import ProgressContext
 from cli.utils.project_writer import own_project
+from core.constants import canonical_shot_type
 from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS
 
 
@@ -681,7 +682,7 @@ def shots(
         )
         shot_counts: dict[str, int] = {}
         for item in batch["succeeded"]:
-            label = item["shot_type"]
+            label = canonical_shot_type(item["shot_type"])
             shot_counts[label] = shot_counts.get(label, 0) + 1
     except Exception as exc:
         exit_with(ExitCode.GENERAL_ERROR, f"Shot classification failed: {exc}")

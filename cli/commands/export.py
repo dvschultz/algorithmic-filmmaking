@@ -9,6 +9,7 @@ from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success, output_info
 from cli.utils.progress import ProgressContext, create_progress_callback
+from core.constants import shot_type_matches
 
 
 @click.group()
@@ -537,7 +538,9 @@ def _apply_filter(clips: list, filter_expr: str) -> list:
     filtered = []
     for clip in clips:
         if key == "shot_type":
-            if clip.shot_type and value in clip.shot_type.lower():
+            if clip.shot_type and (
+                shot_type_matches(clip.shot_type, value) or value in clip.shot_type.lower()
+            ):
                 filtered.append(clip)
         elif key == "has_transcript":
             has_it = clip.transcript is not None

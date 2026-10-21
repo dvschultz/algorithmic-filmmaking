@@ -92,7 +92,9 @@ from ui.workers.standalone_analysis import start_standalone_analysis
 from ui.workers.gui_tool_reply import (
     GuiToolReply, gui_reply_scope,
 )
-from ui.chat_worker import ChatAgentWorker, strip_thinking_blocks
+from core.constants import canonical_shot_type
+from core.chat_export import strip_thinking_blocks
+from ui.chat_worker import ChatAgentWorker
 from ui.clip_browser import VIRTUALIZATION_THRESHOLD, clear_thumbnail_pixmap_cache
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
@@ -1532,7 +1534,7 @@ class MainWindow(QMainWindow):
         # Fixed per conversation (and provider) so Claude thinking blocks in
         # the history stay valid; see ui/chat_worker.py.
         self._chat_system_prompt: str | None = None
-        self._chat_system_prompt_provider: str | None = None
+        self._chat_system_prompt_key: str | None = None
         self._current_chat_bubble = None
         self._current_tool_indicator = None
         self._chat_worker: Optional[ChatAgentWorker] = None
@@ -2005,10 +2007,12 @@ class MainWindow(QMainWindow):
             temperature=self.settings.llm_temperature,
         )
 
-        if self._chat_system_prompt_provider != provider_key:
-            # A different system prompt invalidates earlier thinking blocks.
+        chat_key = f"{provider_key}:{self.settings.llm_model}"
+        if self._chat_system_prompt_key != chat_key:
+            # A new system prompt invalidates earlier thinking blocks, and
+            # another model can't read them anyway.
             self._chat_system_prompt = None
-            self._chat_system_prompt_provider = provider_key
+            self._chat_system_prompt_key = chat_key
             self._chat_history = strip_thinking_blocks(self._chat_history)
 
         # Build message history
@@ -2387,28 +2391,23 @@ class MainWindow(QMainWindow):
         self.chat_panel.on_stream_complete()
 
         # The worker's conversation is the history exactly as sent, including
-        # the turn context and thinking blocks; keep it byte-for-byte.
+        # the turn context and thinking blocks; keep it byte-for-byte. The
+        # worker sets it before every completion.
         worker = self._chat_worker
-        if worker is not None and worker.conversation:
+        if worker is not None:
             self._chat_system_prompt = worker.system_prompt
             self._chat_history = list(worker.conversation)
-            return
-
-        # Add user message to history
-        self._chat_history.append({"role": "user", "content": self._last_user_message})
-
-        # Add tool interactions to history
-        for msg in tool_history:
-            self._chat_history.append(msg)
-
-        # Add final assistant response
-        if response and response != "*Cancelled*":
-            self._chat_history.append({"role": "assistant", "content": response})
 
     def _on_chat_error(self, error: str):
         """Handle chat error."""
         logger.error(f"Chat error: {error}")
         self.chat_panel.on_stream_error(error)
+        # Keep the turn up to its last completed tool round: those tools may
+        # already have changed the project.
+        worker = self._chat_worker
+        if worker is not None and worker.conversation:
+            self._chat_system_prompt = worker.system_prompt
+            self._chat_history = list(worker.conversation)
 
     def _on_chat_auth_failed(self, category: str, user_message: str):
         """Handle subscription-auth failures from the chat worker."""
@@ -3478,7 +3477,8 @@ class MainWindow(QMainWindow):
             shot_types = {}
             for clip in accepted:
                 if clip.shot_type:
-                    shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
+                    shot = canonical_shot_type(clip.shot_type)
+                    shot_types[shot] = shot_types.get(shot, 0) + 1
             self._active_custom_query_text = controller.query
             try:
                 payload = self._build_agent_analysis_result(
@@ -3728,7 +3728,8 @@ class MainWindow(QMainWindow):
             for clip in completed_clips("shots"):
                 if not clip.shot_type:
                     continue
-                distribution[clip.shot_type] = distribution.get(clip.shot_type, 0) + 1
+                shot = canonical_shot_type(clip.shot_type)
+                distribution[shot] = distribution.get(shot, 0) + 1
                 row = self._build_agent_clip_context(clip)
                 row["shot_type"] = clip.shot_type
                 per_clip.append(row)
@@ -7362,13 +7363,14 @@ class MainWindow(QMainWindow):
         # Non-dialog algorithms: auto-build sequence
         # Get shot type filter from pending state
         shot_type = getattr(self, '_intention_pending_shot_type', None)
+        from core.constants import shot_type_matches
 
         clips_with_sources = []
         for clip in all_clips:
             source = self.sources_by_id.get(clip.source_id)
             if source:
                 # Apply shot type filter if specified
-                if shot_type and clip.shot_type != shot_type:
+                if shot_type and not shot_type_matches(clip.shot_type, shot_type):
                     continue
                 clips_with_sources.append((clip, source))
 

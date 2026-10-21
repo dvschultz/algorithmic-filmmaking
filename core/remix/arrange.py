@@ -11,6 +11,7 @@ import logging
 from threading import Event
 from typing import Any, Sequence
 
+from core.constants import canonical_shot_type
 from core.remix.engine import (
     AlgorithmDefinition, ClipInput, ParameterSpec, ProposedEntry, SequenceProposal,
 )
@@ -83,7 +84,10 @@ class ShotTypeDefinition(AlgorithmDefinition):
         from core.analysis.shots import SHOT_TYPES
 
         order = {shot: i for i, shot in enumerate(SHOT_TYPES)}
-        ordered = sorted(inputs, key=lambda item: order.get(item[0].shot_type, 999) if item[0].shot_type else 999)
+        ordered = sorted(
+            inputs,
+            key=lambda item: order.get(canonical_shot_type(item[0].shot_type), 999) if item[0].shot_type else 999,
+        )
         return _ordering(ordered)
 
 
@@ -91,7 +95,7 @@ def proximity_score(clip: Any) -> float:
     if clip.cinematography and clip.cinematography.shot_size:
         return SHOT_SIZE_PROXIMITY.get(clip.cinematography.shot_size, 5.0)
     if clip.shot_type:
-        return SHOT_TYPE_PROXIMITY.get(clip.shot_type, 5.0)
+        return SHOT_TYPE_PROXIMITY.get(canonical_shot_type(clip.shot_type), 5.0)
     return 5.0
 
 

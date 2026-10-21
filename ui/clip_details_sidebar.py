@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.constants import canonical_shot_type
 from models.clip import Clip, Source
 from ui.theme import theme, TypeScale
 from ui.video_player import VideoPlayer
@@ -398,7 +399,7 @@ class ClipDetailsSidebar(QDockWidget):
         try:
             if self.name_edit.text() != clip.name:
                 self.name_edit.setText(clip.name)
-            if self.shot_type_dropdown.value() != clip.shot_type:
+            if self.shot_type_dropdown.value() != (canonical_shot_type(clip.shot_type) or ""):
                 self.shot_type_dropdown.setValue(clip.shot_type)
             if self.transcript_edit.segments() != (clip.transcript or []):
                 self.transcript_edit.setSegments(deepcopy(clip.transcript))

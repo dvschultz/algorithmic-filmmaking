@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from core.constants import canonical_shot_type
 from core.operations.analysis_inputs import clip_input
 from core.operations.clip_analysis import ClipAnalysisOptions
 
@@ -138,7 +139,7 @@ def finish_standalone_analysis(window: Any, controller: Any, result: dict) -> No
     if operation == "shots":
         counts: dict[str, int] = {}
         for clip in accepted:
-            label = clip.shot_type or "unknown"
+            label = canonical_shot_type(clip.shot_type) or "unknown"
             counts[label] = counts.get(label, 0) + 1
         extra["shot_type_summary"] = counts
     elif operation == "transcribe":

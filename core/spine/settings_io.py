@@ -199,29 +199,41 @@ _REGISTRY_ONLY_LABELS = {
 }
 
 
+# Prerequisites that never gate availability because generation copes without
+# them: ``prepare`` computes brightness and volume (arrange._ScalarDefinition),
+# embeddings (similarity_chain, staccato), boundary embeddings (match_cut) and
+# face embeddings (rose_hobart's match_person); free_association's embedding
+# shortlist falls back to sampling.
+AUTO_RESOLVED_PREREQUISITES = frozenset(
+    {"brightness", "volume", "embeddings", "boundary_embeddings", "face_embeddings"}
+)
+
+
+def algorithm_availability(definition, clips) -> tuple[bool, str | None]:
+    """Return whether any clip has records for one of the definition's gated prerequisites.
+
+    Presence uses the Sequence tab cost gate's per-clip checks. Any one
+    gated prerequisite suffices (proximity reads cinematography or shot type).
+    """
+    from core.cost_estimates import METADATA_CHECKS, OPERATION_LABELS
+
+    gated = [op for op in definition.prerequisites if op not in AUTO_RESOLVED_PREREQUISITES]
+    if not gated or any(METADATA_CHECKS[op](clip) for op in gated for clip in clips):
+        return True, None
+    labels = " or ".join(OPERATION_LABELS.get(op, op) for op in gated)
+    return False, f"Run {labels} on clips first"
+
+
 def list_sorting_algorithms(project) -> dict:
     """List all sequencer algorithms with availability flags."""
     clips = project.clips
     has_colors = any(clip.dominant_colors for clip in clips) if clips else False
-    has_transcripts = any(clip.transcript for clip in clips) if clips else False
-
-    has_shot_type = any(clip.shot_type for clip in clips) if clips else False
-    has_text = any(clip.extracted_texts for clip in clips) if clips else False
-    has_descriptions = any(clip.description for clip in clips) if clips else False
-    has_face_embeddings = (
-        any(clip.face_embeddings for clip in clips) if clips else False
-    )
-    has_gaze = (
-        any(clip.gaze_category is not None for clip in clips) if clips else False
-    )
 
     algorithms = [
         {
             "key": "shuffle",
             "name": "Hatchet Job",
             "description": "Randomly shuffle clips into a new order",
-            "available": True,
-            "reason": None,
             "parameters": [
                 {"name": "seed", "type": "integer", "description": "Random seed for reproducibility (0 = random)", "default": 0},
                 {"name": "random_hflip", "type": "boolean", "description": "Randomly flip ~50% of clips horizontally at export", "default": False},
@@ -234,16 +246,12 @@ def list_sorting_algorithms(project) -> dict:
             "key": "sequential",
             "name": "Time Capsule",
             "description": "Keep clips in their original order",
-            "available": True,
-            "reason": None,
             "parameters": [],
         },
         {
             "key": "duration",
             "name": "Tempo Shift",
             "description": "Order clips from shortest to longest (or reverse)",
-            "available": True,
-            "reason": None,
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["short_first", "long_first"], "default": "short_first"},
             ],
@@ -252,8 +260,6 @@ def list_sorting_algorithms(project) -> dict:
             "key": "color",
             "name": "Chromatics",
             "description": "Arrange clips along a color gradient or cycle through the spectrum",
-            "available": has_colors,
-            "reason": None if has_colors else "Run color analysis on clips first",
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm", "complementary"], "default": "rainbow"},
                 {"name": "no_color_handling", "type": "string", "options": ["append_end", "exclude", "sort_inline"], "default": "append_end"},
@@ -263,8 +269,6 @@ def list_sorting_algorithms(project) -> dict:
             "key": "brightness",
             "name": "Into the Dark",
             "description": "Arrange clips from light to shadow, or shadow to light (auto-computes if needed)",
-            "available": True,
-            "reason": None,
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["light_to_dark", "dark_to_light"], "default": "light_to_dark"},
             ],
@@ -273,8 +277,6 @@ def list_sorting_algorithms(project) -> dict:
             "key": "volume",
             "name": "Crescendo",
             "description": "Build from silence to thunder, or thunder to silence (auto-computes if needed)",
-            "available": True,
-            "reason": None,
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["quiet_to_loud", "loud_to_quiet"], "default": "quiet_to_loud"},
             ],
@@ -283,8 +285,6 @@ def list_sorting_algorithms(project) -> dict:
             "key": "shot_type",
             "name": "Focal Ladder",
             "description": "Arrange clips by camera shot scale",
-            "available": has_shot_type,
-            "reason": None if has_shot_type else "Run shot type classification on clips first",
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["wide_to_close", "close_to_wide"], "default": "wide_to_close"},
             ],
@@ -293,8 +293,6 @@ def list_sorting_algorithms(project) -> dict:
             "key": "proximity",
             "name": "Up Close and Personal",
             "description": "Glide from distant vistas to intimate close-ups",
-            "available": has_shot_type,
-            "reason": None if has_shot_type else "Run shot type classification on clips first",
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["far_to_near", "near_to_far"], "default": "far_to_near"},
             ],
@@ -303,40 +301,30 @@ def list_sorting_algorithms(project) -> dict:
             "key": "similarity_chain",
             "name": "Human Centipede",
             "description": "Chain clips together by visual similarity (auto-computes embeddings if needed)",
-            "available": True,
-            "reason": None,
             "parameters": [],
         },
         {
             "key": "match_cut",
             "name": "Match Cut",
             "description": "Find hidden connections between clips using boundary frame similarity (auto-computes if needed)",
-            "available": True,
-            "reason": None,
             "parameters": [],
         },
         {
             "key": "exquisite_corpus",
             "name": "Exquisite Corpus",
             "description": "Generate a poem from on-screen text",
-            "available": has_text,
-            "reason": None if has_text else "Run OCR/text extraction on clips first",
             "parameters": [],
         },
         {
             "key": "storyteller",
             "name": "Storyteller",
             "description": "Create a narrative from clip descriptions",
-            "available": has_descriptions,
-            "reason": None if has_descriptions else "Run clip description analysis first",
             "parameters": [],
         },
         {
             "key": "rose_hobart",
             "name": "Rose Hobart",
             "description": "Isolate clips featuring a specific person (requires reference image)",
-            "available": has_face_embeddings,
-            "reason": None if has_face_embeddings else "Run face detection analysis first",
             "parameters": [
                 {"name": "reference_image_paths", "type": "array", "description": "Paths to 1-3 reference images of the person"},
                 {"name": "sensitivity", "type": "string", "options": ["strict", "balanced", "loose"], "default": "balanced"},
@@ -348,8 +336,6 @@ def list_sorting_algorithms(project) -> dict:
             "key": "gaze_sort",
             "name": "Gaze Sort",
             "description": "Arrange clips by gaze direction",
-            "available": has_gaze,
-            "reason": None if has_gaze else "Run gaze analysis on clips first",
             "parameters": [
                 {"name": "direction", "type": "string", "options": ["left_to_right", "right_to_left", "up_to_down", "down_to_up"], "default": "left_to_right"},
             ],
@@ -358,16 +344,12 @@ def list_sorting_algorithms(project) -> dict:
             "key": "gaze_consistency",
             "name": "Gaze Consistency",
             "description": "Group clips by matching gaze direction",
-            "available": has_gaze,
-            "reason": None if has_gaze else "Run gaze analysis on clips first",
             "parameters": [],
         },
         {
             "key": "cassette_tape",
             "name": "Cassette Tape",
             "description": "Find clips that say specific phrases (transcript-driven mixtape)",
-            "available": has_transcripts,
-            "reason": None if has_transcripts else "Run transcribe analysis on clips first",
             "parameters": [
                 {
                     "name": "phrases",
@@ -391,11 +373,13 @@ def list_sorting_algorithms(project) -> dict:
         label, description = _REGISTRY_ONLY_LABELS.get(key, (key.replace("_", " ").title(), ""))
         algorithms.append({
             "key": key, "name": label, "description": description,
-            "available": True, "reason": None, "parameters": [],
-            "tool": "generate_sequence",
+            "parameters": [], "tool": "generate_sequence",
         })
     for entry in algorithms:
         definition = registry.get(str(entry["key"]))
+        entry["available"], entry["reason"] = (
+            algorithm_availability(definition, clips) if definition is not None else (True, None)
+        )
         if definition is not None:
             entry["engine"] = definition.describe()
             entry["engine_note"] = (
@@ -417,7 +401,9 @@ def list_sorting_algorithms(project) -> dict:
 
 
 __all__ = [
+    "AUTO_RESOLVED_PREREQUISITES",
     "SAFE_SETTINGS",
+    "algorithm_availability",
     "clear_custom_queries",
     "get_settings",
     "list_sorting_algorithms",

@@ -6,7 +6,7 @@ from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
 
-from core.constants import normalize_shot_type
+from core.constants import shot_type_matches
 
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_project_path
@@ -189,7 +189,6 @@ async def filter_clips(
         clips = project.clips
         sources_by_id = project.sources_by_id
 
-        wanted_shot_type = (normalize_shot_type(shot_type) or shot_type) if shot_type else None
         filtered = []
         for clip in clips:
             source = sources_by_id.get(clip.source_id)
@@ -197,9 +196,7 @@ async def filter_clips(
             duration = clip.duration_seconds(fps)
 
             # Apply filters
-            if wanted_shot_type and (
-                normalize_shot_type(clip.shot_type) or clip.shot_type
-            ) != wanted_shot_type:
+            if shot_type and not shot_type_matches(clip.shot_type, shot_type):
                 continue
             if has_speech is not None:
                 clip_has_speech = bool(clip.transcript and clip.get_transcript_text().strip())

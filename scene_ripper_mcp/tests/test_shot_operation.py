@@ -65,7 +65,7 @@ def test_legacy_tool_shared_classification_and_response(project_file, monkeypatc
         "analyzed_clips": 1,
         "skipped_clips": 2,
         "total_clips": 3,
-        "shot_type_distribution": {"wide": 1},
+        "shot_type_distribution": {"wide shot": 1},
     }
     assert shared.called
     assert compute.call_count == 2
@@ -132,7 +132,7 @@ def test_legacy_retry_reuses_inference_after_persistence_failure(
         "analyzed_clips": 2,
         "skipped_clips": 1,
         "total_clips": 3,
-        "shot_type_distribution": {"wide": 2},
+        "shot_type_distribution": {"wide shot": 2},
     }
     assert compute.call_count == 2
     saved = Project.load(path)
@@ -158,7 +158,7 @@ def test_legacy_provider_retry_reuses_earlier_success(project_file, monkeypatch)
     assert path.read_bytes() == before
     result = json.loads(asyncio.run(analyze_shots(str(path))))
     assert result["success"] is True
-    assert result["shot_type_distribution"] == {"wide": 1, "medium": 1}
+    assert result["shot_type_distribution"] == {"wide shot": 1, "medium shot": 1}
     assert compute.call_count == 3
 
 
@@ -169,7 +169,7 @@ def test_legacy_successful_new_request_refreshes_labels(project_file, monkeypatc
     assert json.loads(asyncio.run(analyze_shots(str(path))))["success"]
     compute.return_value = ("medium", 0.8)
     response = json.loads(asyncio.run(analyze_shots(str(path))))
-    assert response["shot_type_distribution"] == {"medium": 2}
+    assert response["shot_type_distribution"] == {"medium shot": 2}
     assert compute.call_count == 4
     assert len(Project.load(path).metadata.job_results) == 4
 

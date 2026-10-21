@@ -14,6 +14,7 @@ import math
 from typing import TYPE_CHECKING, Optional
 
 from core.analysis.color import _SATURATION_THRESHOLD, rgb_to_hsv
+from core.constants import canonical_shot_type
 from core.remix.drawing_segment import DrawingSegment
 from core.remix.engine import (
     AlgorithmDefinition, ParameterSpec, Prepared, ProposedEntry, SequenceProposal,
@@ -57,6 +58,13 @@ _SHOT_TYPE_NUMERIC = {
     "ELS": 1.0,
     "Insert": 0.4,
 }
+
+
+def _shot_type_numeric(shot_type: str) -> float:
+    # Shot sizes keep their finer value; other spellings use the canonical one.
+    if shot_type in _SHOT_TYPE_NUMERIC:
+        return _SHOT_TYPE_NUMERIC[shot_type]
+    return _SHOT_TYPE_NUMERIC.get(canonical_shot_type(shot_type), 0.5)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -433,8 +441,8 @@ def _compute_match_score(
 
     # Shot type (VLM segments only)
     if segment.shot_type and clip.shot_type:
-        seg_val = _SHOT_TYPE_NUMERIC.get(segment.shot_type, 0.5)
-        clip_val = _SHOT_TYPE_NUMERIC.get(clip.shot_type, 0.5)
+        seg_val = _shot_type_numeric(segment.shot_type)
+        clip_val = _shot_type_numeric(clip.shot_type)
         total += WEIGHT_SHOT_TYPE * abs(seg_val - clip_val)
         total_weight += WEIGHT_SHOT_TYPE
 
