@@ -102,13 +102,13 @@ class ProviderType(Enum):
     OPENROUTER = "openrouter"
 
 
-# Default models for each provider (updated January 2026)
+# Default models for each provider (Anthropic/OpenRouter Claude updated October 2026)
 DEFAULT_MODELS = {
     "local": "qwen3:8b",
     "openai": "gpt-5.2",
-    "anthropic": "claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5
+    "anthropic": "claude-sonnet-5-5",  # Claude Sonnet 5.5
     "gemini": "gemini-2.5-flash",
-    "openrouter": "anthropic/claude-sonnet-4-5",
+    "openrouter": "anthropic/claude-sonnet-5.5",
 }
 
 # Available models per provider (first is recommended)
@@ -127,9 +127,9 @@ PROVIDER_MODELS = {
         ("o1-mini", "o1-mini"),
     ],
     "anthropic": [
-        ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5 (Recommended)"),
-        ("claude-opus-4-5-20251101", "Claude Opus 4.5"),
-        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+        ("claude-sonnet-5-5", "Claude Sonnet 5.5 (Recommended)"),
+        ("claude-opus-5-5", "Claude Opus 5.5"),
+        ("claude-haiku-5-5", "Claude Haiku 5.5"),
     ],
     "gemini": [
         ("gemini-3-flash-preview", "Gemini 3 Flash (Recommended)"),
@@ -137,8 +137,8 @@ PROVIDER_MODELS = {
         ("gemini-2.5-pro", "Gemini 2.5 Pro"),
     ],
     "openrouter": [
-        ("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5 (Recommended)"),
-        ("anthropic/claude-haiku-4-5", "Claude Haiku 4.5"),
+        ("anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5 (Recommended)"),
+        ("anthropic/claude-haiku-5.5", "Claude Haiku 5.5"),
         ("openai/gpt-5.2", "GPT-5.2"),
         ("google/gemini-2.5-flash", "Gemini 2.5 Flash"),
     ],
@@ -161,7 +161,11 @@ def resolve_model_alias(provider: str, model: str) -> str:
     if not model:
         return model
     provider_key = (provider or "").lower()
-    normalized = model.removeprefix("gemini/").removeprefix("anthropic/").removeprefix("openrouter/")
+    if provider_key == "openrouter":
+        # OpenRouter ids carry their vendor prefix (anthropic/..., google/...).
+        normalized = model.removeprefix("openrouter/")
+    else:
+        normalized = model.removeprefix("gemini/").removeprefix("anthropic/").removeprefix("openrouter/")
     return MODEL_ALIASES.get(provider_key, {}).get(normalized, normalized)
 
 
@@ -439,6 +443,7 @@ class LLMClient:
             "temperature": self.config.temperature,
             "timeout": 120,  # Prevent indefinite hangs on slow/unresponsive providers
         }
+        kwargs = prepare_claude_kwargs(kwargs["model"], kwargs)
 
         if self.config.api_key:
             kwargs["api_key"] = self.config.api_key
@@ -485,6 +490,7 @@ class LLMClient:
             "temperature": self.config.temperature,
             "timeout": 120,  # Prevent indefinite hangs on slow/unresponsive providers
         }
+        kwargs = prepare_claude_kwargs(kwargs["model"], kwargs)
 
         if self.config.api_key:
             kwargs["api_key"] = self.config.api_key
@@ -502,6 +508,7 @@ class LLMClient:
         )
 
         response = await acompletion(**kwargs)
+        raise_if_claude_refused(kwargs["model"], response)
         return response
 
 
@@ -573,6 +580,48 @@ def normalize_model_for_litellm(model: str) -> str:
     if "claude" in m and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
         return f"anthropic/{model}"
     return model
+
+
+# Claude Opus 4.7+ and every 5.x model return a 400 for non-default sampling
+# params, and LiteLLM still forwards them. Omitting them is accepted on every
+# Claude model, so they are dropped for all of them.
+_CLAUDE_REJECTED_PARAMS = ("temperature", "top_p", "top_k")
+
+# The 5.x models think by default and thinking counts against max_tokens, so a
+# small cap can be spent before any text is written.
+CLAUDE_MIN_MAX_TOKENS = 4096
+
+
+def is_claude_model(model: str) -> bool:
+    """True for any Claude model string (anthropic/, bedrock/, openrouter/...)."""
+    return "claude" in (model or "").lower()
+
+
+def prepare_claude_kwargs(model: str, kwargs: dict) -> dict:
+    """Return LiteLLM kwargs adjusted for Claude's request rules; other models pass through."""
+    if not is_claude_model(model):
+        return kwargs
+    prepared = {k: v for k, v in kwargs.items() if k not in _CLAUDE_REJECTED_PARAMS}
+    max_tokens = prepared.get("max_tokens")
+    if max_tokens is not None and max_tokens < CLAUDE_MIN_MAX_TOKENS:
+        prepared["max_tokens"] = CLAUDE_MIN_MAX_TOKENS
+    return prepared
+
+
+def raise_if_claude_refused(model: str, response) -> None:
+    """Raise when Claude's safety classifiers declined the request.
+
+    LiteLLM maps Anthropic's ``stop_reason: "refusal"`` to
+    ``finish_reason: "content_filter"``. Any partial text is discarded.
+    """
+    if not is_claude_model(model):
+        return
+    choices = getattr(response, "choices", None) or []
+    if choices and getattr(choices[0], "finish_reason", None) == "content_filter":
+        raise RuntimeError(
+            f"{model} declined this request (Anthropic safety filter). "
+            "Rephrase it or choose a different model."
+        )
 
 
 def _ollama_api_base(settings) -> str:
@@ -670,13 +719,14 @@ def complete_with_local_fallback(
 
     if api_key:
         try:
-            return litellm.completion(
+            response = litellm.completion(
                 model=cloud_model,
                 messages=messages,
                 api_key=api_key,
-                temperature=temperature,
-                **kwargs,
+                **prepare_claude_kwargs(cloud_model, {"temperature": temperature, **kwargs}),
             )
+            raise_if_claude_refused(cloud_model, response)
+            return response
         except (
             litellm.AuthenticationError,
             litellm.RateLimitError,
@@ -1028,9 +1078,14 @@ def complete_routed(
         # Preserve the existing api_key resolution behavior — callers
         # that pass api_key=... still win; otherwise it stays None and
         # litellm reads from env/keyring as before.
-        return litellm.completion(
-            model=model, messages=messages, api_key=api_key, **kwargs
+        response = litellm.completion(
+            model=model,
+            messages=messages,
+            api_key=api_key,
+            **prepare_claude_kwargs(model, kwargs),
         )
+        raise_if_claude_refused(model, response)
+        return response
 
     # auth_mode == "subscription"
     from core import codex_client

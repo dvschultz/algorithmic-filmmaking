@@ -49,7 +49,7 @@ _PER_SLICE_PROMPT_TEMPLATE = (
     '    "pacing": "fast" | "medium" | "slow",\n'
     '    "brightness": "bright" | "medium" | "dark"\n'
     "}}\n\n"
-    "First briefly describe what you see, then provide the JSON."
+    "Respond with only the JSON object."
 )
 
 # ──────────────────────────────────────────────────────────────

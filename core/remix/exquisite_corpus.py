@@ -194,14 +194,12 @@ def generate_poem(
     # Create the LLM prompt
     system_prompt = f"""You are a poet creating visual poetry from found text.
 
-CRITICAL RULES:
-1. You MUST use phrases EXACTLY as provided - no modifications whatsoever
-2. Each line of your poem must be one complete phrase from the inventory
-3. You cannot split phrases, combine words from different phrases, or change any words
-4. You may choose which phrases to use and in what order
-5. Create a cohesive poem that evokes the requested mood
-6. Consider the visual and sonic qualities of the phrases
-7. LENGTH REQUIREMENT: {length_instruction}
+RULES:
+1. Each line of the poem is one whole phrase from the inventory, chosen by its clip_id; the phrases are on-screen text from the clips, so they are used exactly as written
+2. You choose which phrases to use and in what order
+3. Create a cohesive poem that evokes the requested mood
+4. Consider the visual and sonic qualities of the phrases
+5. LENGTH REQUIREMENT: {length_instruction}
 
 {form_instruction}
 

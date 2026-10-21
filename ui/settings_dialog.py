@@ -105,8 +105,8 @@ VLM_MODELS = [
     "gpt-5.4-mini",
     "gpt-5.4",
     "gpt-5.4-nano",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
 ]
 
 GROQ_TRANSCRIPTION_MODELS = [
@@ -735,7 +735,8 @@ class SettingsDialog(QDialog):
         self.corpus_temp_slider.setRange(0, 100)  # 0.0 to 1.0
         self.corpus_temp_slider.setToolTip(
             "Higher values = more creative/unpredictable poems\n"
-            "Lower values = more focused/deterministic results"
+            "Lower values = more focused/deterministic results\n"
+            "Has no effect on Claude models, which don't accept a temperature setting."
         )
         self.corpus_temp_slider.valueChanged.connect(self._on_corpus_temp_changed)
         corpus_temp_layout.addWidget(self.corpus_temp_slider)
@@ -743,6 +744,12 @@ class SettingsDialog(QDialog):
         self.corpus_temp_value.setFixedWidth(40)
         corpus_temp_layout.addWidget(self.corpus_temp_value)
         corpus_layout.addLayout(corpus_temp_layout)
+        corpus_temp_hint = QLabel(
+            "Creativity has no effect on Claude models, which don't accept a temperature setting."
+        )
+        corpus_temp_hint.setWordWrap(True)
+        corpus_temp_hint.setStyleSheet(f"color: {theme().text_secondary};")
+        corpus_layout.addWidget(corpus_temp_hint)
 
         layout.addWidget(corpus_group)
 
@@ -1474,8 +1481,13 @@ class SettingsDialog(QDialog):
                 if combo.itemData(i) == model_id:
                     combo.setCurrentIndex(i)
                     return
-            # If not found, default to first item
-            combo.setCurrentIndex(0)
+            # Keep a saved model that is no longer listed instead of
+            # silently switching to the first item on Save.
+            if model_id:
+                combo.addItem(f"{model_id} (saved)", model_id)
+                combo.setCurrentIndex(combo.count() - 1)
+            else:
+                combo.setCurrentIndex(0)
 
     def _create_appearance_tab(self) -> QWidget:
         tab = QWidget()
@@ -2106,15 +2118,11 @@ class SettingsDialog(QDialog):
         self.text_method_combo.setCurrentIndex(
             method_map.get(self.settings.text_extraction_method, 2)
         )
-        idx = self.text_vlm_combo.findText(self.settings.text_extraction_vlm_model)
-        if idx >= 0:
-            self.text_vlm_combo.setCurrentIndex(idx)
+        self._set_combo_text(self.text_vlm_combo, self.settings.text_extraction_vlm_model)
         self._on_text_method_changed(self.text_method_combo.currentIndex())
 
         # Exquisite Corpus
-        corpus_idx = self.corpus_model_combo.findText(self.settings.exquisite_corpus_model)
-        if corpus_idx >= 0:
-            self.corpus_model_combo.setCurrentIndex(corpus_idx)
+        self._set_combo_text(self.corpus_model_combo, self.settings.exquisite_corpus_model)
         self.corpus_temp_slider.setValue(int(self.settings.exquisite_corpus_temperature * 100))
         self._on_corpus_temp_changed(self.corpus_temp_slider.value())
 

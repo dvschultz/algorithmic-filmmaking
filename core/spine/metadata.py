@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeGuard
 
-from core.constants import VALID_SHOT_TYPES
+from core.constants import SHOT_TYPES, normalize_shot_type
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -18,11 +18,13 @@ def update_clip(project: Project, clip_id: str, **fields: Any) -> dict:
         value = changes["shot_type"]
         if value == "":
             changes["shot_type"] = None
-        elif value not in VALID_SHOT_TYPES:
+        elif (canonical := normalize_shot_type(value)) is None:
             return {
                 "success": False,
-                "error": f"Invalid shot type: '{value}'. Must be one of: {', '.join(sorted(VALID_SHOT_TYPES))} or empty string to clear.",
+                "error": f"Invalid shot type: '{value}'. Must be one of: {', '.join(SHOT_TYPES)} or empty string to clear.",
             }
+        else:
+            changes["shot_type"] = canonical
     try:
         project.update_clip_metadata(clip_id, **changes)
     except (ValueError, RuntimeError) as exc:

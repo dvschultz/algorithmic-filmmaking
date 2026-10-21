@@ -601,9 +601,9 @@ class Settings:
     # Per-provider model preferences
     ollama_model: str = "qwen3:8b"
     openai_model: str = "gpt-5.2"
-    anthropic_model: str = "claude-sonnet-4-5-20250929"
+    anthropic_model: str = "claude-sonnet-5-5"
     gemini_model: str = "gemini-2.5-flash"
-    openrouter_model: str = "anthropic/claude-sonnet-4"
+    openrouter_model: str = "anthropic/claude-sonnet-5.5"
 
     # ChatGPT subscription auth (Sign in with ChatGPT)
     # auth_mode = "api_key" preserves existing behavior; "subscription" routes

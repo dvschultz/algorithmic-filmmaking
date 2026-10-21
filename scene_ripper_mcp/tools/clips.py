@@ -6,6 +6,8 @@ from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
 
+from core.constants import normalize_shot_type
+
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_project_path
 
@@ -133,7 +135,11 @@ async def list_clips(
 @mcp.tool()
 async def filter_clips(
     project_path: Annotated[str, "Path to project file"],
-    shot_type: Annotated[Optional[str], "Filter by shot type"] = None,
+    shot_type: Annotated[
+        Optional[str],
+        "Filter by shot type: wide shot, full shot, medium shot, close-up, or "
+        "extreme close-up (display names like 'Wide' also accepted)",
+    ] = None,
     has_speech: Annotated[Optional[bool], "Filter by speech presence"] = None,
     has_description: Annotated[Optional[bool], "Filter by description presence"] = None,
     has_objects: Annotated[Optional[bool], "Filter by object detection presence"] = None,
@@ -152,7 +158,9 @@ async def filter_clips(
 
     Args:
         project_path: Path to the project file
-        shot_type: Filter to specific shot type (wide shot, medium shot, close-up, extreme close-up)
+        shot_type: Filter to specific shot type (wide shot, full shot, medium shot,
+            close-up, extreme close-up; case-insensitive, display names like
+            'Wide' or 'Extreme CU' also accepted)
         has_speech: True = with transcript, False = without transcript
         min_duration: Minimum clip duration in seconds
         max_duration: Maximum clip duration in seconds
@@ -181,6 +189,7 @@ async def filter_clips(
         clips = project.clips
         sources_by_id = project.sources_by_id
 
+        wanted_shot_type = (normalize_shot_type(shot_type) or shot_type) if shot_type else None
         filtered = []
         for clip in clips:
             source = sources_by_id.get(clip.source_id)
@@ -188,7 +197,9 @@ async def filter_clips(
             duration = clip.duration_seconds(fps)
 
             # Apply filters
-            if shot_type and clip.shot_type != shot_type:
+            if wanted_shot_type and (
+                normalize_shot_type(clip.shot_type) or clip.shot_type
+            ) != wanted_shot_type:
                 continue
             if has_speech is not None:
                 clip_has_speech = bool(clip.transcript and clip.get_transcript_text().strip())

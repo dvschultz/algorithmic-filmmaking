@@ -93,6 +93,18 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.text_detection_confidence == 0.5
 
+    @pytest.mark.parametrize("provider,field,expected", [
+        ("anthropic", "anthropic_model", "claude-sonnet-5-5"),
+        ("openrouter", "openrouter_model", "anthropic/claude-sonnet-5.5"),
+    ])
+    def test_default_claude_models_match_provider_lists(self, provider, field, expected):
+        """Claude chat defaults match the LLM client and appear in the Settings combo."""
+        from core.llm_client import DEFAULT_MODELS, get_provider_models
+
+        assert getattr(Settings(), field) == expected
+        assert DEFAULT_MODELS[provider] == expected
+        assert expected in [model_id for model_id, _ in get_provider_models(provider)]
+
 
 class TestSettingsHelpers:
     """Tests for settings helper methods."""

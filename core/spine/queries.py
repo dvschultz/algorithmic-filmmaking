@@ -262,7 +262,13 @@ def list_frames(
     if clip_id:
         frames = [f for f in frames if f.clip_id == clip_id]
     if shot_type:
-        frames = [f for f in frames if f.shot_type == shot_type]
+        from core.constants import normalize_shot_type
+
+        wanted = normalize_shot_type(shot_type) or shot_type
+        frames = [
+            f for f in frames
+            if (normalize_shot_type(f.shot_type) or f.shot_type) == wanted
+        ]
     if has_description is not None:
         if has_description:
             frames = [f for f in frames if f.description]

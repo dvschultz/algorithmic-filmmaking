@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import TYPE_CHECKING, Any
 
-from core.constants import VALID_SHOT_TYPES
+from core.constants import SHOT_TYPES, normalize_shot_type
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -104,7 +104,7 @@ def _validate(kind: str, changes: dict[str, Any]) -> None:
         if (
             field == "shot_type"
             and value is not None
-            and (not isinstance(value, str) or value not in VALID_SHOT_TYPES)
+            and (not isinstance(value, str) or value not in SHOT_TYPES)
         ):
             raise ValueError(f"Invalid shot type: '{value}'")
         if field == "fps" and (
@@ -164,6 +164,11 @@ class EditMetadata:
         lookup = _lookup(project, kind)
         changes = []
         for entity_id, fields in updates.items():
+            if isinstance(fields.get("shot_type"), str):
+                # Accept display names and legacy labels; store canonical values.
+                canonical = normalize_shot_type(fields["shot_type"])
+                if canonical is not None:
+                    fields = {**fields, "shot_type": canonical}
             _validate(kind, fields)
             entity = lookup.get(entity_id)
             if entity is None:

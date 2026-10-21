@@ -18,6 +18,10 @@ try:
 except ImportError:
     RateLimitError = None
 
+# Per-turn project/GUI state rides in the user message it was sent with, so the
+# system prompt stays fixed for the conversation. Claude thinking blocks are
+# bound to everything before them; editing earlier turns invalidates them.
+from core.chat_export import TURN_CONTEXT_CLOSE, TURN_CONTEXT_OPEN
 from core.chat_tools import get_tool_timeout, tools as tool_registry
 from core.llm_client import (
     LLMClient,
@@ -34,7 +38,22 @@ from ui.workers.gui_tool_mailbox import GuiToolMailbox
 # many videos) but low enough to catch genuine infinite loops.
 AGENT_MAX_ITERATIONS = 25
 
+
 logger = logging.getLogger(__name__)
+
+
+def strip_thinking_blocks(messages: list[dict]) -> list[dict]:
+    """Return copies of messages without Claude thinking blocks."""
+    return [
+        {key: value for key, value in message.items() if key != "thinking_blocks"}
+        for message in messages
+    ]
+
+
+def _is_thinking_replay_error(error: Exception) -> bool:
+    # e.g. "messages.5.content.0: Invalid `signature` in `thinking` block."
+    text = str(error)
+    return "signature" in text and "thinking" in text
 
 
 def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tuple[list[dict], str]:
@@ -195,6 +214,7 @@ class ChatAgentWorker(QThread):
         project: Optional[Any] = None,
         busy_check: Optional[Callable[[str], bool]] = None,
         gui_state_context: Optional[str] = None,
+        system_prompt: Optional[str] = None,
         parent=None
     ):
         """Initialize the worker.
@@ -204,7 +224,8 @@ class ChatAgentWorker(QThread):
             messages: Conversation history
             project: Active Project instance
             busy_check: Callback to check if operation is busy
-            gui_state_context: Human-readable GUI state for system prompt
+            gui_state_context: Human-readable GUI state, sent with this turn
+            system_prompt: The conversation's system prompt (built if None)
             parent: Parent QObject
         """
         super().__init__(parent)
@@ -213,6 +234,11 @@ class ChatAgentWorker(QThread):
         self.project = project
         self.busy_check = busy_check
         self.gui_state_context = gui_state_context
+        self.system_prompt = system_prompt
+        # Messages as sent, without the system prompt; becomes the chat history.
+        self.conversation: list[dict] = []
+        self._thinking_blocks: list[dict] = []
+        self._thinking_replayable = True
         self._stop_requested = False
 
         # For GUI tool synchronization
@@ -228,7 +254,7 @@ class ChatAgentWorker(QThread):
 
     async def _async_run(self):
         """Async implementation of the agent loop."""
-        from core.llm_client import ProviderType
+        from core.llm_client import ProviderType, is_claude_model
 
         # Check Ollama health if using local provider
         if self.config.provider == ProviderType.LOCAL:
@@ -241,12 +267,16 @@ class ChatAgentWorker(QThread):
         client = LLMClient(self.config)
         executor = ToolExecutor(tool_registry, self.project, self.busy_check)
 
-        # Build system prompt with project context
-        system_prompt = self._build_system_prompt()
-        full_messages = [{"role": "system", "content": system_prompt}] + self.messages
+        if self.system_prompt is None:
+            self.system_prompt = self._build_system_prompt()
+        history = self._with_turn_context(self.messages)
+        if not is_claude_model(self.config.model):
+            history = strip_thinking_blocks(history)
+        full_messages = [{"role": "system", "content": self.system_prompt}] + history
 
         iteration = 0
         tool_history = []  # Track tool interactions for history
+        replay_retried = False
 
         while iteration < AGENT_MAX_ITERATIONS and not self._stop_requested:
             iteration += 1
@@ -263,12 +293,22 @@ class ChatAgentWorker(QThread):
                 }
                 if tool_calls:
                     assistant_msg["tool_calls"] = tool_calls
+                if self._thinking_blocks:
+                    if self._thinking_replayable:
+                        assistant_msg["thinking_blocks"] = self._thinking_blocks
+                    else:
+                        # LiteLLM sends thinking ahead of text and tool calls, so
+                        # a block that arrived after them can't be replayed in
+                        # place. Only a leading run of blocks may be dropped, so
+                        # drop every earlier one as well.
+                        full_messages[:] = strip_thinking_blocks(full_messages)
 
                 # Add to full messages
                 full_messages.append(assistant_msg)
 
                 # If no tool calls, we're done
                 if not tool_calls:
+                    self.conversation = full_messages[1:]
                     self.complete.emit(content, tool_history)
                     return
 
@@ -349,6 +389,16 @@ class ChatAgentWorker(QThread):
                 # Continue loop for LLM to process tool results
 
             except Exception as e:
+                if (
+                    not replay_retried
+                    and _is_thinking_replay_error(e)
+                    and any("thinking_blocks" in m for m in full_messages)
+                ):
+                    logger.warning("Claude rejected replayed thinking blocks; retrying without them")
+                    replay_retried = True
+                    full_messages[:] = strip_thinking_blocks(full_messages)
+                    iteration -= 1
+                    continue
                 logger.exception("Error in agent loop")
                 # Provide user-friendly message for rate limit errors
                 error_msg = str(e)
@@ -388,6 +438,7 @@ class ChatAgentWorker(QThread):
         if iteration >= AGENT_MAX_ITERATIONS:
             self.error.emit("Maximum tool iterations reached. The agent may be stuck in a loop.")
         elif self._stop_requested:
+            self.conversation = full_messages[1:]
             self.complete.emit("*Cancelled*", tool_history)
 
     async def _stream_response(
@@ -404,11 +455,17 @@ class ChatAgentWorker(QThread):
         Returns:
             Tuple of (content_text, tool_calls)
         """
-        from core.llm_client import ProviderType
+        from core.llm_client import ProviderType, is_claude_model
 
         content = ""
         tool_calls = []
         display_buffer = ""  # Buffer for detecting JSON before displaying
+        # Replay is verified on the direct Anthropic route only.
+        claude = self.config.provider == ProviderType.ANTHROPIC and is_claude_model(self.config.model)
+        thinking_blocks: list[dict] = []
+        thinking_text = ""
+        seen_output = False
+        self._thinking_replayable = True
         available_tools = [t.name for t in tool_registry.all_tools()]
 
         # Don't pass tools to Ollama - LiteLLM forces JSON mode which breaks responses
@@ -431,6 +488,30 @@ class ChatAgentWorker(QThread):
 
             delta = choice.delta
 
+            # Thinking streams as text fragments; a signature closes each block.
+            for block in (getattr(delta, "thinking_blocks", None) or []) if claude else []:
+                if seen_output:
+                    self._thinking_replayable = False
+                if block.get("type") == "redacted_thinking":
+                    thinking_blocks.append(dict(block))
+                    continue
+                thinking_text += block.get("thinking") or ""
+                if block.get("signature"):
+                    thinking_blocks.append(
+                        {"type": "thinking", "thinking": thinking_text, "signature": block["signature"]}
+                    )
+                    thinking_text = ""
+            if getattr(delta, "content", None) or getattr(delta, "tool_calls", None):
+                seen_output = True
+
+            # LiteLLM reports Claude's stop_reason "refusal" as content_filter;
+            # discard any partial text so it isn't treated as an answer.
+            if choice.finish_reason == "content_filter" and is_claude_model(self.config.model):
+                raise RuntimeError(
+                    f"{self.config.model} declined this request (Anthropic safety filter). "
+                    "Rephrase it or choose a different model."
+                )
+
             # Accumulate content
             if hasattr(delta, 'content') and delta.content:
                 content += delta.content
@@ -452,7 +533,11 @@ class ChatAgentWorker(QThread):
         # Fallback: If no tool calls via API but content looks like JSON tool calls,
         # parse them from the text. This handles models that output tool calls as text.
         if not tool_calls and content:
-            parsed_calls, cleaned_content = _parse_tool_calls_from_text(content, available_tools)
+            parsed_calls, cleaned_content = (
+                _parse_tool_calls_from_text(content, available_tools)
+                if self.config.provider == ProviderType.LOCAL
+                else ([], content)
+            )
 
             if parsed_calls:
                 logger.info(f"Parsed {len(parsed_calls)} tool call(s) from text content (model fallback)")
@@ -464,6 +549,7 @@ class ChatAgentWorker(QThread):
                 # Not a tool call, display remaining buffer
                 self.text_chunk.emit(display_buffer)
 
+        self._thinking_blocks = thinking_blocks
         return content, tool_calls
 
     def _looks_like_json_tool_call(self, text: str, available_tools: list[str]) -> bool:
@@ -519,26 +605,20 @@ class ChatAgentWorker(QThread):
                 buffer[idx]["function"]["arguments"] += func.arguments
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt with project context.
+        """Build the system prompt, fixed for the whole conversation.
 
         Returns:
             System prompt string
         """
         from core.llm_client import ProviderType
-        from core.settings import load_settings
-
-        # Get settings for default paths
-        settings = load_settings()
 
         prompt = f"""You are an AI assistant for Scene Ripper, a video scene detection and editing tool.
 
 When this is the first message in a new conversation, briefly introduce yourself and what you can help with (1-2 sentences), then answer the user's question. Do not repeat the introduction on subsequent messages.
 
-DEFAULT PATHS (from user settings):
-- Download directory: {settings.download_dir}
-- Export directory: {settings.export_dir}
+Each user message starts with a {TURN_CONTEXT_OPEN} block: the default paths, project state and GUI state when that message was sent. The newest one is current. The user didn't type it, so don't quote it back.
 
-When downloading videos, use these defaults - do NOT ask the user for a path unless they specify one.
+When downloading videos, use the default paths from that block - do NOT ask the user for a path unless they specify one.
 
 You help users create video projects by:
 - Detecting scenes in videos
@@ -551,52 +631,20 @@ When analyzing clips, prefer the unified start_clip_analysis tool over individua
 - start_clip_analysis(clip_ids=[...], operations=["colors", "shots", "transcription"])
 This runs multiple operations in a single call.
 
-CUSTOM VISUAL QUERY:
-When the user asks to "run a custom query", "custom visual query", or asks whether clips
-contain a visual thing (for example "eye", "blue flower", "person wearing a hat"), use
-the custom_visual_query tool. This is not a sequencing/sorting algorithm. Do not answer
-with list_sorting_algorithms for this request. Do not describe it as a metadata-only
-description search. After the tool returns, summarize the actual custom visual query
-matches from the tool result. Format each match as
-one bullet containing the clip ID plus confidence and description/source if present; do
-not split a single match into separate numbered list items.
+CUSTOM VISUAL QUERY RESULTS:
+After custom_visual_query returns, summarize the matches from the tool result as one bullet
+per match, containing the clip ID plus confidence and description/source if present.
 
-IMPORTANT BEHAVIOR RULES:
-1. Only perform the SPECIFIC task the user requests - nothing more
-2. Do NOT automatically download or process unless explicitly asked, OR if the processing is required to answer a specific question about missing properties (e.g. "what are the colors?" -> run start_clip_analysis with operations=["colors"])
-3. After completing a task, STOP and report results - do not chain additional actions
-4. If you think follow-up actions would help, SUGGEST them verbally - don't execute them
-5. When in doubt, ask the user before taking action
-6. PROJECT NAMING: Before executing any state-modifying tool (detect_scenes, download_video, add_to_sequence, etc.) on an unnamed project (Name: "Untitled Project", Path: Unsaved), FIRST ask the user what they'd like to name the project, then use set_project_name to set it. The project will be auto-saved after each operation.
+BEHAVIOR RULES:
+The user directs the edit, and downloads and analysis can take a long time, so do what was asked and no more:
+1. Perform the specific task the user requests.
+2. Download or process media only when asked, or when processing is needed to answer a question about missing properties (e.g. "what are the colors?" -> run start_clip_analysis with operations=["colors"]).
+3. When the task is done, report the results and stop; don't chain additional actions.
+4. If follow-up actions would help, suggest them instead of running them.
+5. PROJECT NAMING: Before running a state-modifying tool (detect_scenes, download_video, add_to_sequence, etc.) on an unnamed project (Name: "Untitled Project", Path: Unsaved), first ask the user what to name the project, then set it with set_project_name. The project is auto-saved after each operation.
 
 WORKFLOW AUTOMATION (for multi-step requests):
-When the user requests compound operations like "download 5 videos and detect scenes in each":
-1. Process each step sequentially - complete one before starting the next
-2. Report progress after each step (e.g., "Downloaded video 2/5, detecting scenes...")
-3. If a step fails, continue with remaining items and report all failures at the end
-4. Provide a summary when complete showing successes and failures
-5. For large batches, confirm with the user before proceeding if the operation may take a long time
-
-Example workflow response:
-- "Processing 3 videos..."
-- "Video 1/3: Downloaded 'example.mp4' - detecting scenes..."
-- "Video 1/3: Complete - found 12 scenes"
-- "Video 2/3: Downloaded 'demo.mp4' - detecting scenes..."
-- "Video 2/3: Failed - file not found, continuing with remaining videos"
-- "Video 3/3: Complete - found 8 scenes"
-- "Summary: 2/3 videos processed successfully (20 total scenes), 1 failed"
-
-Available tools let you perform these operations. Always explain what you're doing before using tools.
-
-VIDEO PLAYBACK:
-You can control the video player directly:
-- play_preview(clip_id) - Start playing a clip
-- pause_preview() - Pause playback
-- seek_to_time(seconds) - Seek to a specific position
-- stop_playback() - Stop video and return to clip start
-- frame_step_forward / frame_step_backward - Step one frame at a time
-- set_playback_speed(speed) - Change speed (0.25x to 4.0x)
-- set_ab_loop(a_seconds, b_seconds) - Loop a section (0,0 to clear)
+For compound operations like "download 5 videos and detect scenes in each", finish each step before starting the next. If one item fails, continue with the remaining items. End with a summary of successes and failures. For a large batch that may take a long time, confirm with the user before starting.
 
 TAB NAVIGATION:
 Tools do NOT auto-switch tabs. If you want the user to see the results of an action in a specific tab,
@@ -606,30 +654,8 @@ call navigate_to_tab explicitly AFTER the action completes. For example:
 - After scene detection: navigate_to_tab("cut")
 Background workers (detection, analysis, export) will auto-switch to the relevant tab.
 
-When working with clips:
-- Use filter_clips to find clips matching specific criteria
-- Use list_clips to see all available clips
-- Use add_to_sequence to add clips to the timeline
-- Use get_project_state to check the current project status
-
-When the user wants to work with videos:
-- Use detect_scenes to analyze a video and create clips
-- Use download_video to download from YouTube or Vimeo
-- Use search_youtube to find videos
-
 BATCH SCENE DETECTION (detect_all_unanalyzed):
-When detecting scenes in multiple videos:
-1. Call detect_all_unanalyzed to queue all unanalyzed sources
-2. Call check_detection_status ONCE to confirm detection started
-3. IMPORTANT: Detection takes 1-5 minutes PER VIDEO. For many videos, this means HOURS.
-4. After confirming detection started, INFORM THE USER:
-   - Tell them how many videos are queued
-   - Estimate the time (videos × 2-3 minutes average)
-   - Tell them detection is running in the background
-   - Ask them to say "check status" or "continue" when they want an update
-5. Do NOT spam check_detection_status calls - you cannot actually wait between calls
-6. When the user asks for status, check once and report progress
-7. Only conclude detection failed if is_running=False AND sources_analyzed < sources_total
+detect_all_unanalyzed queues every unanalyzed source and runs detection in the background. Each video takes 1-5 minutes, so a large batch can take hours, and you can't wait between tool calls. After queuing, call check_detection_status once to confirm detection started, then tell the user how many videos are queued, a time estimate (about 2-3 minutes per video), and that they can ask for a status update at any time. Check status once each time they ask. Detection has failed only if is_running=False and sources_analyzed < sources_total.
 
 If the user's request is unclear, ask clarifying questions.
 
@@ -646,15 +672,7 @@ When the user asks you to "plan" something or describes a complex multi-step wor
 3. BREAK DOWN: After getting answers, decompose into 3-10 clear steps.
    Each step should be a single logical action (search, download, detect, export, etc.)
 
-4. PRESENT PLAN: You MUST call the present_plan tool - do NOT just describe the plan in text.
-
-   *** CRITICAL: NEVER write plan steps in your message text. ALWAYS call the tool. ***
-
-   WRONG (causes errors): Writing "Here's the plan: 1. Search... 2. Download..." in your message
-   CORRECT: Call present_plan(steps=[...], summary="...") as a tool call
-
-   If you write steps in text instead of calling the tool, start_plan_execution WILL FAIL
-   with "No plan exists" error. The tool call creates the plan object - text does not.
+4. PRESENT PLAN: Call present_plan to create the plan. Only the tool call creates a plan object; steps written in message text are not stored, and start_plan_execution then fails with "No plan exists".
 
    Parameters:
    - steps: List of human-readable step descriptions
@@ -663,10 +681,7 @@ When the user asks you to "plan" something or describes a complex multi-step wor
 
 5. WAIT FOR CONFIRMATION: After calling present_plan, STOP and wait for the user to confirm or edit the plan. Do NOT execute anything until confirmation.
 
-6. EXECUTE AFTER CONFIRMATION: Once confirmed, execute steps one at a time:
-   - Report which step you're executing (e.g., "Executing step 2/5: Downloading videos...")
-   - If a step fails, report the error and wait for user to choose [Retry] or [Stop]
-   - Provide a summary when complete
+6. EXECUTE AFTER CONFIRMATION: Once confirmed, execute the steps in order. If a step fails, report the error and wait for the user to choose [Retry] or [Stop]. End with a summary.
 
 Example step descriptions (human-readable, not tool names):
 - "Search YouTube for 'mushroom documentary' videos"
@@ -699,7 +714,7 @@ When creating plans, follow these tool dependency rules:
 2. If the user wants to search multiple topics, create a plan that interleaves
    search and download steps for each topic.
 
-3. SEQUENCE GENERATION: Use the generate_remix tool to create sequences with any of the 13 sorting algorithms. Use list_sorting_algorithms first to check which algorithms are available based on clip analysis state. For matching clips to a reference video's structure, use the generate_reference_guided tool instead.
+3. SEQUENCE GENERATION: Use list_sorting_algorithms to check which algorithms exist and which are available for the current clips, then build the sequence with the tool its entry names (generate_remix for the direct sorting algorithms, generate_sequence for any registry algorithm). For matching clips to a reference video's structure, use generate_reference_guided.
 """
 
         # For Ollama, include tool schemas in the prompt since we don't pass them via API
@@ -728,6 +743,30 @@ Available tools:
                         params.append(f"    - {param}: {param_type}{req_marker}")
                 params_str = "\n".join(params) if params else "    (no parameters)"
                 prompt += f"\n- {tool.name}: {tool.description}\n{params_str}\n"
+
+        return prompt
+
+    def _with_turn_context(self, messages: list[dict]) -> list[dict]:
+        """Prefix the newest user message with this turn's context block."""
+        messages = list(messages)
+        if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), str):
+            context = self._build_turn_context().strip()
+            messages[-1] = {
+                **messages[-1],
+                "content": f"{TURN_CONTEXT_OPEN}\n{context}\n{TURN_CONTEXT_CLOSE}\n\n{messages[-1]['content']}",
+            }
+        return messages
+
+    def _build_turn_context(self) -> str:
+        """Build the project and GUI state sent with the current user message."""
+        from core.settings import load_settings
+
+        settings = load_settings()
+
+        prompt = f"""DEFAULT PATHS (from user settings):
+- Download directory: {settings.download_dir}
+- Export directory: {settings.export_dir}
+"""
 
         if self.project:
             # Add project context
@@ -776,29 +815,11 @@ Available tools:
                 parts = [f"{k}: {v}/{total_clips}" for k, v in analysis_counts.items()]
                 analysis_lines = f"\n- Analysis Coverage: {', '.join(parts)}"
 
-            # Pre-compute which sequencer algorithms are available based on analysis data
-            algo_availability = {
-                "color": analysis_counts.get("dominant_colors", 0) > 0,
-                "brightness": analysis_counts.get("average_brightness", 0) > 0
-                              if "average_brightness" not in analysis_counts
-                              else any(c.average_brightness is not None for c in self.project.clips),
-                "volume": any(c.rms_volume is not None for c in self.project.clips),
-                "shot_type": analysis_counts.get("shot_type", 0) > 0,
-                "proximity": analysis_counts.get("shot_type", 0) > 0,
-                "similarity_chain": any(c.embedding for c in self.project.clips),
-                "match_cut": any(c.first_frame_embedding for c in self.project.clips),
-                "gaze_sort": analysis_counts.get("gaze_category", 0) > 0,
-                "gaze_consistency": analysis_counts.get("gaze_category", 0) > 0,
-                "eyes_without_a_face": analysis_counts.get("gaze_category", 0) > 0,
-                "cassette_tape": any(c.transcript for c in self.project.clips),
-            }
-            # These always work (no analysis required)
-            for a in ("duration", "shuffle", "sequential", "exquisite_corpus",
-                      "storyteller", "reference_guided", "signature_style",
-                      "rose_hobart", "staccato"):
-                algo_availability[a] = True
-            available_algos = [k for k, v in algo_availability.items() if v]
-            unavailable_algos = [k for k, v in algo_availability.items() if not v]
+            # Same catalog list_sorting_algorithms returns, so the two never disagree
+            from core.spine.settings_io import list_sorting_algorithms
+            algo_catalog = list_sorting_algorithms(self.project)["algorithms"]
+            available_algos = [str(a["key"]) for a in algo_catalog if a.get("available")]
+            unavailable_algos = [str(a["key"]) for a in algo_catalog if not a.get("available")]
             if available_algos:
                 analysis_lines += f"\n- Available algorithms: {', '.join(available_algos)}"
             if unavailable_algos:

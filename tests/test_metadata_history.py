@@ -82,6 +82,7 @@ def test_frame_fields_publish_one_event_and_undo_together():
         project, frame.id, tags=["keep"], notes="note", shot_type="Wide Shot"
     )["success"]
     assert events == ["frames_updated"]
+    assert frame.shot_type == "wide shot"  # legacy label stored canonically
     project.session.undo()
     assert (frame.tags, frame.notes, frame.shot_type) == ([], "", None)
     assert not project.is_dirty

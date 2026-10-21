@@ -15,6 +15,7 @@ from PIL import Image
 from core.analysis_model_identity import (
     SHOT_TYPES, SHOT_TYPE_PROMPTS, SIGLIP_NAME as _SIGLIP_MODEL_NAME, SIGLIP_REVISION,
 )
+from core.constants import SHOT_TYPE_DISPLAY, normalize_shot_type
 from core.runtime_families import isolated
 
 logger = logging.getLogger(__name__)
@@ -22,15 +23,6 @@ logger = logging.getLogger(__name__)
 
 class ShotClassificationError(RuntimeError):
     """Raised when shot classification cannot complete."""
-
-# Human-readable display names
-SHOT_TYPE_DISPLAY = {
-    "wide shot": "Wide",
-    "full shot": "Full",
-    "medium shot": "Medium",
-    "close-up": "Close-up",
-    "extreme close-up": "Extreme CU",
-}
 
 # Lazy load models to avoid slow import
 _model = None
@@ -280,7 +272,10 @@ def classify_shot_type(
 
 def get_display_name(shot_type: str) -> str:
     """Get human-readable display name for shot type."""
-    return SHOT_TYPE_DISPLAY.get(shot_type, shot_type.title())
+    canonical = normalize_shot_type(shot_type)
+    if canonical is None:
+        return shot_type.title()
+    return SHOT_TYPE_DISPLAY[canonical]
 
 
 def classify_shot_type_tiered(

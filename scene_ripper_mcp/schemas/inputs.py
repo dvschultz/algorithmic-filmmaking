@@ -80,7 +80,14 @@ class FilterClipsInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     project_path: str = Field(..., description="Path to project file")
-    shot_type: Optional[str] = Field(default=None, description="Filter by shot type")
+    shot_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filter by shot type: 'wide shot', 'full shot', 'medium shot', "
+            "'close-up', or 'extreme close-up' (case-insensitive; display names "
+            "like 'Wide' or 'Extreme CU' are also accepted)"
+        ),
+    )
     has_speech: Optional[bool] = Field(
         default=None, description="Filter by speech presence"
     )

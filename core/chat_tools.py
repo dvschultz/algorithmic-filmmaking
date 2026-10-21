@@ -12,6 +12,7 @@ during chat interactions. Tools are split into two categories:
 
 import inspect
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, get_type_hints
@@ -26,10 +27,12 @@ from core.downloader import VideoDownloader
 from core.settings import load_settings
 from core.spine.security import validate_path
 from core.constants import (
+    SHOT_TYPE_DISPLAY,
+    SHOT_TYPES,
     VALID_ASPECT_RATIOS,
     VALID_COLOR_PALETTES,
-    VALID_SHOT_TYPES,
     VALID_SORT_ORDERS,
+    normalize_shot_type,
 )
 from core.plan_controller import PlanController
 
@@ -104,6 +107,35 @@ class ToolDefinition:
     modifies_project_state: bool = False
     conflicts_with_workers: bool = False
     emits_gui_sync: bool = False  # Tool results trigger GUI sync signals (e.g., populating search results)
+
+
+_DOC_ARG_RE = re.compile(r"^(\w+)(?:\s*\([^)]*\))?:\s*(.*)$")
+
+
+def _docstring_arg_descriptions(func: Callable) -> dict[str, str]:
+    """Map parameter names to their text in a Google-style ``Args:`` section."""
+    lines = (inspect.getdoc(func) or "").splitlines()
+    descriptions: dict[str, str] = {}
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == "Args:") + 1
+    except StopIteration:
+        return descriptions
+    entry_indent = None
+    current = None
+    for line in lines[start:]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            break  # next section (Returns:, Raises:, ...)
+        match = _DOC_ARG_RE.match(line.strip())
+        if match and (entry_indent is None or indent <= entry_indent):
+            entry_indent = indent
+            current = match.group(1)
+            descriptions[current] = match.group(2).strip()
+        elif current is not None:
+            descriptions[current] = f"{descriptions[current]} {line.strip()}".strip()
+    return {name: text for name, text in descriptions.items() if text}
 
 
 def _python_type_to_json_schema(python_type: type) -> dict:
@@ -212,6 +244,7 @@ class ToolRegistry:
 
         properties = {}
         required = []
+        arg_descriptions = _docstring_arg_descriptions(func)
 
         # Parameters that are injected by the system, not provided by the LLM
         injected_params = {"project", "gui_state", "main_window"}
@@ -226,6 +259,8 @@ class ToolRegistry:
             schema = _python_type_to_json_schema(param_type)
 
             # Get description from docstring if available
+            if param_name in arg_descriptions:
+                schema = {**schema, "description": arg_descriptions[param_name]}
             properties[param_name] = schema
 
             # Check if required (no default value)
@@ -271,10 +306,11 @@ tools = ToolRegistry()
 
 @tools.register(
     description=(
-        "REQUIRED: Call this to create any multi-step workflow plan. "
-        "Describing steps in text is NOT sufficient - you MUST call this tool to create a plan object. "
-        "After calling this, wait for user confirmation, then call start_plan_execution. "
-        "If the project is unnamed, this will prompt you to ask for a name first."
+        "Create a multi-step workflow plan and show it to the user as an editable plan widget. "
+        "Only this call creates a plan object; steps written in message text are not stored, and "
+        "start_plan_execution fails with 'No plan exists' until a plan is presented. "
+        "Accepts at most 20 steps. After calling it, wait for the user to confirm or edit the plan, "
+        "then call start_plan_execution."
     ),
     requires_project=False,
     modifies_gui_state=True
@@ -549,7 +585,8 @@ def add_to_sequence(project, clip_ids: list[str]) -> dict:
 @tools.register(
     description="Generate natural language descriptions for video clips using Vision-Language Models. "
                 "Useful for understanding clip content beyond simple tags. "
-                "Supports tiers: 'cpu' (Moondream), 'gpu' (LLaVA), 'cloud' (GPT-4o/Claude).",
+                "Tiers: 'local' (on-device VLM) or 'cloud' (the cloud description model set in Settings); "
+                "legacy 'cpu'/'gpu' values run the local tier.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -565,7 +602,7 @@ def describe_content_live(
 
     Args:
         clip_ids: List of clip IDs to analyze
-        tier: Model tier ('cpu', 'gpu', 'cloud')
+        tier: Model tier ('local' or 'cloud'; legacy 'cpu'/'gpu' run local)
         prompt: Custom prompt for the model
 
     Returns:
@@ -734,7 +771,8 @@ def list_clips(
     if source_id is not None:
         clips = [c for c in clips if c.source_id == source_id]
     if shot_type is not None:
-        clips = [c for c in clips if c.shot_type == shot_type]
+        wanted = normalize_shot_type(shot_type) or shot_type
+        clips = [c for c in clips if (normalize_shot_type(c.shot_type) or c.shot_type) == wanted]
     if has_description is True:
         clips = [c for c in clips if c.description is not None]
     elif has_description is False:
@@ -1096,7 +1134,8 @@ def sort_sequence(project, sort_by: str, reverse: bool = False) -> dict:
 @tools.register(
     description=(
         "Filter the sequence tab to show only clips of a specific shot type. "
-        "Valid shot types: 'wide shot', 'full shot', 'medium shot', 'close-up', 'extreme close-up'. "
+        "Valid shot types: 'wide shot', 'full shot', 'medium shot', 'close-up', 'extreme close-up' "
+        "(display names like 'Wide' also accepted). "
         "Use shot_type=None to show all clips (remove filter)."
     ),
     requires_project=True,
@@ -1109,13 +1148,14 @@ def set_sequence_shot_filter(
     shot_type: Optional[str] = None,
 ) -> dict:
     """Set the shot type filter for the sequence tab."""
-    from core.analysis.shots import SHOT_TYPES
-
-    if shot_type and shot_type not in SHOT_TYPES:
-        return {
-            "success": False,
-            "error": f"Invalid shot type '{shot_type}'. Valid types: {SHOT_TYPES}",
-        }
+    if shot_type:
+        canonical = normalize_shot_type(shot_type)
+        if canonical is None:
+            return {
+                "success": False,
+                "error": f"Invalid shot type '{shot_type}'. Valid types: {SHOT_TYPES}",
+            }
+        shot_type = canonical
 
     sequence_tab = main_window.sequence_tab
     filtered_count = sequence_tab.apply_shot_type_filter(shot_type)
@@ -1411,6 +1451,32 @@ def _validate_enum_arg(value, valid_set, field_name: str):
     return items if len(items) != 1 else items[0], None
 
 
+def _shot_type_filter_arg(value):
+    """Map an agent shot_type filter to the GUI's display names. Return (ok_value, error).
+
+    Accepts the same str / list[str] shapes as ``_validate_enum_arg``, with
+    canonical values, display names, or legacy labels in any case.
+    """
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        return _validate_enum_arg(value, SHOT_TYPES, "shot_type")
+    display = []
+    for item in items:
+        if item in (None, "", "All"):
+            continue
+        canonical = normalize_shot_type(str(item))
+        if canonical is None:
+            return None, (
+                f"Invalid shot_type value '{item}'. "
+                f"Valid options: {', '.join(SHOT_TYPES)}"
+            )
+        display.append(SHOT_TYPE_DISPLAY[canonical])
+    return display if len(display) != 1 else display[0], None
+
+
 @tools.register(
     description="Apply filters to the clip browser in the active tab (Cut or Analyze). "
                 "Filters clips by duration range, aspect ratio, shot type, color palette, "
@@ -1440,7 +1506,9 @@ def apply_filters(
         aspect_ratio: Filter by aspect ratio — str, list[str], or None.
           Valid values: '16:9', '4:3', '9:16'. Multi-select chips use list.
         shot_type: Filter by shot type — str, list[str], or None.
-          Valid values: 'Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU'.
+          Valid values: 'wide shot', 'full shot', 'medium shot', 'close-up',
+          'extreme close-up' (case-insensitive). Display names such as 'Wide'
+          or 'Extreme CU' are also accepted.
         color_palette: Filter by color palette — str, list[str], or None.
           Valid values: 'Warm', 'Cool', 'Neutral', 'Vibrant'.
         search_query: Filter by transcript text (case-insensitive substring search)
@@ -1463,7 +1531,7 @@ def apply_filters(
     aspect_ratio, err = _validate_enum_arg(aspect_ratio, VALID_ASPECT_RATIOS, "aspect_ratio")
     if err:
         return {"success": False, "error": err}
-    shot_type, err = _validate_enum_arg(shot_type, VALID_SHOT_TYPES, "shot_type")
+    shot_type, err = _shot_type_filter_arg(shot_type)
     if err:
         return {"success": False, "error": err}
     color_palette, err = _validate_enum_arg(color_palette, VALID_COLOR_PALETTES, "color_palette")
@@ -2381,7 +2449,7 @@ def add_note(project, clip_id: str, note: str) -> dict:
 
 
 @tools.register(
-    description="Update clip metadata. Only specified fields are updated. Shot type must be one of: 'wide shot', 'medium shot', 'close-up', 'extreme close-up', or empty string to clear.",
+    description="Update clip metadata. Only specified fields are updated. Shot type must be one of: 'wide shot', 'full shot', 'medium shot', 'close-up', 'extreme close-up' (display names like 'Wide' or 'Extreme CU' are also accepted), or empty string to clear.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -2946,16 +3014,6 @@ def select_source(main_window, source_id: str) -> dict:
 
 
 @tools.register(
-    description="Detect scenes in a video source with live GUI update. Supports visual detection (adaptive/content) "
-                "and text-based detection (karaoke) for videos with changing text overlays. "
-                "For karaoke mode, set mode='karaoke' and optionally adjust roi_top, text_threshold, etc.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-
-
-@tools.register(
     description="Import all video files from a folder. Scans the directory for supported "
                 "video formats (.mp4, .mkv, .avi, .mov, .webm) and imports each one.",
     requires_project=True,
@@ -3144,9 +3202,9 @@ def detect_all_unanalyzed(
 
 @tools.register(
     description="Check if scene detection is currently running and get progress. "
-                "Call ONCE after detect_all_unanalyzed to confirm it started, then inform the user and WAIT for them to ask for updates. "
-                "Do NOT call this repeatedly in a loop - you cannot actually wait between calls. "
-                "Scene detection takes 1-5 minutes PER VIDEO. Only conclude failure if is_running=False AND sources_analyzed < sources_total.",
+                "Detection takes 1-5 minutes per video and the agent cannot wait between calls, so repeated calls in one turn "
+                "show no new progress: call it once to confirm a batch started, and again when the user asks for status. "
+                "Detection has failed only if is_running=False and sources_analyzed < sources_total.",
     requires_project=True,
     modifies_gui_state=True  # Needs main_window to check worker status
 )
@@ -3226,12 +3284,12 @@ def check_detection_status(main_window, project) -> dict:
 
 
 @tools.register(
-    description="Run one or more analysis operations on clips. Preferred over individual tools. "
+    description="Run one or more analysis operations on clips in a single call. Preferred over individual tools. "
                 "Operations: 'colors' (dominant colors), 'shots' (shot type classification), "
                 "'transcription' (speech-to-text), 'classification' (ImageNet labels), "
                 "'description' (VLM description), 'objects' (YOLO object detection), "
-                "'people' (person count). "
-                "Example: start_clip_analysis(clip_ids=[...], operations=['colors', 'shots', 'transcription'])",
+                "'people' (person count), 'face_embeddings' (face detection embeddings). "
+                "Unknown operation names are ignored; the call fails if none are valid.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -3740,7 +3798,7 @@ def reconstruct_sequence(project, sequence_id: Optional[str] = None, name: Optio
                 "Three modes: 'eyeline_match' (shot/reverse-shot pairing by negated yaw), "
                 "'gaze_filter' (keep clips matching a gaze category), "
                 "'gaze_rotation' (arrange clips in monotonic angle progression). "
-                "Requires gaze analysis. Use analyze_clips with 'gaze' first.",
+                "Requires gaze analysis; run analyze_gaze (or analyze_all_live with 'gaze') first.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -4454,7 +4512,8 @@ def rollback_runtime_profile(profile: str) -> dict:
                 "audio, alignment); to add or remove one family use isolate_runtime_family instead. "
                 "Settings: default_sensitivity (1.0-10.0), export_quality ('low'/'medium'/'high'), "
                 "export_resolution ('original'/'1080p'/'720p'/'480p'), theme_preference ('system'/'light'/'dark'), "
-                "llm_provider ('local'/'openai'/'anthropic'/'gemini'/'openrouter'), llm_model, llm_temperature (0.0-2.0).",
+                "llm_provider ('local'/'openai'/'anthropic'/'gemini'/'openrouter'), llm_model, llm_temperature (0.0-2.0; "
+                "ignored for Claude models).",
     requires_project=False,
     modifies_gui_state=False
 )
@@ -5484,7 +5543,10 @@ def toggle_clip_disabled(
 # ============================================================================
 
 @tools.register(
-    description="Update metadata fields on a frame (tags, notes, shot_type).",
+    description="Update metadata fields on a frame (tags, notes, shot_type). "
+                "Shot type must be one of: 'wide shot', 'full shot', 'medium shot', "
+                "'close-up', 'extreme close-up' (display names also accepted), "
+                "or empty string to clear.",
     requires_project=True,
     modifies_gui_state=False,
     modifies_project_state=True

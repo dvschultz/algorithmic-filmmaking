@@ -99,6 +99,7 @@ def custom_query_runtime(options: CustomQueryOptions, *, allow_imports: bool = T
         DescriptionTask,
         description_runtime,
     )
+    from core.llm_client import prepare_claude_kwargs
 
     tier = {"cpu": "local", "gpu": "cloud"}.get(options.tier, options.tier)
     runtime = description_runtime(
@@ -109,7 +110,7 @@ def custom_query_runtime(options: CustomQueryOptions, *, allow_imports: bool = T
     return {
         **runtime,
         "response_schema": CUSTOM_QUERY_RESPONSE_SCHEMA,
-        "max_tokens": 50
+        "max_tokens": prepare_claude_kwargs(options.model or "", {"max_tokens": 50})["max_tokens"]
         if tier == "cloud"
         else 256
         if runtime["execution"]["backend"] == "mlx"

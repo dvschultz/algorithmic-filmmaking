@@ -13,10 +13,9 @@ logger = logging.getLogger(__name__)
 
 # Common error messages
 _NO_PLAN_ERROR = (
-    "No plan exists. You must call the present_plan TOOL (not write text). "
-    "DO NOT describe steps in your message - that does not create a plan. "
-    "Instead, make a tool call: present_plan(steps=[\"Step 1\", \"Step 2\", ...], summary=\"...\"). "
-    "After the user confirms the plan widget, then call start_plan_execution."
+    "No plan exists. A plan is created only by calling present_plan(steps=[...], summary=\"...\"); "
+    "steps written in message text are not stored. "
+    "After the user confirms the plan widget, call start_plan_execution."
 )
 
 # Hard limit on how many steps a single plan may contain.  Enforced in
@@ -61,7 +60,7 @@ class PlanController:
             }
 
         # Project naming gate is now handled entirely by the system prompt
-        # (IMPORTANT BEHAVIOR RULES rule 6). The previous _PROJECT_KEYWORDS
+        # (BEHAVIOR RULES, PROJECT NAMING). The previous _PROJECT_KEYWORDS
         # keyword scan was a fragile redundant enforcement removed in favor
         # of letting the LLM decide when to ask for a project name.
 

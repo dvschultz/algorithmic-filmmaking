@@ -8,6 +8,31 @@ from pathlib import Path
 
 from core.redaction import redact_secrets, redact_text
 
+# The chat worker prefixes each user message with this block (project and GUI
+# state at send time). History keeps it so Claude thinking blocks stay valid.
+TURN_CONTEXT_OPEN = "<scene_ripper_context>"
+TURN_CONTEXT_CLOSE = "</scene_ripper_context>"
+
+
+def strip_turn_context(text: str) -> str:
+    """Return a user message without its leading turn-context block."""
+    if not text.startswith(TURN_CONTEXT_OPEN + "\n"):
+        return text
+    end = text.find("\n" + TURN_CONTEXT_CLOSE + "\n\n")
+    if end == -1:
+        return text
+    return text[end + len(TURN_CONTEXT_CLOSE) + 3:]
+
+
+def _messages_for_export(messages: list[dict]) -> list[dict]:
+    cleaned = []
+    for message in messages:
+        message = {key: value for key, value in message.items() if key != "thinking_blocks"}
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            message["content"] = strip_turn_context(message["content"])
+        cleaned.append(message)
+    return cleaned
+
 
 @dataclass
 class ChatExportConfig:
@@ -313,6 +338,7 @@ def export_chat(
     """
     created_files = []
     errors = []
+    messages = _messages_for_export(messages)
 
     if config.format in ("markdown", "both"):
         success, result = export_chat_as_markdown(messages, config)

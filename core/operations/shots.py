@@ -153,17 +153,23 @@ def shot_identity(
         snapshot.inputs,
         operation="shots",
         operation_version=2,
-        model={
-            "runtime": runtime,
-            "backend": backend,
-            "cloud_model": options.cloud_model,
-        },
+        model=shot_model_identity(runtime, backend, options.cloud_model),
         parameters=asdict(options),
         sampling={"policy": "single-image/v1", "local_ensemble": True},
         prompt=SHOT_CLOUD_PROMPT
         if backend == "cloud"
         else json.dumps(SHOT_TYPE_PROMPTS, sort_keys=True),
     )
+
+
+def shot_model_identity(runtime: dict, backend: str, cloud_model: str | None) -> dict:
+    from core.llm_client import CLAUDE_MIN_MAX_TOKENS, is_claude_model
+
+    model = {"runtime": runtime, "backend": backend, "cloud_model": cloud_model}
+    if backend == "cloud" and is_claude_model(cloud_model or ""):
+        # Claude requests drop temperature and raise max_tokens (prepare_claude_kwargs).
+        model["claude_request"] = {"temperature": None, "max_tokens": CLAUDE_MIN_MAX_TOKENS}
+    return model
 
 
 @dataclass(frozen=True)

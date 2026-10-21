@@ -92,7 +92,7 @@ from ui.workers.standalone_analysis import start_standalone_analysis
 from ui.workers.gui_tool_reply import (
     GuiToolReply, gui_reply_scope,
 )
-from ui.chat_worker import ChatAgentWorker
+from ui.chat_worker import ChatAgentWorker, strip_thinking_blocks
 from ui.clip_browser import VIRTUALIZATION_THRESHOLD, clear_thumbnail_pixmap_cache
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
@@ -1529,6 +1529,10 @@ class MainWindow(QMainWindow):
         # Initialize chat state
         self._chat_history: list[dict] = []
         self._last_user_message: str = ""
+        # Fixed per conversation (and provider) so Claude thinking blocks in
+        # the history stay valid; see ui/chat_worker.py.
+        self._chat_system_prompt: str | None = None
+        self._chat_system_prompt_provider: str | None = None
         self._current_chat_bubble = None
         self._current_tool_indicator = None
         self._chat_worker: Optional[ChatAgentWorker] = None
@@ -2001,6 +2005,12 @@ class MainWindow(QMainWindow):
             temperature=self.settings.llm_temperature,
         )
 
+        if self._chat_system_prompt_provider != provider_key:
+            # A different system prompt invalidates earlier thinking blocks.
+            self._chat_system_prompt = None
+            self._chat_system_prompt_provider = provider_key
+            self._chat_history = strip_thinking_blocks(self._chat_history)
+
         # Build message history
         messages = self._chat_history + [{"role": "user", "content": message}]
 
@@ -2027,6 +2037,7 @@ class MainWindow(QMainWindow):
             project=self.project,
             busy_check=check_busy,
             gui_state_context=self._gui_state.to_context_string(project=self.project),
+            system_prompt=self._chat_system_prompt,
         )
         # Clear last error after it's been consumed by the agent context
         self._gui_state.clear_last_error()
@@ -2374,6 +2385,14 @@ class MainWindow(QMainWindow):
         """Handle chat completion with full history."""
         logger.info("Chat response complete")
         self.chat_panel.on_stream_complete()
+
+        # The worker's conversation is the history exactly as sent, including
+        # the turn context and thinking blocks; keep it byte-for-byte.
+        worker = self._chat_worker
+        if worker is not None and worker.conversation:
+            self._chat_system_prompt = worker.system_prompt
+            self._chat_history = list(worker.conversation)
+            return
 
         # Add user message to history
         self._chat_history.append({"role": "user", "content": self._last_user_message})
@@ -2851,6 +2870,7 @@ class MainWindow(QMainWindow):
         stop_chat_workers(self)
         self._chat_history.clear()
         self._last_user_message = ""
+        self._chat_system_prompt = None
 
     def _on_chat_status(self):
         """Handle /status slash command - display project summary in chat."""
@@ -8690,6 +8710,7 @@ class MainWindow(QMainWindow):
         self.chat_panel.clear_messages()
         self._chat_history.clear()
         self._last_user_message = ""
+        self._chat_system_prompt = None
 
         # Clear intention workflow pending state
         if hasattr(self, '_intention_pending_algorithm'):

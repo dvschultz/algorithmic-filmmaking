@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.constants import VALID_SHOT_TYPES
+from core.constants import SHOT_TYPES, normalize_shot_type
 
 
 def update_frame(
@@ -26,15 +26,15 @@ def update_frame(
         if shot_type == "":
             kwargs["shot_type"] = None
             updated_fields.append("shot_type")
-        elif shot_type in VALID_SHOT_TYPES:
-            kwargs["shot_type"] = shot_type
+        elif (canonical := normalize_shot_type(shot_type)) is not None:
+            kwargs["shot_type"] = canonical
             updated_fields.append("shot_type")
         else:
             return {
                 "success": False,
                 "error": (
                     f"Invalid shot type: '{shot_type}'. Must be one of: "
-                    f"{', '.join(sorted(VALID_SHOT_TYPES))} or empty string to clear."
+                    f"{', '.join(SHOT_TYPES)} or empty string to clear."
                 ),
             }
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+from core.constants import normalize_shot_type
 from core.spine._agent_formatting import ASPECT_RATIO_RANGES, append_gaze_fields
 
 if TYPE_CHECKING:
@@ -59,14 +60,17 @@ def filter_clips(
                 anchor_embedding = anchor_arr
 
     results = []
+    wanted_shot_type = (normalize_shot_type(shot_type) or shot_type) if shot_type else None
 
     for clip in project.clips:
         source = project.sources_by_id.get(clip.source_id)
         fps = source.fps if source else 30.0
         duration = (clip.end_frame - clip.start_frame) / fps
 
-        if shot_type and getattr(clip, "shot_type", None) != shot_type:
-            continue
+        if wanted_shot_type:
+            clip_shot_type = getattr(clip, "shot_type", None)
+            if (normalize_shot_type(clip_shot_type) or clip_shot_type) != wanted_shot_type:
+                continue
 
         if has_speech is not None:
             clip_has_speech = bool(getattr(clip, "transcript", None))

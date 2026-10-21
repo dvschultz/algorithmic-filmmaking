@@ -444,7 +444,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
         import json
         from core.analysis_records import current_record
         from core.analysis_model_identity import SHOT_CLOUD_PROMPT, SHOT_TYPE_PROMPTS, shot_runtime
-        from core.operations.shots import ShotTypeOptions
+        from core.operations.shots import ShotTypeOptions, shot_model_identity
 
         record = current_record(clip, op_key)
         if record is None or record.identity is None or not clip.shot_type:
@@ -454,7 +454,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
         data = record.identity.to_dict()
         return bool(
             data["operation_version"] == 2 and data["schema_version"] == 1
-            and data["model"] == {"runtime": runtime if runtime is not None else shot_runtime(), "backend": options.tier, "cloud_model": options.cloud_model}
+            and data["model"] == shot_model_identity(runtime if runtime is not None else shot_runtime(), options.tier, options.cloud_model)
             and data["parameters"] == asdict(options)
             and data["sampling"] == {"policy": "single-image/v1", "local_ensemble": True}
             and data["prompt_sha256"] == sha256(prompt.encode()).hexdigest()

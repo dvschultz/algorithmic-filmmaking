@@ -3069,7 +3069,7 @@ class ClipBrowser(QWidget):
                 - min_duration: float or None
                 - max_duration: float or None
                 - aspect_ratio: str ('16:9', '4:3', '9:16') or None
-                - shot_type: str ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU') or None
+                - shot_type: display name str or list ('Wide', 'Full', 'Medium', 'Close-up', 'Extreme CU') or None
                 - color_palette: str ('Warm', 'Cool', 'Neutral', 'Vibrant') or None
                 - search_query: str or None
                 - custom_query: list[str] | tuple[str, ...] | set[str] | str | None
