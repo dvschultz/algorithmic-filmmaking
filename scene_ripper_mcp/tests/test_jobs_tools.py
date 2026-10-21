@@ -680,6 +680,8 @@ async def test_start_describe_job_saves_description(lifespan_ctx, tmp_path, monk
         "core.analysis.description.describe_frame",
         lambda *args, **kwargs: ("A person standing in a doorway.", "fake-vlm"),
     )
+    # Default settings pick the local tier, which loads the model before inference.
+    monkeypatch.setattr("core.analysis.description._load_local_model", lambda *_: None)
 
     out = json.loads(await start_describe(project_path=str(project_path), ctx=ctx))
 
@@ -1106,6 +1108,8 @@ async def test_start_analyze_clips_uses_durable_custom_query(
     project.clips[0].thumbnail_path = thumbnail
     assert project.save()
     monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", lambda **_: (True, 0.91, "fake-vlm"))
+    # Default settings pick the local tier, which loads the model before inference.
+    monkeypatch.setattr("core.analysis.description._load_local_model", lambda *_: None)
 
     out = json.loads(
         await start_analyze_clips(

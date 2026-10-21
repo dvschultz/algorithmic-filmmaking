@@ -6,7 +6,7 @@ sequencer algorithms keyed off what analysis a project's clips have.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from core.settings import load_settings
 
@@ -229,7 +229,7 @@ def list_sorting_algorithms(project) -> dict:
     clips = project.clips
     has_colors = any(clip.dominant_colors for clip in clips) if clips else False
 
-    algorithms = [
+    algorithms: list[dict[str, Any]] = [
         {
             "key": "shuffle",
             "name": "Hatchet Job",

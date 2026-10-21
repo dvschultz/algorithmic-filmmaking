@@ -395,7 +395,7 @@ def group_clips_by(project, criterion: str) -> dict:
         fps = source.fps if source else 30.0
 
         if criterion == "shot_type":
-            key = canonical_shot_type(clip.shot_type) if clip.shot_type else "unknown"
+            key = canonical_shot_type(clip.shot_type) or "unknown"
         elif criterion == "color":
             if clip.dominant_colors:
                 key = classify_color_palette(clip.dominant_colors)
