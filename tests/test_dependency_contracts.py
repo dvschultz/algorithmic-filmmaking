@@ -26,7 +26,7 @@ def _requirements(name: str) -> dict[str, str]:
             continue
         if line.startswith(VENDORED_LITELLM):
             version = re.search(r"litellm-([\d.]+)-", line).group(1)
-            entries["litellm"] = f"litellm>={version}"
+            entries["litellm"] = f"litellm=={version}"
             continue
         entries[_name(line)] = line
     return entries
