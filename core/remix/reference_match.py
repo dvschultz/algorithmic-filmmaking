@@ -8,6 +8,7 @@ on artist-selected dimensions and weights.
 import logging
 import re
 from collections import Counter
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -432,6 +433,41 @@ def get_active_dimensions_for_clips(
 
     return available
 
+
+
+def find_media_problems(clips: list[tuple["Clip", "Source"]]) -> list[str]:
+    """Return one readable problem per source whose media isn't usable.
+
+    The project keeps offline sources (see ``load_project``), so a Reference
+    Guide run can match on metadata and only fail later at playback or render.
+    Checking here lets the dialog and agent refuse up front and name the
+    affected source. Checks: the source file exists, and each clip's
+    ``source_id`` matches the source it is paired with. Returns ``[]`` when
+    everything is usable.
+    """
+    problems: list[str] = []
+    seen_missing: set[str] = set()
+    mismatched: dict[str, tuple[Source, list[str]]] = {}
+    for clip, source in clips:
+        if clip.source_id != source.id:
+            mismatched.setdefault(source.id, (source, []))[1].append(clip.id)
+        if source.id in seen_missing:
+            continue
+        file_path = getattr(source, "file_path", None)
+        if not file_path or not Path(file_path).exists():
+            seen_missing.add(source.id)
+            problems.append(
+                f"Source '{source.filename}' is offline: file not found at {file_path}. "
+                "Reconnect the drive or re-import this source."
+            )
+    for source, clip_ids in mismatched.values():
+        shown = ", ".join(clip_ids[:5]) + (" ..." if len(clip_ids) > 5 else "")
+        problems.append(
+            f"{len(clip_ids)} clip(s) paired with source '{source.filename}' "
+            f"belong to a different source id ({shown}). "
+            "Re-run scene detection on that source."
+        )
+    return problems
 
 
 class ReferenceGuidedDefinition(AlgorithmDefinition):

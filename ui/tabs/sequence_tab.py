@@ -3178,6 +3178,15 @@ class SequenceTab(BaseTab):
                 "error": "No user clips available (all clips belong to reference source)"
             }
 
+        from core.remix.reference_match import find_media_problems
+
+        problems = find_media_problems(reference_clips + user_clips)
+        if problems:
+            return {
+                "success": False,
+                "error": "Footage not available for sequencing: " + " ".join(problems),
+            }
+
         generated_sequence = None
         try:
             run = run_registry_algorithm(
