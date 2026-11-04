@@ -3274,14 +3274,12 @@ class MainWindow(QMainWindow):
 
     def _on_cut_selection_changed(self, clip_ids: list[str]):
         """Handle selection change in Cut tab."""
-        self._gui_state.selected_clip_ids = clip_ids
-        self._gui_state.cut_selected_ids = clip_ids
+        self._gui_state.set_tab_selection("cut", clip_ids)
         logger.debug(f"GUI State updated: {len(clip_ids)} clips selected in Cut tab")
 
     def _on_analyze_selection_changed(self, clip_ids: list[str]):
         """Handle selection change in Analyze tab."""
-        self._gui_state.selected_clip_ids = clip_ids
-        self._gui_state.analyze_selected_ids = clip_ids
+        self._gui_state.set_tab_selection("analyze", clip_ids)
         logger.debug(f"GUI State updated: {len(clip_ids)} clips selected in Analyze tab")
 
     def _on_cut_filters_changed(self):
@@ -7354,7 +7352,7 @@ class MainWindow(QMainWindow):
                 # Select all clip IDs so the dialog routing works
                 all_clip_ids = [c.id for c in all_clips]
                 if self._gui_state:
-                    self._gui_state.analyze_selected_ids = all_clip_ids
+                    self._gui_state.set_tab_selection("analyze", all_clip_ids)
                 # Route to the dialog via the sequence tab's card click handler
                 self.sequence_tab._on_card_clicked(algorithm)
             self._refresh_sequence_tab_clips()

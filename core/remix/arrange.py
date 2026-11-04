@@ -57,7 +57,20 @@ class SequentialDefinition(AlgorithmDefinition):
     version = 1
 
     def generate(self, inputs, parameters, rng, context=None):
-        return _ordering(inputs)
+        # Chronological by source timeline: sources keep the order in which
+        # they first appear in the inputs; clips within a source are sorted by
+        # their position in that source. The incoming order is the browser's
+        # display order, which can be sorted by unrelated metadata (#150).
+        source_rank: dict[str, int] = {}
+        for _clip, source in inputs:
+            source_rank.setdefault(source.id, len(source_rank))
+        ordered = sorted(
+            inputs,
+            key=lambda item: (
+                source_rank[item[1].id], item[0].start_frame, item[0].end_frame, item[0].id,
+            ),
+        )
+        return _ordering(ordered)
 
 
 class DurationDefinition(_DirectionalDefinition):

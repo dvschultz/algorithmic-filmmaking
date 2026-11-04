@@ -57,6 +57,8 @@ class GUIState:
     # Tab-specific selection state (for Sequence tab to read from)
     analyze_selected_ids: list[str] = field(default_factory=list)
     cut_selected_ids: list[str] = field(default_factory=list)
+    # Which tab ("cut" / "analyze") most recently reported a selection
+    last_selection_tab: Optional[str] = None
 
     # Frame selection state
     selected_frame_ids: list[str] = field(default_factory=list)
@@ -446,6 +448,33 @@ class GUIState:
         with self._lock:
             self.last_error = None
 
+    def set_tab_selection(self, tab: str, clip_ids: list[str]) -> None:
+        """Record a Cut/Analyze clip selection and mark it as the most recent."""
+        if tab not in ("cut", "analyze"):
+            raise ValueError(f"Unsupported selection tab: {tab!r}")
+        ids = list(clip_ids)
+        with self._lock:
+            self.selected_clip_ids = ids
+            if tab == "cut":
+                self.cut_selected_ids = ids
+            else:
+                self.analyze_selected_ids = ids
+            self.last_selection_tab = tab
+
+    def sequencing_selected_ids(self) -> list[str]:
+        """Clip IDs the Sequence tab should sequence.
+
+        Uses the most recently changed Cut/Analyze selection so a stale
+        selection in the other tab cannot override it (#150). Falls back to
+        the legacy Analyze-then-Cut precedence when no tab recorded one.
+        """
+        with self._lock:
+            if self.last_selection_tab == "cut":
+                return list(self.cut_selected_ids)
+            if self.last_selection_tab == "analyze":
+                return list(self.analyze_selected_ids)
+            return list(self.analyze_selected_ids or self.cut_selected_ids or [])
+
     def clear(self):
         """Clear all GUI state for new project.
 
@@ -465,6 +494,7 @@ class GUIState:
             self.selected_source_id = None
             self.analyze_selected_ids = []
             self.cut_selected_ids = []
+            self.last_selection_tab = None
 
             # Analyze tab state
             self.analyze_tab_ids = []
