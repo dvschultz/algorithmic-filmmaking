@@ -683,6 +683,11 @@ def _ollama_model_name(model: str) -> str:
     return model
 
 
+def _truncate_error(error: Exception, limit: int = 200) -> str:
+    text = " ".join(str(error).split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def _local_llm_unavailable_message(
     *,
     model: str,
@@ -702,8 +707,8 @@ def _local_llm_unavailable_message(
     elif cloud_error is not None and cloud_model:
         reason_prefix = (
             f"The cloud model {cloud_model} failed with "
-            f"{type(cloud_error).__name__}, so Scene Ripper tried the local "
-            "Ollama fallback. "
+            f"{type(cloud_error).__name__} ({_truncate_error(cloud_error)}), "
+            "so Scene Ripper tried the local Ollama fallback. "
         )
 
     return (
@@ -780,6 +785,11 @@ def complete_with_local_fallback(
             litellm.RateLimitError,
             litellm.ServiceUnavailableError,
             litellm.APIConnectionError,
+            # Not subclasses of litellm.APIConnectionError / AuthenticationError:
+            # a cloud timeout and a 403 (restricted or wrong-project key) would
+            # otherwise escape as raw LiteLLM errors with no provider context.
+            litellm.Timeout,
+            litellm.PermissionDeniedError,
         ) as exc:
             cloud_error = exc
             logger.warning(
