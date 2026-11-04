@@ -3,6 +3,7 @@
 import logging
 import sys
 from pathlib import Path
+from threading import Event, Thread
 from typing import Callable, Optional
 from dataclasses import dataclass
 
@@ -20,6 +21,7 @@ from scenedetect.scene_manager import SceneManager  # noqa: E402
 from scenedetect.backends.opencv import VideoStreamCv2  # noqa: E402
 
 from core.analysis.color import detect_video_color_profile  # noqa: E402
+from core.operations.detection import DetectionCancelled  # noqa: E402
 from models.clip import Clip, Source  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -466,6 +468,7 @@ class SceneDetector:
         self,
         video_path: Path,
         progress_callback: Callable[[float, str], None],
+        cancel_event: Event | None = None,
     ) -> tuple[Source, list[Clip]]:
         """
         Detect scenes with detailed progress reporting.
@@ -473,6 +476,8 @@ class SceneDetector:
         Args:
             video_path: Path to the video file
             progress_callback: Callback receiving (progress 0.0-1.0, status message)
+            cancel_event: When set, the frame scan stops at the next frame and
+                ``DetectionCancelled`` is raised instead of returning clips.
 
         Returns:
             Tuple of (Source metadata, list of detected Clips)
@@ -543,7 +548,30 @@ class SceneDetector:
             if percent % 1 == 0:
                 progress_callback(progress, f"Analyzing frames... {percent}%")
 
-        scene_manager.detect_scenes(video_stream, show_progress=False, callback=frame_callback)
+        # PySceneDetect only invokes ``callback`` when a cut is found, so a long
+        # shot never reaches it. Watch the event on a side thread instead;
+        # ``SceneManager.stop()`` is thread-safe and the scan joins its decoder.
+        scan_done = Event()
+
+        def stop_on_cancel() -> None:
+            assert cancel_event is not None
+            while not scan_done.is_set():
+                if cancel_event.wait(0.1):
+                    scene_manager.stop()
+                    return
+
+        watcher = None
+        if cancel_event is not None:
+            watcher = Thread(target=stop_on_cancel, name="scene-detect-cancel", daemon=True)
+            watcher.start()
+        try:
+            scene_manager.detect_scenes(video_stream, show_progress=False, callback=frame_callback)
+        finally:
+            scan_done.set()
+            if watcher is not None:
+                watcher.join()
+        if cancel_event is not None and cancel_event.is_set():
+            raise DetectionCancelled()
 
         progress_callback(0.9, "Extracting scenes...")
 
@@ -580,6 +608,7 @@ class SceneDetector:
         video_path: Path,
         progress_callback: Callable[[float, str], None],
         karaoke_config: Optional[KaraokeDetectionConfig] = None,
+        cancel_event: Event | None = None,
     ) -> tuple[Source, list[Clip]]:
         """
         Detect scenes based on text changes with progress reporting.
@@ -595,6 +624,8 @@ class SceneDetector:
             video_path: Path to the video file
             progress_callback: Callback receiving (progress 0.0-1.0, status message)
             karaoke_config: Optional karaoke detection configuration
+            cancel_event: When set, sampling stops at the next frame and
+                ``DetectionCancelled`` is raised instead of returning clips.
 
         Returns:
             Tuple of (Source metadata, list of detected Clips)
@@ -642,6 +673,9 @@ class SceneDetector:
         # Extract text at each sample point
         sample_texts: list[tuple[int, str]] = []
         for i, frame_num in enumerate(sample_frames):
+            if cancel_event is not None and cancel_event.is_set():
+                cap.release()
+                raise DetectionCancelled()
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
             ret, frame = cap.read()
             if not ret:
@@ -691,6 +725,9 @@ class SceneDetector:
             for t_idx, (lo, hi, text_lo, _text_hi) in enumerate(change_intervals):
                 # Binary search for the exact transition frame
                 while hi - lo > 1:
+                    if cancel_event is not None and cancel_event.is_set():
+                        cap.release()
+                        raise DetectionCancelled()
                     mid = (lo + hi) // 2
                     cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
                     ret, frame = cap.read()

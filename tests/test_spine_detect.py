@@ -39,7 +39,7 @@ def test_cancelled_detection_does_not_publish(tmp_path, entry, phase):
     before = project.snapshot_for_save()
     cancel = threading.Event()
 
-    def detect(*args):
+    def detect(*args, **kwargs):
         if phase == "detection":
             cancel.set()
         return source, [Clip(id="new", source_id=source.id, start_frame=0, end_frame=30)]
@@ -65,7 +65,7 @@ def test_bulk_cancel_during_detection_reports_current_and_remaining(tmp_path):
     project, source, _ = _build_project_with_source(tmp_path)
     cancel = threading.Event()
 
-    def detect(*args):
+    def detect(*args, **kwargs):
         cancel.set()
         return source, []
 
@@ -130,7 +130,7 @@ def _build_project_with_source(tmp_path: Path, source_id: str = "src-1"):
 def _stub_detect_returns(source, clips):
     """Patch SceneDetector.detect_scenes_with_progress to return a fixed (source, clips)."""
 
-    def fake_detect(self, video_path, progress_callback):
+    def fake_detect(self, video_path, progress_callback, cancel_event=None):
         return source, clips
 
     return patch(

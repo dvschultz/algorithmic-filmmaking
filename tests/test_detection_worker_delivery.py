@@ -44,7 +44,7 @@ for outcome in ("completed", "cancelled", "pre_cancelled", "cancel_error", "fail
             assert threading.get_ident() != owner
             assert config.threshold == 4
 
-        def detect_scenes_with_progress(self, path, progress):
+        def detect_scenes_with_progress(self, path, progress, cancel_event=None):
             if outcome == "failed":
                 raise RuntimeError("decoder failed")
             if cancelled:
