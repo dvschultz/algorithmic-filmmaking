@@ -466,3 +466,43 @@ def test_one_source_frame_fills_its_planned_output_interval(ffmpeg, tmp_path):
         ExportConfig(output_path=output, fps=120, width=64, height=64, crf=0),
     )
     assert decoded_ids(ffmpeg, output) == [0] * 5
+
+
+def test_mixed_rate_export_keeps_delayed_audio_stream_offset(ffmpeg, tmp_path):
+    """Audio starting after the video must stay late in the export (#136).
+
+    Screen/meeting recordings often have an audio stream whose first sample
+    is later than the first video frame. Re-zeroing audio on its own first
+    sample shifted the sound earlier than the picture.
+    """
+    import numpy as np
+
+    from core.spine.sources import probe_source
+
+    picture = make_numbered_video(ffmpeg, tmp_path / "picture.mp4", rate=25, count=25)
+    delayed = tmp_path / "delayed.mkv"
+    subprocess.run([
+        ffmpeg, "-v", "error", "-i", str(picture.file_path),
+        "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100:duration=0.5",
+        "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "pcm_s16le", "-ac", "1", str(delayed),
+    ], check=True, timeout=30)
+    source = probe_source(delayed)
+    project = Project.new()
+    project.sequence = Sequence(fps=30)
+    project.add_source(source)
+    clip = Clip(source_id=source.id, start_frame=0, end_frame=25)
+    project.add_clips([clip])
+    project.add_to_sequence([clip.id])
+    output = tmp_path / "delayed-export.mp4"
+    assert SequenceExporter(ffmpeg).export(
+        project.sequence, project.sources_by_id, {clip.id: (clip, source)},
+        ExportConfig(output_path=output, fps=30, width=64, height=64, crf=0),
+    )
+    pcm = subprocess.run([
+        ffmpeg, "-v", "error", "-i", str(output), "-map", "0:a:0",
+        "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1",
+    ], capture_output=True, check=True, timeout=30).stdout
+    samples = np.frombuffer(pcm, dtype="<f4")
+    assert 48000 <= len(samples) < 49024
+    assert np.max(np.abs(samples[:23000])) < 0.001
+    assert np.sqrt(np.mean(samples[25000:47000] ** 2)) > 0.05
