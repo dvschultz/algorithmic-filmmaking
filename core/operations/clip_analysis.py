@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from core.analysis_operations import OPERATIONS_BY_KEY, PHASE_ORDER
 from core.operations.contracts import OutcomeStatus
@@ -102,3 +103,67 @@ class ClipAnalysisPlan:
                 for op in self.operations
             )
         )
+
+
+@dataclass(frozen=True)
+class ClipAnalysisFailureReport:
+    """End-of-batch summary of per-clip failures, with the work to retry."""
+
+    succeeded: int
+    failed: int
+    retry_clip_ids: tuple[str, ...]
+    retry_operations: tuple[str, ...]
+    summary: str
+    details: str
+    full_log: str
+
+
+def clip_analysis_failure_report(
+    result: Mapping[str, Any], *, preview_count: int = 10
+) -> ClipAnalysisFailureReport:
+    """Summarize a finished ``ClipAnalysisController`` result.
+
+    Counts successes and failures, keeps the user-facing detail text bounded
+    no matter how many clips failed, and names exactly the clips and
+    operations that did not complete so they can be retried on their own.
+    """
+    failed_ids = tuple(result.get("failed") or ())
+    succeeded = len(result.get("succeeded") or ())
+    operations: Mapping[str, Mapping[str, str]] = result.get("operations") or {}
+    failed_set = set(failed_ids)
+    incomplete = {
+        op: [
+            cid
+            for cid, status in outcomes.items()
+            if cid in failed_set and status not in ("succeeded", "skipped")
+        ]
+        for op, outcomes in operations.items()
+    }
+    retry_operations = tuple(op for op, cids in incomplete.items() if cids)
+    retry_set = {cid for cids in incomplete.values() for cid in cids}
+    retry_clip_ids = tuple(cid for cid in failed_ids if cid in retry_set)
+
+    errors = list(dict.fromkeys(result.get("errors") or ()))
+    lines = errors or [
+        f"{OPERATIONS_BY_KEY[op].label if op in OPERATIONS_BY_KEY else op}: "
+        f"{len(cids)} incomplete clips"
+        for op, cids in incomplete.items()
+        if cids
+    ]
+    preview = lines[:preview_count]
+    details = "\n".join(preview)
+    if len(lines) > preview_count:
+        details += f"\n... and {len(lines) - preview_count} more"
+    summary = (
+        f"Analysis finished: {succeeded} clips succeeded, "
+        f"{len(failed_ids)} failed."
+    )
+    return ClipAnalysisFailureReport(
+        succeeded=succeeded,
+        failed=len(failed_ids),
+        retry_clip_ids=retry_clip_ids,
+        retry_operations=retry_operations,
+        summary=summary,
+        details=details,
+        full_log="\n".join(lines),
+    )
