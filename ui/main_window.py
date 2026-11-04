@@ -305,6 +305,49 @@ class InternetArchiveSearchWorker(QThread):
             self.error.emit(f"Search failed: {e}")
 
 
+def _custom_query_run_stats(controller, result: dict) -> str | None:
+    """Summarize a custom-query run so zero matches read as an answer (#148).
+
+    Counts clips whose inference succeeded, how many matched, and which
+    model answered. Failed clips are reported separately by the caller.
+    """
+    query = (getattr(controller, "query", None) or "").strip()
+    statuses = result["operations"].get("custom_query")
+    if not query or not statuses:
+        return None
+    checked = matched = 0
+    models: set[str] = set()
+    for cid, status in statuses.items():
+        clip = controller.clips.get(cid)
+        if status not in ("succeeded", "skipped") or clip is None:
+            continue
+        latest = next(
+            (
+                item
+                for item in reversed(clip.custom_queries or [])
+                if str(item.get("query") or "").strip() == query
+            ),
+            None,
+        )
+        if latest is None:
+            continue
+        checked += 1
+        matched += bool(latest.get("match"))
+        if latest.get("model"):
+            models.add(str(latest["model"]))
+    if not checked:
+        return None
+    model_text = ", ".join(sorted(models)) or "unknown model"
+    stats = (
+        f'Custom query "{query}": {matched} of {checked} clips matched '
+        f"(model: {model_text})"
+    )
+    logger.info(
+        "%s; %d clip(s) without a result", stats, len(statuses) - checked
+    )
+    return stats
+
+
 class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
@@ -3465,6 +3508,10 @@ class MainWindow(QMainWindow):
             "Analysis cancelled" if result["cancelled"]
             else f"Analysis finished: {len(accepted)} clips succeeded, {failed} incomplete"
         )
+        if not result["cancelled"]:
+            query_stats = _custom_query_run_stats(controller, result)
+            if query_stats:
+                message = f"{message} — {query_stats}"
         self.status_bar.showMessage(message)
         for source_id in result["analyzed_sources"]:
             if not controller.owns_view():

@@ -144,3 +144,45 @@ def test_manual_failure_shows_actionable_reason(tmp_path, monkeypatch):
     )
     warning.assert_called_once()
     assert "provider unavailable" in warning.call_args.args[2]
+
+
+def test_custom_query_zero_matches_reports_inference_stats(tmp_path, monkeypatch):
+    """#148: a successful custom query with no matches must say so, not look silent."""
+    window, clip, _ = dispatch_setup(tmp_path, monkeypatch)
+    other = Clip(source_id=clip.source_id, start_frame=30, end_frame=60)
+    window.project.add_clips([other])
+    for target in (clip, other):
+        target.custom_queries = [
+            {"query": "blue flower", "match": False, "confidence": 0.1, "model": "qwen-vl"}
+        ]
+    window.status_bar = Mock()
+    window.collect_tab = Mock()
+    window._update_chat_project_state = Mock()
+    warning = Mock()
+    monkeypatch.setattr("ui.main_window.QMessageBox.warning", warning)
+    controller = SimpleNamespace(
+        owns_view=lambda: True,
+        is_current=lambda: True,
+        clips={clip.id: clip, other.id: other},
+        reply=None,
+        query="blue flower",
+    )
+    MainWindow._on_clip_analysis_finished(
+        window,
+        controller,
+        {
+            "succeeded": [clip.id, other.id],
+            "failed": [],
+            "cancelled": False,
+            "operations": {
+                "custom_query": {clip.id: "succeeded", other.id: "succeeded"}
+            },
+            "errors": [],
+            "analyzed_sources": [],
+        },
+    )
+    warning.assert_not_called()
+    message = window.status_bar.showMessage.call_args.args[0]
+    assert "blue flower" in message
+    assert "0 of 2 clips matched" in message
+    assert "qwen-vl" in message
