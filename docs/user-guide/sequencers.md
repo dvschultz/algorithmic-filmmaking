@@ -483,3 +483,10 @@ The app checks source timing before rendering and verifies the completed video's
 Variable-rate imports retain their presentation timestamps. If an older source lacks that mapping, or the source file has changed, reimport it and rebuild affected sequence entries before rendering. Legacy entries with ambiguous trim coordinates must first be resolved through **Resolve legacy timing** in the sequence menu.
 
 CMX 3600 EDL export preserves timeline gaps and absolute source timecodes. It supports constant-rate video whose rate matches the timeline. It reports unsupported still holds, flips, reverse, variable-rate media, mixed source rates, subframe entries, and music instead of silently omitting them. Render a video when those features are needed.
+
+Each EDL event names its source three ways: an 8-character reel (uppercase letters, digits and `_`, unique per source file), a `* FROM CLIP NAME:` comment with the file name, and a `* SOURCE FILE:` comment with the absolute path using forward slashes. NLEs relink by reel or clip name, so import the footage before the EDL:
+
+- **DaVinci Resolve**: add the source videos to the Media Pool first, then use **File > Import > Timeline** and choose the `.edl`. Leave "Automatically import source clips into media pool" off. If clips appear offline, match by clip name (the file name) rather than reel.
+- **Premiere Pro**: use **File > Import** and choose the `.edl`, set the sequence to the EDL's frame rate, then relink offline clips to the source files. Premiere matches the clip name and offers the rest of the folder once one clip is found.
+
+EDLs carry one video track and no audio, transitions or effects.

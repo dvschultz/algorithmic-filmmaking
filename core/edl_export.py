@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,28 @@ class EDLExportConfig:
 
 def _sanitize_edl_string(value: str) -> str:
     return value.replace("\n", " ").replace("\r", " ")[:255]
+
+
+def _reel_name(path: Path, used: dict[str, Path]) -> str:
+    """Return a CMX 3600 reel: 1-8 chars of [A-Z0-9_], unique per source file.
+
+    Spaces or punctuation in a reel shift the event columns, and reels shared
+    by different files make Resolve/Premiere relink every event to one clip.
+    """
+    base = re.sub(r"[^A-Z0-9_]", "", path.stem.upper()) or "AX"
+    candidate = base[:8]
+    counter = 1
+    while candidate in used and used[candidate] != path:
+        suffix = f"{counter:02d}"
+        candidate = base[: 8 - len(suffix)] + suffix
+        counter += 1
+    used[candidate] = path
+    return candidate
+
+
+def _source_file_reference(path: Path) -> str:
+    """Absolute, forward-slash path so NLEs can relink on any OS."""
+    return _sanitize_edl_string(path.resolve().as_posix())
 
 
 def frames_to_timecode(frames: int, fps: float) -> str:
@@ -53,13 +76,14 @@ def export_edl(
         plan.validate_edl()
         lines = [f"TITLE: {_sanitize_edl_string(config.title)}", "FCM: NON-DROP FRAME", ""]
         edit = 0
+        reels: dict[str, Path] = {}
         for segment in plan.segments:
             if segment.kind == "gap":
                 continue
             assert isinstance(segment.media, VideoRange) and segment.path is not None
             edit += 1
             name = _sanitize_edl_string(segment.path.name)
-            reel = _sanitize_edl_string(segment.path.stem)[:8].ljust(8)
+            reel = _reel_name(segment.path.resolve(), reels).ljust(8)
             source_rate = float(segment.media.rate)
             src_in = frames_to_timecode(segment.media.start_frame, source_rate)
             src_out = frames_to_timecode(segment.media.end_frame, source_rate)
@@ -68,7 +92,7 @@ def export_edl(
             lines.extend([
                 f"{edit:03d}  {reel} V     C        {src_in} {src_out} {rec_in} {rec_out}",
                 f"* FROM CLIP NAME: {name}",
-                f"* SOURCE FILE: {_sanitize_edl_string(str(segment.path))}", "",
+                f"* SOURCE FILE: {_source_file_reference(segment.path)}", "",
             ])
         output = config.output_path
         if output.suffix.lower() != ".edl":
