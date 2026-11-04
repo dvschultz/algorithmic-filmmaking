@@ -103,7 +103,9 @@ from core.analysis_dependencies import get_operation_feature_candidates
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
 )
+from core.operations.clip_analysis import clip_analysis_failure_report
 from ui.workers.base import summarize_messages
+from ui.dialogs.analysis_failure_dialog import ask_retry_failed_analysis
 from ui.workers.color_worker import ColorAnalysisWorker
 from ui.workers.shot_type_worker import ShotTypeWorker
 from ui.workers.transcription_worker import TranscriptionWorker
@@ -3463,7 +3465,7 @@ class MainWindow(QMainWindow):
         failed = len(result["failed"])
         message = (
             "Analysis cancelled" if result["cancelled"]
-            else f"Analysis finished: {len(accepted)} clips succeeded, {failed} incomplete"
+            else f"Analysis finished: {len(accepted)} clips succeeded, {failed} failed"
         )
         self.status_bar.showMessage(message)
         for source_id in result["analyzed_sources"]:
@@ -3496,14 +3498,23 @@ class MainWindow(QMainWindow):
                 self._active_custom_query_text = None
             controller.reply.send(self, {"success": True, "result": payload})
         elif failed and not result["cancelled"] and controller.is_current():
-            details = "\n".join(dict.fromkeys(result["errors"]))
-            if not details:
-                details = "\n".join(
-                    f"{OPERATIONS_BY_KEY[op].label}: {sum(status not in ('succeeded', 'skipped') for status in outcomes.values())} incomplete clips"
-                    for op, outcomes in result["operations"].items()
-                    if any(status not in ("succeeded", "skipped") for status in outcomes.values())
+            report = clip_analysis_failure_report(result)
+            logger.warning(
+                "%s Failures:\n%s", report.summary, report.full_log
+            )
+            if not ask_retry_failed_analysis(self, report):
+                return
+            retry_clips = [
+                clip
+                for cid in report.retry_clip_ids
+                if (clip := self.project.clips_by_id.get(cid)) is not None
+            ]
+            if retry_clips and report.retry_operations:
+                self._run_analysis_pipeline(
+                    retry_clips,
+                    list(report.retry_operations),
+                    force_rerun=bool(getattr(controller, "force_rerun", False)),
                 )
-            QMessageBox.warning(self, "Analysis Incomplete", details)
 
     @Slot(object, str)
     def _on_clip_analysis_status(self, controller, message: str) -> None:

@@ -122,8 +122,8 @@ def test_manual_failure_shows_actionable_reason(tmp_path, monkeypatch):
     window.status_bar = Mock()
     window.collect_tab = Mock()
     window._update_chat_project_state = Mock()
-    warning = Mock()
-    monkeypatch.setattr("ui.main_window.QMessageBox.warning", warning)
+    warning = Mock(return_value=False)
+    monkeypatch.setattr("ui.main_window.ask_retry_failed_analysis", warning)
     controller = SimpleNamespace(
         owns_view=lambda: True,
         is_current=lambda: True,
@@ -143,4 +143,4 @@ def test_manual_failure_shows_actionable_reason(tmp_path, monkeypatch):
         },
     )
     warning.assert_called_once()
-    assert "provider unavailable" in warning.call_args.args[2]
+    assert "provider unavailable" in warning.call_args.args[1].details
