@@ -1,7 +1,9 @@
 """Video downloader using yt-dlp for YouTube/Vimeo support."""
 
 import logging
+import queue
 import subprocess
+import threading
 import re
 import json
 import sys
@@ -37,6 +39,12 @@ DOWNLOAD_RESOLUTION_OPTIONS = (
     ("480p", "480p"),
 )
 DEFAULT_DOWNLOAD_RESOLUTION = "1080p"
+# Abort a download when yt-dlp produces no output for this long. With
+# ``--newline`` yt-dlp prints progress continuously, so prolonged silence
+# means it is hung (network stall, stuck challenge solver, etc.).
+DEFAULT_STALL_TIMEOUT_SECONDS = 600
+# How often the read loop wakes up to check cancellation and deadlines.
+_OUTPUT_POLL_SECONDS = 0.25
 DOWNLOAD_RESOLUTION_LABELS = dict(DOWNLOAD_RESOLUTION_OPTIONS)
 
 
@@ -341,6 +349,7 @@ class VideoDownloader:
         cancel_check: Optional[Callable[[], bool]] = None,
         max_download_seconds: int = 3600,
         resolution: Optional[str] = None,
+        stall_timeout_seconds: float = DEFAULT_STALL_TIMEOUT_SECONDS,
     ) -> DownloadResult:
         """
         Download a video from URL.
@@ -350,6 +359,7 @@ class VideoDownloader:
             progress_callback: Optional callback (progress 0-100, status message)
             cancel_check: Optional callback that returns True to cancel download
             max_download_seconds: Maximum download time before timeout (default 1 hour)
+            stall_timeout_seconds: Abort if yt-dlp produces no output for this long
             resolution: Optional download resolution tier (4k, 1080p, 720p, 480p)
 
         Returns:
@@ -430,22 +440,56 @@ class VideoDownloader:
         output_file = None
         cancelled = False
         timed_out = False
-        start_time = time.time()
+        stalled = False
+        start_time = time.monotonic()
+        last_output_time = start_time
         last_error = None  # Capture yt-dlp error messages
         recent_lines = []  # Keep recent output for debugging
         deno_solver_ran = False  # Track if challenge solver was invoked
 
+        # Read yt-dlp output on a helper thread so cancellation and the
+        # deadlines are enforced even when yt-dlp hangs without printing
+        # anything (iterating ``process.stdout`` directly blocks forever).
+        lines: queue.Queue[str | None] = queue.Queue()
+
+        def _pump_output() -> None:
+            try:
+                if process.stdout is not None:
+                    for raw in process.stdout:
+                        lines.put(raw)
+            except (OSError, ValueError):
+                pass
+            finally:
+                lines.put(None)
+
+        reader = threading.Thread(
+            target=_pump_output, name="yt-dlp-output", daemon=True
+        )
+        reader.start()
+
         try:
-            for line in process.stdout:
+            while True:
                 # Check for cancellation
                 if cancel_check and cancel_check():
                     cancelled = True
                     break
 
+                now = time.monotonic()
                 # Check for timeout
-                if time.time() - start_time > max_download_seconds:
+                if now - start_time > max_download_seconds:
                     timed_out = True
                     break
+                if now - last_output_time > stall_timeout_seconds:
+                    stalled = True
+                    break
+
+                try:
+                    line = lines.get(timeout=_OUTPUT_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                if line is None:  # EOF: yt-dlp exited
+                    break
+                last_output_time = time.monotonic()
 
                 line = line.strip()
 
@@ -485,12 +529,10 @@ class VideoDownloader:
                     if progress_callback:
                         progress_callback(95, "Merging audio and video...")
 
-            if not cancelled and not timed_out:
+            if not cancelled and not timed_out and not stalled:
                 process.wait()
         finally:
             # Ensure subprocess is cleaned up even on exception
-            if process.stdout:
-                process.stdout.close()
             if process.poll() is None:  # Process still running
                 process.terminate()
                 try:
@@ -498,6 +540,12 @@ class VideoDownloader:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+            reader.join(timeout=2)
+            # Only close once the reader has drained; closing a pipe another
+            # thread is blocked on can deadlock. A lingering reader (pipe held
+            # open by an orphaned grandchild) is a daemon and exits with it.
+            if process.stdout and not reader.is_alive():
+                process.stdout.close()
 
         if cancelled:
             # Clean up partial download
@@ -508,14 +556,42 @@ class VideoDownloader:
                     pass
             return DownloadResult(success=False, error="Download cancelled")
 
-        if timed_out:
+        if timed_out or stalled:
             # Clean up partial download
             if output_file and output_file.exists():
                 try:
                     output_file.unlink()
                 except OSError:
                     pass
-            return DownloadResult(success=False, error="Download timed out")
+            if stalled:
+                error_msg = (
+                    f"Download stalled: yt-dlp produced no output for "
+                    f"{int(stall_timeout_seconds)} seconds. Check your network "
+                    "connection and try again, or update yt-dlp from "
+                    "Settings > Dependencies."
+                )
+            else:
+                error_msg = (
+                    f"Download timed out after {int(max_download_seconds)} seconds. "
+                    "Check your network connection and try again."
+                )
+            diagnostics = _format_yt_dlp_diagnostics(
+                exit_code=process.returncode,
+                output_lines=recent_lines,
+                command=cmd,
+            )
+            logger.error(
+                "yt-dlp %s for %s:\n%s",
+                "stalled" if stalled else "timed out",
+                redact_text(url),
+                diagnostics,
+            )
+            return DownloadResult(
+                success=False,
+                error=error_msg,
+                exit_code=process.returncode,
+                diagnostics=diagnostics,
+            )
 
         if process.returncode != 0:
             # Use captured error message if available, otherwise show recent output
