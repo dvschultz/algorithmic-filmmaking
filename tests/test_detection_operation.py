@@ -26,7 +26,7 @@ def test_settings_are_detached_and_rebuilt_for_each_execution(tmp_path, monkeypa
         detector = Mock()
         detector.detect_scenes_with_progress.return_value = result
 
-        def detect_karaoke(path, progress, settings):
+        def detect_karaoke(path, progress, settings, cancel_event=None):
             assert settings.language == "fr"
             return result
 
@@ -44,7 +44,7 @@ def test_cancelled_operation_never_delivers_result(tmp_path, monkeypatch, cancel
     cancel = Event()
     detector = Mock()
 
-    def detect(path, progress):
+    def detect(path, progress, cancel_event=None):
         cancel.set()
         return object(), []
 
@@ -62,7 +62,7 @@ def test_progress_and_errors_are_preserved(tmp_path, monkeypatch):
     detector = Mock()
     failure = RuntimeError("decoder failed")
 
-    def detect(path, progress):
+    def detect(path, progress, cancel_event=None):
         progress(0.5, "Analyzing")
         raise failure
 
@@ -82,7 +82,7 @@ def test_changed_media_is_not_delivered(tmp_path, monkeypatch, when):
     request = DetectionRequest.build(path)
     detector = Mock()
 
-    def detect(path, progress):
+    def detect(path, progress, cancel_event=None):
         path.write_bytes(b"changed media")
         return object(), []
 

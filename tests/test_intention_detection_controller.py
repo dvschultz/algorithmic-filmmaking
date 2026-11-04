@@ -36,7 +36,7 @@ def run(self):
     workers.append(self)
     original(self)
     entered.set(); assert release.wait(10)
-def detect(self,path,progress):
+def detect(self,path,progress,cancel_event=None):
     source=Source(file_path=path,fps=30)
     return source,[Clip(source_id=source.id,start_frame=0,end_frame=30)]
 with patch.object(DetectionWorker,'run',run), patch('core.scene_detect.SceneDetector.detect_scenes_with_progress',detect):
@@ -92,7 +92,7 @@ original=DetectionWorker.run
 def run(self):
     original(self)
     entered.set(); assert release.wait(10)
-def detect(self,path,progress):
+def detect(self,path,progress,cancel_event=None):
     source=Source(file_path=path,fps=30)
     return source,[Clip(source_id=source.id,start_frame=0,end_frame=30)]
 with patch('core.scene_detect.SceneDetector.detect_scenes_with_progress',detect):
@@ -184,7 +184,7 @@ def run(self):
     workers.append(self)
     original(self)
     entered.set(); assert release.wait(10)
-def detect(self,path,progress):
+def detect(self,path,progress,cancel_event=None):
     assert threading.get_ident()!=owner
     assert self.config.threshold==3, 'settings changed after submission'
     computations.append(path)

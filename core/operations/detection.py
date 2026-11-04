@@ -221,7 +221,7 @@ def run_detection(
 ) -> tuple[Source, list[Clip]]:
     """Compute fresh source/clips without accessing a live project.
 
-    Cancellation is cooperative at the native-call boundary. Callers must also
+    Cancellation is cooperative: the detector polls ``cancel_event`` per frame. Callers must also
     check it before subsequent stages or publishing into their owning session.
     """
     if cancel_event is not None and cancel_event.is_set():
@@ -238,9 +238,12 @@ def run_detection(
             request.video_path,
             progress,
             KaraokeDetectionConfig(**json.loads(request.karaoke_config_json)),
+            cancel_event=cancel_event,
         )
     else:
-        result = detector.detect_scenes_with_progress(request.video_path, progress)
+        result = detector.detect_scenes_with_progress(
+            request.video_path, progress, cancel_event=cancel_event
+        )
     if cancel_event is not None and cancel_event.is_set():
         raise DetectionCancelled()
     request.validate_media()
