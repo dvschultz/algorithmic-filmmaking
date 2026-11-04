@@ -117,3 +117,85 @@ class TestIntegrationWithOCR:
         import inspect
         sig = inspect.signature(extract_text_from_clip)
         assert 'use_text_detection' in sig.parameters
+
+
+class TestEastModelDownload:
+    """Tests for _download_east_model: failed downloads must not leave a model file."""
+
+    class _FakeResponse:
+        """Minimal urlopen() response that yields chunks, then optionally raises."""
+
+        def __init__(self, chunks, error=None):
+            self._chunks = list(chunks)
+            self._error = error
+            self.closed = False
+
+        def read(self, n=-1):
+            if self._chunks:
+                return self._chunks.pop(0)
+            if self._error is not None:
+                raise self._error
+            return b""
+
+        def close(self):
+            self.closed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    def _patch_urlopen(self, monkeypatch, response):
+        import urllib.request
+
+        def fake_urlopen(url, *args, **kwargs):
+            return response
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    def test_interrupted_download_leaves_no_partial_model(self, tmp_path, monkeypatch):
+        """A connection reset mid-download must not leave a partial model at dest."""
+        from core.analysis.text_detection import _download_east_model
+
+        response = self._FakeResponse(
+            [b"\x01" * 4096, b"\x02" * 4096],
+            error=ConnectionResetError("connection reset by peer"),
+        )
+        self._patch_urlopen(monkeypatch, response)
+
+        dest = tmp_path / "frozen_east_text_detection.pb"
+        result = _download_east_model(dest)
+
+        assert result is False
+        assert not dest.exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_empty_download_is_not_installed(self, tmp_path, monkeypatch):
+        """An empty response body must not be installed as the model."""
+        from core.analysis.text_detection import _download_east_model
+
+        self._patch_urlopen(monkeypatch, self._FakeResponse([]))
+
+        dest = tmp_path / "frozen_east_text_detection.pb"
+        result = _download_east_model(dest)
+
+        assert result is False
+        assert not dest.exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_successful_download_installs_model(self, tmp_path, monkeypatch):
+        """A complete download installs exactly the downloaded bytes at dest."""
+        from core.analysis.text_detection import _download_east_model
+
+        payload = [b"EAST" * 1024, b"model-bytes" * 100]
+        self._patch_urlopen(monkeypatch, self._FakeResponse(payload))
+
+        dest = tmp_path / "frozen_east_text_detection.pb"
+        result = _download_east_model(dest)
+
+        assert result is True
+        assert dest.exists()
+        assert dest.read_bytes() == b"".join(payload)
+        assert list(tmp_path.iterdir()) == [dest]

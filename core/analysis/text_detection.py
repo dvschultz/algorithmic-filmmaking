@@ -59,29 +59,38 @@ def _download_east_model(dest_path: Path) -> bool:
     Returns:
         True if download succeeded, False otherwise.
     """
+    import os
     import shutil
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     logger.info(f"Downloading EAST text detection model to {dest_path}")
     logger.info("This is a one-time download (~50MB)...")
+
+    # Stage into a temp file and only move it into place once complete, so an
+    # interrupted download never leaves a partial model at dest_path (which
+    # _load_east_model would otherwise treat as already downloaded).
+    tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
 
     try:
         # Create parent directory if needed
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Download with timeout (urlretrieve has no timeout parameter)
-        response = urllib.request.urlopen(EAST_MODEL_URL, timeout=60)
-        with open(dest_path, "wb") as f:
+        with (
+            urllib.request.urlopen(EAST_MODEL_URL, timeout=60) as response,
+            open(tmp_path, "wb") as f,
+        ):
             shutil.copyfileobj(response, f)
 
-        # Verify file was downloaded
-        if dest_path.exists() and dest_path.stat().st_size > 0:
-            logger.info(f"EAST model downloaded successfully ({dest_path.stat().st_size / 1024 / 1024:.1f}MB)")
-            return True
-        else:
-            logger.error("Download appeared to succeed but file is missing or empty")
+        size = tmp_path.stat().st_size
+        if size == 0:
+            logger.error("Download appeared to succeed but file is empty")
             return False
+
+        os.replace(tmp_path, dest_path)
+        logger.info(f"EAST model downloaded successfully ({size / 1024 / 1024:.1f}MB)")
+        return True
 
     except urllib.error.URLError as e:
         logger.error(f"Failed to download EAST model (network error): {e}")
@@ -92,6 +101,11 @@ def _download_east_model(dest_path: Path) -> bool:
     except Exception as e:
         logger.error(f"Failed to download EAST model: {e}")
         return False
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _load_east_model() -> Optional[cv2.dnn.Net]:
