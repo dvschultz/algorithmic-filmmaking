@@ -451,6 +451,20 @@ class ReferenceGuideDialog(QDialog):
             QMessageBox.warning(self, "No User Clips", "No clips available from other sources.")
             return
 
+        # Preflight: refuse up front when imported footage is offline or
+        # mislinked, naming the affected source, instead of failing later.
+        from core.remix.reference_match import find_media_problems
+
+        problems = find_media_problems(reference_clips + user_clips)
+        if problems:
+            QMessageBox.warning(
+                self,
+                "Footage Not Available",
+                "Can't build the sequence until these sources are fixed:\n\n"
+                + "\n\n".join(problems),
+            )
+            return
+
         # Check embedding dependencies if the embedding dimension is active
         if active.get("embedding", 0) > 0:
             from core.feature_registry import install_for_feature
