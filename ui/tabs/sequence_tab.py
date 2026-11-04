@@ -730,6 +730,17 @@ class SequenceTab(BaseTab):
         if self.state_stack.currentIndex() == self.STATE_CONFIRM:
             self._refresh_confirm_estimates()
 
+    def _sequencing_selected_ids(self) -> list[str]:
+        """Most recent Cut/Analyze selection (see GUIState.sequencing_selected_ids)."""
+        resolver = getattr(self._gui_state, "sequencing_selected_ids", None)
+        if callable(resolver):
+            return list(resolver())
+        return list(
+            getattr(self._gui_state, "analyze_selected_ids", None)
+            or getattr(self._gui_state, "cut_selected_ids", None)
+            or []
+        )
+
     def _resolve_selected_clips(self, selected_ids: list[str]) -> list[tuple]:
         """Resolve selected clip IDs to ``(clip, source)`` tuples.
 
@@ -784,14 +795,10 @@ class SequenceTab(BaseTab):
             self.intention_import_requested.emit(algorithm, None)
             return
 
-        # Get selected clips from GUI state (prefer Analyze, fallback to Cut)
+        # Get selected clips from GUI state (most recent Cut/Analyze selection)
         selected_ids = []
         if self._gui_state:
-            selected_ids = (
-                self._gui_state.analyze_selected_ids
-                or self._gui_state.cut_selected_ids
-                or []
-            )
+            selected_ids = self._sequencing_selected_ids()
 
         if not selected_ids:
             QMessageBox.warning(
@@ -2996,11 +3003,7 @@ class SequenceTab(BaseTab):
         # Get selected clips from GUI state
         selected_ids = []
         if self._gui_state:
-            selected_ids = (
-                self._gui_state.analyze_selected_ids
-                or self._gui_state.cut_selected_ids
-                or []
-            )
+            selected_ids = self._sequencing_selected_ids()
 
         if not selected_ids:
             return {"success": False, "error": "No clips selected in Analyze or Cut tab"}
