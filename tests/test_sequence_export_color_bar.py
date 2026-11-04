@@ -248,7 +248,7 @@ def test_export_segment_trims_audio_in_absolute_source_coordinates(monkeypatch, 
     cmd = captured["cmd"]
     cmd_str = " ".join(cmd)
     assert "atrim=start=10.0:end=11.0" in cmd_str
-    assert "asetpts=PTS-STARTPTS" in cmd_str
+    assert "asetpts=PTS-10.0/TB" in cmd_str  # Keeps any audio stream start offset.
     assert cmd.index("-ss") < cmd.index("-i")
     assert "round((pts*TB" in cmd_str
 

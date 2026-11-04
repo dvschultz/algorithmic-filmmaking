@@ -342,9 +342,14 @@ class SequenceExporter:
         ])
         if reverse:
             filters.append("reverse")
+        audio_start = float(source_origin + media.start)
         audio = [
-            f"atrim=start={float(source_origin + media.start)}:end={float(source_origin + media.end)}",
-            "asetpts=PTS-STARTPTS", "aresample=48000",
+            f"atrim=start={audio_start}:end={float(source_origin + media.end)}",
+            # Rebase on the clip's start time, not the first audio sample:
+            # audio that begins after the video (a stream start offset) must
+            # keep that offset, so silence fills the gap instead of shifting
+            # the sound earlier.
+            f"asetpts=PTS-{audio_start}/TB", "aresample=48000:async=1:first_pts=0",
             "aformat=channel_layouts=stereo",
         ]
         if reverse:
